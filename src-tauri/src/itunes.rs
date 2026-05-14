@@ -60,8 +60,13 @@ async fn run(
     // Stage the script to a UNIQUE temp file per process. The previous fixed
     // path (%TEMP%\lyric-overlay-itunes-poll.ps1) was writable by any process
     // running as the same user, opening a TOCTOU window between fs::write and
-    // PowerShell's -File read. NamedTempFile's random suffix closes that, and
-    // the guard auto-deletes on drop.
+    // PowerShell's -File read. NamedTempFile's random suffix closes that.
+    //
+    // CRITICAL: we must call `into_temp_path()` BEFORE spawning PowerShell.
+    // On Windows, the writable handle held by NamedTempFile blocks PowerShell
+    // from opening the file for read (sharing violation). into_temp_path
+    // closes the writable handle and returns a TempPath that still
+    // auto-deletes the file when it drops at end of run().
     use std::io::Write;
     let mut tmp = tempfile::Builder::new()
         .prefix("lyric-overlay-itunes-")
@@ -72,7 +77,8 @@ async fn run(
         .write_all(SCRIPT.as_bytes())
         .context("write itunes poll script")?;
     tmp.as_file_mut().flush().context("flush itunes poll script")?;
-    let script_path = tmp.path().to_path_buf();
+    let script_path = tmp.into_temp_path();
+    let script_path_str: String = script_path.to_string_lossy().into_owned();
 
     // kill_on_drop ensures the PowerShell child exits when this future drops
     // for any reason (cancellation, error return). Without it, the previous
@@ -84,22 +90,33 @@ async fn run(
             "-ExecutionPolicy",
             "Bypass",
             "-File",
-            &script_path.to_string_lossy(),
+            &script_path_str,
         ])
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .stdin(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW)
         .kill_on_drop(true)
         .spawn()
         .context("spawn powershell for iTunes poll")?;
-    // _tmp_guard keeps the temp script alive while the child reads it. When
-    // run() returns, the guard drops, Tokio kills the child (kill_on_drop),
-    // and the script is removed from disk.
-    let _tmp_guard = tmp;
+    eprintln!("[itunes] poller spawned (pid={:?})", child.id());
+    // _tmp_guard keeps the path entry alive (and auto-deletes the file on
+    // drop) while the child reads it. When run() returns, the guard drops,
+    // Tokio kills the child (kill_on_drop), and the script is removed from
+    // disk.
+    let _tmp_guard = script_path;
 
     let stdout = child.stdout.take().context("no stdout from powershell")?;
+    let stderr = child.stderr.take().context("no stderr from powershell")?;
     let mut lines = BufReader::new(stdout).lines();
+    // Bubble PowerShell's stderr to our log so we can see crashes /
+    // ExecutionPolicy denials / COM errors instead of just "stdout closed".
+    tauri::async_runtime::spawn(async move {
+        let mut err_lines = BufReader::new(stderr).lines();
+        while let Ok(Some(l)) = err_lines.next_line().await {
+            eprintln!("[itunes:stderr] {l}");
+        }
+    });
 
     let mut last_emitted_title: Option<String> = None;
     let mut last_emitted_state: PlaybackState = PlaybackState::Unknown;

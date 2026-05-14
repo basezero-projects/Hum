@@ -126,8 +126,11 @@ impl Drop for ManagerHook {
 /// is too coarse to use as a priority signal.
 pub fn start(app: AppHandle, snapshot: SharedSnapshot, smtc_playing: Arc<AtomicBool>) {
     tauri::async_runtime::spawn(async move {
+        eprintln!("[smtc] worker starting");
         if let Err(e) = run(app, snapshot, smtc_playing).await {
             eprintln!("[smtc] worker exited: {e:#}");
+        } else {
+            eprintln!("[smtc] worker exited (rx channel closed)");
         }
     });
 }
@@ -147,6 +150,7 @@ async fn run(
     })
     .await
     .context("spawn_blocking RequestAsync")??;
+    eprintln!("[smtc] manager acquired");
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Msg>();
 
@@ -163,23 +167,52 @@ async fn run(
         manager: manager.clone(),
         token: session_token,
     };
+    eprintln!("[smtc] CurrentSessionChanged handler registered");
 
-    let mut hooks: Option<SessionHooks> = attach_session(&manager, &tx).ok();
+    let mut hooks: Option<SessionHooks> = match attach_session(&manager, &tx) {
+        Ok(h) => Some(h),
+        Err(e) => {
+            eprintln!("[smtc] startup attach_session failed (probably no active SMTC session): {e:#}");
+            None
+        }
+    };
     if let Some(ref h) = hooks {
         let state = read_state(&h.session).unwrap_or_default();
+        let aumid = h
+            .session
+            .SourceAppUserModelId()
+            .ok()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
         smtc_playing.store(state == PlaybackState::Playing, Ordering::Relaxed);
+        eprintln!("[smtc] startup: session attached, source='{aumid}', state={state:?}");
         emit_full(&app, &snapshot, &h.session).await;
     } else {
         smtc_playing.store(false, Ordering::Relaxed);
+        eprintln!("[smtc] startup: no active session, smtc_playing=false");
     }
 
     while let Some(msg) = rx.recv().await {
         match msg {
             Msg::SessionChanged => {
-                hooks = attach_session(&manager, &tx).ok();
+                eprintln!("[smtc] Msg::SessionChanged");
+                hooks = match attach_session(&manager, &tx) {
+                    Ok(h) => Some(h),
+                    Err(e) => {
+                        eprintln!("[smtc] session-change attach_session failed: {e:#}");
+                        None
+                    }
+                };
                 if let Some(ref h) = hooks {
                     let state = read_state(&h.session).unwrap_or_default();
+                    let aumid = h
+                        .session
+                        .SourceAppUserModelId()
+                        .ok()
+                        .map(|s| s.to_string())
+                        .unwrap_or_default();
                     smtc_playing.store(state == PlaybackState::Playing, Ordering::Relaxed);
+                    eprintln!("[smtc] new session attached, source='{aumid}', state={state:?}");
                     emit_full(&app, &snapshot, &h.session).await;
                 } else {
                     // No active session — clear the snapshot and notify.
@@ -188,43 +221,65 @@ async fn run(
                     *snap = CurrentTrack::default();
                     let _ = app.emit("track-changed", &*snap);
                     let _ = app.emit("playback-state-changed", &*snap);
+                    eprintln!("[smtc] no active session, snapshot cleared");
                 }
             }
             Msg::MediaChanged => {
                 if let Some(ref h) = hooks {
-                    if let Ok(track) = read_track(&h.session).await {
-                        let (title, artist) = (track.title.clone(), track.artist.clone());
-                        let mut snap = snapshot.write().await;
-                        snap.title = track.title;
-                        snap.artist = track.artist;
-                        snap.album = track.album;
-                        snap.duration_ms = track.duration_ms;
-                        let _ = app.emit("track-changed", &*snap);
-                        drop(snap);
-                        spawn_art_fetch(app.clone(), h.session.clone(), title, artist);
+                    match read_track(&h.session).await {
+                        Ok(track) => {
+                            let (title, artist) = (track.title.clone(), track.artist.clone());
+                            eprintln!(
+                                "[smtc] Msg::MediaChanged → title='{title}' artist='{artist}' album='{}' dur={}ms",
+                                track.album, track.duration_ms
+                            );
+                            let mut snap = snapshot.write().await;
+                            snap.title = track.title;
+                            snap.artist = track.artist;
+                            snap.album = track.album;
+                            snap.duration_ms = track.duration_ms;
+                            let _ = app.emit("track-changed", &*snap);
+                            drop(snap);
+                            spawn_art_fetch(app.clone(), h.session.clone(), title, artist);
+                        }
+                        Err(e) => {
+                            eprintln!("[smtc] Msg::MediaChanged → read_track failed: {e:#}");
+                        }
                     }
                 }
             }
             Msg::TimelineChanged => {
+                // Routine — fires ~1Hz during playback. No log on success.
                 if let Some(ref h) = hooks {
-                    if let Ok((position_ms, duration_ms, last_update)) = read_timeline(&h.session) {
-                        let mut snap = snapshot.write().await;
-                        snap.position_ms = position_ms;
-                        if duration_ms > 0 {
-                            snap.duration_ms = duration_ms;
+                    match read_timeline(&h.session) {
+                        Ok((position_ms, duration_ms, last_update)) => {
+                            let mut snap = snapshot.write().await;
+                            snap.position_ms = position_ms;
+                            if duration_ms > 0 {
+                                snap.duration_ms = duration_ms;
+                            }
+                            snap.last_update_unix_ms = last_update;
+                            let _ = app.emit("timeline-changed", &*snap);
                         }
-                        snap.last_update_unix_ms = last_update;
-                        let _ = app.emit("timeline-changed", &*snap);
+                        Err(e) => {
+                            eprintln!("[smtc] Msg::TimelineChanged → read_timeline failed: {e:#}");
+                        }
                     }
                 }
             }
             Msg::PlaybackChanged => {
                 if let Some(ref h) = hooks {
-                    if let Ok(state) = read_state(&h.session) {
-                        smtc_playing.store(state == PlaybackState::Playing, Ordering::Relaxed);
-                        let mut snap = snapshot.write().await;
-                        snap.state = state;
-                        let _ = app.emit("playback-state-changed", &*snap);
+                    match read_state(&h.session) {
+                        Ok(state) => {
+                            eprintln!("[smtc] Msg::PlaybackChanged → state={state:?}");
+                            smtc_playing.store(state == PlaybackState::Playing, Ordering::Relaxed);
+                            let mut snap = snapshot.write().await;
+                            snap.state = state;
+                            let _ = app.emit("playback-state-changed", &*snap);
+                        }
+                        Err(e) => {
+                            eprintln!("[smtc] Msg::PlaybackChanged → read_state failed: {e:#}");
+                        }
                     }
                 }
             }
@@ -300,6 +355,10 @@ async fn emit_full(
 
     let (snap_title, snap_artist) = {
         let snap = snapshot.read().await;
+        eprintln!(
+            "[smtc] emit_full → title='{}' artist='{}' state={:?} pos={}ms dur={}ms",
+            snap.title, snap.artist, snap.state, snap.position_ms, snap.duration_ms
+        );
         let _ = app.emit("track-changed", &*snap);
         let _ = app.emit("timeline-changed", &*snap);
         let _ = app.emit("playback-state-changed", &*snap);

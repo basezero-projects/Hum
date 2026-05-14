@@ -4,6 +4,22 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.5.2] - 2026-05-14
+
+### Fixed
+- **iTunes tracks now show up in the dev console + flow into the lyrics pipeline.** The classic-iTunes COM bridge has been completely silent since v0.5.0 — the dev console **CURRENT TRACK** card stayed on `(no title) / (no artist) / unknown 0:00 / 0:00` and `EVENT LOG` showed `No events yet` even with iTunes actively playing music. Root cause: the v0.5.0 audit M2 "TOCTOU fix" switched the embedded PowerShell poll script from `fs::write` → `tempfile::NamedTempFile` but kept the file's writable handle open via `_tmp_guard = tmp` while spawning `powershell.exe -File <same path>`, which Windows rejects with a sharing violation (`The process cannot access the file ... because it is being used by another process`). PowerShell exited immediately on every spawn. Now `tmp.into_temp_path()` closes the writable handle BEFORE spawn, and the returned `TempPath` still auto-deletes the script on drop, so the random-suffix TOCTOU mitigation is preserved. Affects every user with classic iTunes for Windows — Spotify / Chrome / Edge / new Apple Music app users were unaffected because they go through SMTC, not the COM bridge.
+
+### Changed
+- **Dev-time diagnostic logging** now writes to stderr from both source bridges. The dev server's terminal (or wherever the binary's stderr is captured) prints:
+  - `[smtc] worker starting` / `[smtc] manager acquired` / `[smtc] CurrentSessionChanged handler registered` at startup so it's visible the SMTC side initialized.
+  - `[smtc] startup: session attached, source='<AUMID>', state=<X>` when a media app was already reporting media to SMTC at app launch (Spotify desktop, Chrome with audio, Edge, etc.).
+  - `[smtc] startup attach_session failed (probably no active SMTC session)` when no app was reporting at launch — this is normal when no music is playing yet; the worker still listens for `Msg::SessionChanged`.
+  - `[smtc] Msg::SessionChanged` / `Msg::MediaChanged` / `Msg::PlaybackChanged` when SMTC fires those events. `MediaChanged` includes the new title/artist/album/duration. `TimelineChanged` fires ~1Hz during playback and is intentionally NOT logged to keep noise down.
+  - `[smtc] emit_full → title='X' artist='Y' state=Z pos=Nms dur=Mms` whenever the bootstrap or session-change path emits the full snapshot.
+  - `[itunes] poller spawned (pid=NNN)` when the COM bridge starts the PowerShell child.
+  - `[itunes:stderr] <line>` for every stderr line PowerShell produces — previously stderr was `Stdio::null()` so script crashes / ExecutionPolicy denials / COM errors were invisible. This is how the v0.5.0 sharing-violation bug was finally diagnosed.
+- These logs are permanent (not gated behind `#[cfg(debug_assertions)]`) so production users reporting "no track shows up" can paste their stderr and you can see exactly where the chain breaks. The volume is low: a handful of lines at startup, then ~1 line per song change.
+
 ## [0.5.1] - 2026-05-14
 
 ### Fixed
