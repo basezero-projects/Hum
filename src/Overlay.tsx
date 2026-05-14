@@ -9,7 +9,15 @@ import type { CurrentLyrics, CurrentTrack, LyricLine } from "./types";
 // much makes lines change *just before* the singer sings them, which is the
 // karaoke convention and feels in-sync. Phase 5 will expose this as a user
 // setting; for now it's a tunable constant.
-const LYRIC_ANTICIPATE_MS = 300;
+const LYRIC_ANTICIPATE_MS = 500;
+
+// If a timeline-changed event reports a position that's behind our currently
+// interpolated position by less than this much, we assume the source's
+// internal counter is just slightly stale (iTunes COM and SMTC both report
+// `PlayerPosition` on their own cadence which lags the audio playback head by
+// a few hundred ms) and keep our existing forward-moving anchor instead.
+// Backward jumps larger than this are treated as real seeks and accepted.
+const JITTER_TOLERANCE_MS = 2000;
 
 export default function Overlay() {
   const [track, setTrack] = useState<CurrentTrack | null>(null);
@@ -74,10 +82,38 @@ export default function Overlay() {
       rafId = requestAnimationFrame(tick);
     }
 
-    function applyTrack(t: CurrentTrack) {
+    function applyTrack(
+      t: CurrentTrack,
+      kind: "track" | "timeline" | "state",
+    ) {
       const prev = trackRef.current;
-      trackRef.current = t;
-      setTrack(t);
+      let next = t;
+
+      // Monotonic clamp: if this is a timeline tick during stable same-track
+      // playback and the reported position is slightly BEHIND where our
+      // interpolation already is (presumed source-counter staleness, not a
+      // real seek), keep advancing from the old anchor. Real seeks crossing
+      // JITTER_TOLERANCE_MS in either direction pass through normally.
+      if (
+        prev &&
+        kind === "timeline" &&
+        prev.title === t.title &&
+        prev.artist === t.artist &&
+        prev.state === "playing" &&
+        t.state === "playing"
+      ) {
+        const expected =
+          prev.position_ms +
+          (t.last_update_unix_ms - prev.last_update_unix_ms);
+        const drift = expected - t.position_ms;
+        if (drift > 0 && drift < JITTER_TOLERANCE_MS) {
+          next = { ...t, position_ms: expected };
+        }
+      }
+
+      trackRef.current = next;
+      setTrack(next);
+
       // On title/artist change, clear stale cursor while we wait for new lyrics
       if (!prev || prev.title !== t.title || prev.artist !== t.artist) {
         indexRef.current = -1;
@@ -99,16 +135,16 @@ export default function Overlay() {
     }
 
     const unlisteners: Array<Promise<() => void>> = [
-      listen<CurrentTrack>("track-changed", (e) => applyTrack(e.payload)),
-      listen<CurrentTrack>("timeline-changed", (e) => applyTrack(e.payload)),
-      listen<CurrentTrack>("playback-state-changed", (e) => applyTrack(e.payload)),
+      listen<CurrentTrack>("track-changed", (e) => applyTrack(e.payload, "track")),
+      listen<CurrentTrack>("timeline-changed", (e) => applyTrack(e.payload, "timeline")),
+      listen<CurrentTrack>("playback-state-changed", (e) => applyTrack(e.payload, "state")),
       listen<CurrentLyrics>("lyrics-state", (e) => applyLyrics(e.payload)),
       listen<CurrentLyrics>("lyrics-loaded", (e) => applyLyrics(e.payload)),
       listen<CurrentLyrics>("lyrics-not-found", (e) => applyLyrics(e.payload)),
     ];
 
     invoke<CurrentTrack>("get_current_track")
-      .then(applyTrack)
+      .then((t) => applyTrack(t, "track"))
       .catch(() => {});
     invoke<CurrentLyrics>("get_current_lyrics")
       .then(applyLyrics)

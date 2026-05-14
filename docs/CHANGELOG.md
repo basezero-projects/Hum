@@ -4,6 +4,14 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.3.2] - 2026-05-14
+
+### Fixed
+- **Lyrics no longer briefly jump to the wrong line and snap back.** Previously, when a `timeline-changed` event arrived with a position slightly behind our smoothly-interpolated estimate (iTunes COM and SMTC both report `PlayerPosition` on their own cadence, which can lag the actual audio playback head by 100-800ms), the overlay cursor would rewind to a previous line for one frame and then re-advance on the next tick. Added a **monotonic clamp** in `applyTrack`: timeline events during stable same-track playback that report a position behind the interpolation by less than 2 seconds are now treated as source-counter staleness, and we keep advancing from our existing forward-moving anchor. Real seeks (forward OR backward, magnitude ≥ 2s) and any track or state change still pass through normally. Implemented by passing `kind: "track" | "timeline" | "state"` to `applyTrack` so the clamp applies only to `timeline` events during `playing → playing` transitions.
+
+### Changed
+- **`LYRIC_ANTICIPATE_MS` bumped 300 → 500.** Anticipation feels better at 500ms — lines now change clearly *just before* the singer rather than landing right on the syllable. Phase 5 will expose this as a slider so users can tune to their preference.
+
 ## [0.3.1] - 2026-05-14
 
 ### Fixed
