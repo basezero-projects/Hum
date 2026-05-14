@@ -260,6 +260,7 @@ export default function Overlay() {
         onMouseLeave={() => setHovered(false)}
         style={containerStyle}
       >
+        {showArt && albumArt ? <AlbumArtBadge dataUrl={albumArt.data_url} /> : null}
         <LineRow
           text={middleText}
           kind="cur"
@@ -273,7 +274,8 @@ export default function Overlay() {
     );
   }
 
-  if (layoutMode === "full_page" && lyrics?.status === "synced") {
+  if (layoutMode === "full_page") {
+    const hasLines = lyrics?.status === "synced" && lyrics.lines.length > 0;
     return (
       <div
         {...dragProps}
@@ -281,16 +283,26 @@ export default function Overlay() {
         onMouseLeave={() => setHovered(false)}
         style={containerStyle}
       >
-        {lyrics.lines.map((line, i) => (
+        {showArt && albumArt ? <AlbumArtBadge dataUrl={albumArt.data_url} /> : null}
+        {hasLines ? (
+          lyrics!.lines.map((line, i) => (
+            <LineRow
+              key={i}
+              text={line.text}
+              kind={i === displayIdx ? "cur" : "prev"}
+              dragRegion={isEdit}
+              settings={settings}
+              scrollIntoView={i === displayIdx}
+            />
+          ))
+        ) : (
           <LineRow
-            key={i}
-            text={line.text}
-            kind={i === displayIdx ? "cur" : "prev"}
+            text={middleText}
+            kind="cur"
             dragRegion={isEdit}
             settings={settings}
-            scrollIntoView={i === displayIdx}
           />
-        ))}
+        )}
       </div>
     );
   }

@@ -4,6 +4,15 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.5.1] - 2026-05-14
+
+### Fixed
+- **Full-page scroll layout no longer silently falls back to 3-line scroll** when lyrics aren't in the `synced` state (fetching, not_found, instrumental, plain, idle, error). Previously the **Layout mode → Full-page scroll** dropdown choice in Settings only honored your selection while a synced LRC was loaded; the moment the track changed and lyrics were still being fetched, or when LRCLib had no result, the overlay reverted to the 3-line view without warning. Now the full-page container always renders for the selected layout — when no synced lines are available, the same status fallback the other layouts use (`♪ fetching — Track`, `♪ no lyrics for Track`, `♪ instrumental`, etc.) appears as a single centered line inside the scrollable container instead of the layout silently changing under you.
+- **Album art badge now appears in all three layout modes**, not only **3-line scroll**. The 40×40 rounded thumbnail at the top-left of the overlay was previously only wired into the 3-line layout's render branch — switching to **Single-line karaoke** or **Full-page scroll** would hide the album art even with **Show album art** still toggled on. Now `AlbumArtBadge` is rendered in all three layout branches; since it's positioned `absolute` over the lyric area, it doesn't push lines around in any layout.
+
+### Notes
+- These were the two render-layer issues a code-audit subagent found while reviewing v0.5.0's manual-verify checklist items. Pure frontend changes — no Rust changes, no settings schema change, no new dependencies.
+
 ## [0.5.0] - 2026-05-14
 
 ### Added — Phase 5 (settings window)
