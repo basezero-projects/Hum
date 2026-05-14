@@ -265,7 +265,7 @@ fn build_client() -> Result<reqwest::Client> {
         .context("reqwest::Client::build")
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 struct LrcRecord {
     #[allow(dead_code)]
@@ -289,6 +289,56 @@ async fn fetch_lrclib(
     album: &str,
     duration_ms: u64,
 ) -> Result<(CachedLyrics, String)> {
+    // Race /api/get and /api/search in parallel. LRCLib responses are ~8-10s
+    // each from this network, so sequential fetch (get → maybe search) was up
+    // to ~20s on misses. Parallel halves the wall-clock to ~10s.
+    //
+    // Priority on result: /api/get is canonical (exact metadata match), so it
+    // wins whenever it returns content. /api/search is the fallback when
+    // /api/get 404s or returns empty.
+    let (get_res, search_res) = tokio::join!(
+        try_get_lrclib(client, artist, title, album, duration_ms),
+        try_search_lrclib(client, artist, title),
+    );
+
+    if let Ok(Some(rec)) = &get_res {
+        let cached = to_cached_ref(rec);
+        if !matches!(cached, CachedLyrics::NotFound) {
+            return Ok((cached, "lrclib".into()));
+        }
+    }
+
+    if let Ok(records) = &search_res {
+        if let Some(rec) = pick_best(records.clone(), title, artist, duration_ms) {
+            let cached = to_cached(rec);
+            if !matches!(cached, CachedLyrics::NotFound) {
+                return Ok((cached, "lrclib-search".into()));
+            }
+        }
+    }
+
+    // Both completed but had no content → authoritative NotFound.
+    if get_res.is_ok() && search_res.is_ok() {
+        return Ok((CachedLyrics::NotFound, "lrclib".into()));
+    }
+
+    // At least one was a transient error — surface it so we don't cache.
+    match (get_res, search_res) {
+        (Err(e), Err(_)) => Err(e.context("both /api/get and /api/search failed")),
+        (Err(e), _) => Err(e.context("/api/get failed")),
+        (_, Err(e)) => Err(e.context("/api/search failed")),
+        _ => Ok((CachedLyrics::NotFound, "lrclib".into())),
+    }
+}
+
+/// Returns Ok(Some(rec)) on a 200 hit, Ok(None) on any 4xx, Err on 5xx/network.
+async fn try_get_lrclib(
+    client: &reqwest::Client,
+    artist: &str,
+    title: &str,
+    album: &str,
+    duration_ms: u64,
+) -> Result<Option<LrcRecord>> {
     let dur_secs = (duration_ms / 1000).to_string();
     let mut params: Vec<(&str, &str)> = vec![
         ("artist_name", artist),
@@ -302,26 +352,24 @@ async fn fetch_lrclib(
         .context("build /api/get url")?;
 
     let resp = client.get(url).send().await.context("GET /api/get")?;
-
     let status = resp.status();
     if status.is_success() {
         let body = resp.text().await.context("read /api/get body")?;
         let rec: LrcRecord = serde_json::from_str(&body).context("parse /api/get json")?;
-        return Ok((to_cached(rec), "lrclib".into()));
+        return Ok(Some(rec));
     }
-    // Any 4xx (404 typically, sometimes 400 for fuzzy/empty fields) → fall
-    // back to search. 5xx/network errors propagate as transient failures.
     if status.is_client_error() {
-        return search_lrclib(client, artist, title).await;
+        return Ok(None);
     }
     anyhow::bail!("/api/get returned {status}");
 }
 
-async fn search_lrclib(
+/// Returns Ok(records) (possibly empty) on a 2xx, Err on 4xx/5xx/network.
+async fn try_search_lrclib(
     client: &reqwest::Client,
     artist: &str,
     title: &str,
-) -> Result<(CachedLyrics, String)> {
+) -> Result<Vec<LrcRecord>> {
     let url = reqwest::Url::parse_with_params(
         "https://lrclib.net/api/search",
         &[("track_name", title), ("artist_name", artist)],
@@ -339,27 +387,72 @@ async fn search_lrclib(
     let body = resp.text().await.context("read /api/search body")?;
     let records: Vec<LrcRecord> =
         serde_json::from_str(&body).context("parse /api/search json")?;
-    if let Some(rec) = pick_best(records, title, artist) {
-        Ok((to_cached(rec), "lrclib-search".into()))
-    } else {
-        Ok((CachedLyrics::NotFound, "lrclib-search".into()))
-    }
+    Ok(records)
 }
 
-fn pick_best(records: Vec<LrcRecord>, title: &str, _artist: &str) -> Option<LrcRecord> {
-    // Prefer records with synced lyrics, then with any plain lyrics, then any.
+fn pick_best(
+    records: Vec<LrcRecord>,
+    title: &str,
+    _artist: &str,
+    requested_duration_ms: u64,
+) -> Option<LrcRecord> {
+    // Filter by:
+    //   1. Title substring match (case-insensitive, bidirectional) — avoids
+    //      picking entirely unrelated tracks that happened to surface in search.
+    //   2. Duration within ±5s of the requested track — covers/remixes of the
+    //      same name usually have very different lengths. This was the Duka/
+    //      Toxic risk: Ashnikko's 163s Toxic shouldn't get picked when a 203s
+    //      Toxic was requested.
+    let requested_secs = requested_duration_ms as i64 / 1000;
     let title_l = title.to_lowercase();
-    let mut with_synced: Vec<_> = records
+    let tolerance_secs: i64 = 5;
+
+    let mut candidates: Vec<_> = records
         .into_iter()
-        .filter(|r| r.track_name.as_deref().unwrap_or("").to_lowercase().contains(&title_l)
-            || title_l.contains(&r.track_name.as_deref().unwrap_or("").to_lowercase()))
+        .filter(|r| {
+            let rec_title = r.track_name.as_deref().unwrap_or("").to_lowercase();
+            let title_match =
+                rec_title.contains(&title_l) || title_l.contains(&rec_title) || rec_title == title_l;
+            if !title_match {
+                return false;
+            }
+            // Skip duration filter only when we have no requested duration to
+            // compare against (shouldn't happen in practice — SMTC and iTunes
+            // both provide it).
+            if requested_secs == 0 {
+                return true;
+            }
+            let r_secs = r.duration.unwrap_or(0.0) as i64;
+            (r_secs - requested_secs).abs() <= tolerance_secs
+        })
         .collect();
-    with_synced.sort_by(|a, b| {
+
+    candidates.sort_by(|a, b| {
+        // Prefer records with synced lyrics.
         let ra = a.synced_lyrics.is_some();
         let rb = b.synced_lyrics.is_some();
         rb.cmp(&ra)
     });
-    with_synced.into_iter().next()
+    candidates.into_iter().next()
+}
+
+fn to_cached_ref(rec: &LrcRecord) -> CachedLyrics {
+    // Convenience: clone the bits we need without consuming the record.
+    if rec.instrumental.unwrap_or(false) {
+        return CachedLyrics::Instrumental;
+    }
+    if let Some(s) = rec.synced_lyrics.as_deref() {
+        let lines = parse_lrc(s);
+        if !lines.is_empty() {
+            return CachedLyrics::Synced { lines };
+        }
+    }
+    if let Some(p) = rec.plain_lyrics.as_ref() {
+        if !p.trim().is_empty() {
+            return CachedLyrics::Plain { text: p.clone() };
+        }
+    }
+    CachedLyrics::NotFound
 }
 
 fn to_cached(rec: LrcRecord) -> CachedLyrics {
