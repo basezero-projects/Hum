@@ -16,6 +16,8 @@ export type CurrentTrack = {
   source_app_id: string | null;
 };
 
+export type OverlayMode = "edit" | "locked" | "ghost";
+
 export type LyricLine = { time_ms: number; text: string };
 
 export type LyricsStatus =

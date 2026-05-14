@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { CurrentLyrics, CurrentTrack, LyricLine } from "./types";
+import type { CurrentLyrics, CurrentTrack, LyricLine, OverlayMode } from "./types";
 
 // How many ms to read ahead when looking up the active LRC line. iTunes' COM
 // PlayerPosition and LRCLib's community-contributed timestamps both tend to
@@ -25,6 +25,16 @@ export default function Overlay() {
   // displayIdx is what the DOM renders. It changes only when the active line
   // changes (~once per LRC entry), NOT on every rAF tick.
   const [displayIdx, setDisplayIdx] = useState<number>(-1);
+  const [mode, setMode] = useState<OverlayMode>("edit");
+  const [hovered, setHovered] = useState(false);
+
+  useEffect(() => {
+    const un = listen<OverlayMode>("mode-changed", (e) => setMode(e.payload));
+    invoke<OverlayMode>("get_overlay_mode").then(setMode).catch(() => {});
+    return () => {
+      un.then((fn) => fn()).catch(() => {});
+    };
+  }, []);
 
   // Refs hold the hot-loop data so the rAF closure stays stable across
   // re-renders. Events update these AND the React state.
@@ -172,9 +182,21 @@ export default function Overlay() {
   const middleText =
     cur?.text || (lyrics ? statusLine(lyrics, track) : "♪");
 
+  // Edit mode: drag-region active, dashed border on hover, move cursor.
+  // Locked: no drag, no border. Ghost: same; the window is also click-through
+  // via set_ignore_cursor_events on the Rust side, so frontend hover never
+  // fires anyway.
+  const isEdit = mode === "edit";
+  const dragProps = isEdit ? { "data-tauri-drag-region": true } : {};
+  const borderColor = isEdit && hovered
+    ? "rgba(212, 175, 55, 0.85)"
+    : "transparent";
+
   return (
     <div
-      data-tauri-drag-region
+      {...dragProps}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       style={{
         height: "100vh",
         width: "100vw",
@@ -189,12 +211,15 @@ export default function Overlay() {
         fontFamily:
           '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         userSelect: "none",
-        cursor: "move",
+        cursor: isEdit ? "move" : "default",
+        border: `1px dashed ${borderColor}`,
+        borderRadius: 8,
+        transition: "border-color 160ms ease",
       }}
     >
-      <LineRow text={prev?.text} kind="prev" />
-      <LineRow text={middleText} kind="cur" />
-      <LineRow text={next?.text} kind="next" />
+      <LineRow text={prev?.text} kind="prev" dragRegion={isEdit} />
+      <LineRow text={middleText} kind="cur" dragRegion={isEdit} />
+      <LineRow text={next?.text} kind="next" dragRegion={isEdit} />
     </div>
   );
 }
@@ -202,9 +227,11 @@ export default function Overlay() {
 function LineRow({
   text,
   kind,
+  dragRegion,
 }: {
   text: string | undefined;
   kind: "prev" | "cur" | "next";
+  dragRegion: boolean;
 }) {
   const isCur = kind === "cur";
   // Current line wraps to up to 2 lines so long lyrics aren't truncated.
@@ -223,9 +250,10 @@ function LineRow({
         overflow: "hidden",
         textOverflow: "ellipsis",
       };
+  const drag = dragRegion ? { "data-tauri-drag-region": true } : {};
   return (
     <div
-      data-tauri-drag-region
+      {...drag}
       style={{
         fontSize: isCur ? 26 : 16,
         fontWeight: isCur ? 600 : 400,

@@ -4,6 +4,50 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.4.0] - 2026-05-14
+
+### Added
+- **Phase 4 — overlay modes (edit / locked / ghost), system tray, and global hotkey.** The overlay window can now be put into one of three modes that change how it interacts with the cursor:
+  - **Edit mode** (default at startup): the overlay is movable. Hovering the window draws a thin gold dashed border (color `rgba(212, 175, 55, 0.85)`, 1px, rounded 8px corners, 160ms fade in/out) so it's obvious the window is "live" and grabbable. Cursor over the window is `move`. Click and drag anywhere on the lyrics to reposition.
+  - **Locked mode**: the overlay no longer accepts drags (the `data-tauri-drag-region` attribute is removed from every drag-target element while locked). Cursor over the window reverts to `default`. No hover border. The window still receives clicks (so right-click could open a future context menu), it just can't be moved.
+  - **Ghost mode**: the overlay becomes fully click-through via `WebviewWindow::set_ignore_cursor_events(true)`. Mouse clicks, scrolls, and hovers pass straight through to whatever window sits behind the overlay (your browser, IDE, game, etc.). The lyrics keep rendering and updating; you just can't interact with the window directly anymore. Hover border never shows because the frontend never receives a `mouseenter`.
+- **System tray icon** added (Windows notification area, near the clock). Single left- or right-click opens the menu. The icon itself indicates the current mode at a glance:
+  - Edit → solid gold-filled circle with a dark eighth-note glyph (♪)
+  - Locked → solid dark-gray circle with a bright white eighth-note glyph
+  - Ghost → no fill, dashed gray ring outline with a dim gray eighth-note glyph
+  Tooltip on hover reads `Lyric Overlay — <mode> mode`.
+- **Tray menu** items, top to bottom:
+  - **Show / Hide overlay** — toggles the overlay window's visibility (uses Tauri's `Window::show()` / `Window::hide()`). Useful when you want to temporarily hide lyrics without quitting.
+  - **Mode ▸** submenu with three checkable items: **Edit**, **Locked**, **Ghost (click-through)**. Exactly one is checked at any time, reflecting the current mode. Clicking switches modes immediately.
+  - **Settings… (coming soon)** — placeholder, disabled. Will open the Phase 5 settings window.
+  - **Quit Lyric Overlay** — exits the app.
+- **Global hotkey `Ctrl+Alt+L`** cycles modes in order: edit → locked → ghost → edit. Works system-wide regardless of which app has focus. Registered via `tauri-plugin-global-shortcut` (added at `2.3.1`).
+- **New Tauri commands** exposed for frontend use: `get_overlay_mode`, `set_overlay_mode(mode)`, `cycle_overlay_mode`, and `toggle_overlay_visibility`. The overlay UI uses `get_overlay_mode` on mount to seed its initial state and listens for the new `mode-changed` event payload (`"edit" | "locked" | "ghost"`) to react to mode changes from any source (tray click, hotkey, command).
+
+### Changed
+- **Overlay border behavior** — the overlay now reserves a 1px border slot at all times (transparent in locked/ghost, gold-dashed when hovered in edit). This keeps line layout from jumping by 2px between modes. The border has `border-radius: 8px` and a 160ms ease transition on `border-color`.
+- **`data-tauri-drag-region` is now mode-gated.** Previously the entire overlay body and every line row was always drag-active; now those attributes are conditionally rendered only when `mode === "edit"`. The container's cursor is also mode-driven (`move` in edit, `default` otherwise).
+
+### Architecture / files
+- **`src-tauri/src/mode.rs` (new)** — single source of truth for mode state. `OverlayMode` enum (`Edit | Locked | Ghost`, repr `u8`, serialized as lowercase string), `SharedMode = Arc<AtomicU8>` for lock-free reads from any thread (sync hotkey handlers + async commands both share the same atomic), and `apply_mode(app, mode)` which: writes the atomic, calls `set_ignore_cursor_events` on the overlay window, swaps the tray icon + tooltip, syncs the three submenu checkmarks (held via managed `ModeMenuItems` state), and emits `mode-changed`.
+- **`src-tauri/src/lib.rs`** — wires the tray (`build_tray`), the global-shortcut plugin (`build_global_shortcut_plugin` + `register_hotkey`), the new commands, and calls `apply_mode(default)` at startup so the tray icon, tooltip, menu checkmarks, and window flag all line up with the stored state on first paint.
+- **`src-tauri/icons/tray-edit.png`, `tray-locked.png`, `tray-ghost.png` (new)** — three 32×32 PNGs with transparency, generated via `System.Drawing` PowerShell. Loaded into the binary at compile time via `include_bytes!` and decoded with `tauri::image::Image::from_bytes` so they're valid in installed builds, not just dev.
+- **`src/Overlay.tsx`** — adds `mode` + `hovered` local state, listens to `mode-changed`, conditionally applies `data-tauri-drag-region` and the gold dashed hover border, and passes a `dragRegion` prop down to each `LineRow`.
+- **`src/types.ts`** — new exported `OverlayMode = "edit" | "locked" | "ghost"` type matching the Rust enum's serialized form.
+
+### Capabilities added (`src-tauri/capabilities/default.json`)
+`core:window:allow-show`, `core:window:allow-hide`, `core:window:allow-set-ignore-cursor-events`, `core:tray:default`, `global-shortcut:allow-register`, `global-shortcut:allow-unregister`, `global-shortcut:allow-is-registered`. (Tauri 2's `core:default` does not include any of these by default.)
+
+### Dependencies
+- **`tauri-plugin-global-shortcut = "2"`** added (resolves to 2.3.1) — Phase 4 hotkey requirement.
+- **`tauri = "2"` features** extended with `tray-icon` (system tray support) and `image-png` (PNG-decoded tray icon at runtime).
+
+### Notes / known limitations
+- Only the cycle direction is supported by the hotkey. Direct hotkey-to-mode (e.g. Ctrl+Alt+G to jump straight to ghost) deferred to Phase 5 settings.
+- `Settings…` menu item is intentionally disabled until Phase 5 ships the settings window.
+- Mode preference is **not yet persisted** — every cold start begins in edit mode. Phase 5 will save the last-used mode in `tauri-plugin-store` and restore it.
+- The tray icon's three visual treatments are intentionally restrained (gold for SYVR brand consistency in edit, neutral grays for the other two) — no rainbow tinting.
+
 ## [0.3.2] - 2026-05-14
 
 ### Fixed
