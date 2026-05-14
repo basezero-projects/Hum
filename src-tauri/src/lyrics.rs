@@ -33,9 +33,20 @@ const USER_AGENT: &str =
     "lyric-overlay/0.1.0 (Windows desktop overlay; https://github.com/syvrstudios/lyric-overlay)";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WordSpan {
+    pub time_ms: u32,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LyricLine {
     pub time_ms: u32,
     pub text: String,
+    /// Word-level timing inside this line (when the source provides enhanced
+    /// LRC like SimpMusic's `richSyncLyrics`). None for line-level-only sources
+    /// like LRCLib. Frontend uses this for karaoke-style highlighting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub words: Option<Vec<WordSpan>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -43,8 +54,16 @@ pub struct LyricLine {
 pub enum CachedLyrics {
     NotFound,
     Instrumental,
-    Plain { text: String },
-    Synced { lines: Vec<LyricLine> },
+    Plain {
+        text: String,
+    },
+    Synced {
+        lines: Vec<LyricLine>,
+        /// Optional translation lines (one-to-one with `lines` when present).
+        /// Only NetEase provides this in practice (Chinese translations).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        translation: Option<Vec<LyricLine>>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Default)]
@@ -52,10 +71,13 @@ pub enum CachedLyrics {
 pub struct CurrentLyrics {
     pub track_key: String,
     pub status: Status,
-    pub source: Option<String>, // "memory" | "store" | "lrclib" | "lrclib-search"
+    /// "memory" | "store" | "lrclib" | "lrclib-search" | "simpmusic" | "netease" | "all-sources" | "error"
+    pub source: Option<String>,
     pub line_count: usize,
     pub lines: Vec<LyricLine>,
     pub plain: Option<String>,
+    /// Per-line translations (when available — NetEase Chinese tlyric).
+    pub translation: Option<Vec<LyricLine>>,
     pub track: TrackEcho,
 }
 
@@ -140,6 +162,7 @@ pub fn start(app: AppHandle, shared: SharedLyrics, snapshot: SharedSnapshot) {
                     line_count: 0,
                     lines: vec![],
                     plain: None,
+                    translation: None,
                     track: track.clone(),
                 };
                 emit_state(&app, &s);
@@ -167,18 +190,66 @@ async fn resolve_lyrics(
         mem.write().await.insert(key.to_string(), cached.clone());
         return Outcome { cached, source: "store".into(), persist: false };
     }
-    // 3. Network
+
+    // 3. Network — try sources in priority order. LRCLib first (largest +
+    // best metadata match), then SimpMusic (often has rich/word-level), then
+    // NetEase (broad coverage incl. translations). A source returning
+    // NotFound proceeds to the next; a transient error also proceeds (we
+    // still want a chance at a hit), but is logged.
     let cleaned_title = clean_title(&track.title);
+    let mut last_error: Option<String> = None;
+
     match fetch_lrclib(client, &track.artist, &cleaned_title, &track.album, track.duration_ms).await
     {
-        Ok((cached, source)) => {
+        Ok((cached, source)) if !matches!(cached, CachedLyrics::NotFound) => {
             mem.write().await.insert(key.to_string(), cached.clone());
-            Outcome { cached, source, persist: true }
+            return Outcome { cached, source, persist: true };
         }
+        Ok(_) => {} // NotFound — try next source
         Err(e) => {
-            eprintln!("[lyrics] fetch failed for '{cleaned_title}' / '{}': {e:#}", track.artist);
-            Outcome::error()
+            eprintln!("[lyrics] lrclib failed for '{cleaned_title}' / '{}': {e:#}", track.artist);
+            last_error = Some(format!("lrclib: {e:#}"));
         }
+    }
+
+    match fetch_simpmusic(client, &track.artist, &cleaned_title, track.duration_ms).await {
+        Ok((cached, source)) if !matches!(cached, CachedLyrics::NotFound) => {
+            mem.write().await.insert(key.to_string(), cached.clone());
+            return Outcome { cached, source, persist: true };
+        }
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!(
+                "[lyrics] simpmusic failed for '{cleaned_title}' / '{}': {e:#}",
+                track.artist
+            );
+            last_error = Some(format!("simpmusic: {e:#}"));
+        }
+    }
+
+    match fetch_netease(client, &track.artist, &cleaned_title, track.duration_ms).await {
+        Ok((cached, source)) if !matches!(cached, CachedLyrics::NotFound) => {
+            mem.write().await.insert(key.to_string(), cached.clone());
+            return Outcome { cached, source, persist: true };
+        }
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!(
+                "[lyrics] netease failed for '{cleaned_title}' / '{}': {e:#}",
+                track.artist
+            );
+            last_error = Some(format!("netease: {e:#}"));
+        }
+    }
+
+    // All sources tried. If at least one returned a clean NotFound (no errors
+    // anywhere), this is authoritative — cache it. If everything errored, do
+    // NOT cache, so the next track-change retries.
+    if last_error.is_none() {
+        mem.write().await.insert(key.to_string(), CachedLyrics::NotFound);
+        Outcome { cached: CachedLyrics::NotFound, source: "all-sources".into(), persist: true }
+    } else {
+        Outcome::error()
     }
 }
 
@@ -214,11 +285,12 @@ async fn apply_outcome(
     s.track = track.clone();
 
     match out.cached {
-        CachedLyrics::Synced { lines } => {
+        CachedLyrics::Synced { lines, translation } => {
             s.status = Status::Synced;
             s.line_count = lines.len();
             s.plain = None;
             s.lines = lines;
+            s.translation = translation;
             let _ = app.emit("lyrics-loaded", &*s);
         }
         CachedLyrics::Plain { text } => {
@@ -226,6 +298,7 @@ async fn apply_outcome(
             s.line_count = text.lines().count();
             s.plain = Some(text);
             s.lines = vec![];
+            s.translation = None;
             let _ = app.emit("lyrics-loaded", &*s);
         }
         CachedLyrics::Instrumental => {
@@ -233,6 +306,7 @@ async fn apply_outcome(
             s.line_count = 0;
             s.plain = None;
             s.lines = vec![];
+            s.translation = None;
             let _ = app.emit("lyrics-loaded", &*s);
         }
         CachedLyrics::NotFound => {
@@ -244,6 +318,7 @@ async fn apply_outcome(
             s.line_count = 0;
             s.plain = None;
             s.lines = vec![];
+            s.translation = None;
             let _ = app.emit("lyrics-not-found", &*s);
         }
     }
@@ -257,10 +332,13 @@ fn emit_state(app: &AppHandle, s: &CurrentLyrics) {
 
 fn build_client() -> Result<reqwest::Client> {
     // LRCLib responses can take 8-10s on the wire from this network — give
-    // generous headroom so we don't false-fail on cold queries.
+    // generous headroom so we don't false-fail on cold queries. NetEase needs
+    // a cookie jar for its NMTID handshake; the jar is harmless for the other
+    // hosts (they don't set cookies).
     reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .timeout(std::time::Duration::from_secs(30))
+        .cookie_store(true)
         .build()
         .context("reqwest::Client::build")
 }
@@ -444,7 +522,7 @@ fn to_cached_ref(rec: &LrcRecord) -> CachedLyrics {
     if let Some(s) = rec.synced_lyrics.as_deref() {
         let lines = parse_lrc(s);
         if !lines.is_empty() {
-            return CachedLyrics::Synced { lines };
+            return CachedLyrics::Synced { lines, translation: None };
         }
     }
     if let Some(p) = rec.plain_lyrics.as_ref() {
@@ -462,7 +540,7 @@ fn to_cached(rec: LrcRecord) -> CachedLyrics {
     if let Some(s) = rec.synced_lyrics.as_deref() {
         let lines = parse_lrc(s);
         if !lines.is_empty() {
-            return CachedLyrics::Synced { lines };
+            return CachedLyrics::Synced { lines, translation: None };
         }
     }
     if let Some(p) = rec.plain_lyrics {
@@ -472,6 +550,330 @@ fn to_cached(rec: LrcRecord) -> CachedLyrics {
     }
     let _ = (rec.duration, rec.artist_name, rec.track_name);
     CachedLyrics::NotFound
+}
+
+// ─── SimpMusic fallback ────────────────────────────────────────────────────
+//
+// SimpMusic's API is YouTube-videoId-centric. It exposes /v1/search/title
+// which returns a list of records matching the title. We filter client-side
+// by artist similarity and duration ±5s, then prefer richSyncLyrics (word-
+// level enhanced LRC) over plain syncedLyrics (line-level) when both exist.
+// 30 req/min IP rate limit, no auth for read paths.
+
+#[derive(Deserialize, Debug, Clone)]
+struct SimpMusicWrapper {
+    #[serde(default)]
+    data: Vec<SimpMusicRecord>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+struct SimpMusicRecord {
+    #[serde(rename = "songTitle", default)]
+    #[allow(dead_code)]
+    song_title: String,
+    #[serde(rename = "artistName", default)]
+    artist_name: String,
+    #[serde(rename = "durationSeconds", default)]
+    duration_seconds: i64,
+    #[serde(rename = "plainLyric", default)]
+    plain_lyric: String,
+    #[serde(rename = "syncedLyrics", default)]
+    synced_lyrics: String,
+    #[serde(rename = "richSyncLyrics", default)]
+    rich_sync_lyrics: String,
+}
+
+async fn fetch_simpmusic(
+    client: &reqwest::Client,
+    artist: &str,
+    title: &str,
+    duration_ms: u64,
+) -> Result<(CachedLyrics, String)> {
+    let url = reqwest::Url::parse_with_params(
+        "https://api-lyrics.simpmusic.org/v1/search/title",
+        &[("title", title), ("limit", "10")],
+    )
+    .context("build simpmusic url")?;
+
+    let resp = client.get(url).send().await.context("GET simpmusic")?;
+    let status = resp.status();
+    if !status.is_success() {
+        if status.is_client_error() {
+            return Ok((CachedLyrics::NotFound, "simpmusic".into()));
+        }
+        anyhow::bail!("simpmusic returned {status}");
+    }
+    let body = resp.text().await.context("read simpmusic body")?;
+    let parsed: SimpMusicWrapper =
+        serde_json::from_str(&body).context("parse simpmusic json")?;
+
+    let chosen = pick_best_simpmusic(parsed.data, artist, duration_ms);
+    let Some(rec) = chosen else {
+        return Ok((CachedLyrics::NotFound, "simpmusic".into()));
+    };
+
+    // Prefer rich (word-level) when present + parseable, else line-level.
+    if !rec.rich_sync_lyrics.trim().is_empty() {
+        let lines = parse_enhanced_lrc(&rec.rich_sync_lyrics);
+        if !lines.is_empty() {
+            return Ok((
+                CachedLyrics::Synced { lines, translation: None },
+                "simpmusic".into(),
+            ));
+        }
+    }
+    if !rec.synced_lyrics.trim().is_empty() {
+        let lines = parse_lrc(&rec.synced_lyrics);
+        if !lines.is_empty() {
+            return Ok((
+                CachedLyrics::Synced { lines, translation: None },
+                "simpmusic".into(),
+            ));
+        }
+    }
+    if !rec.plain_lyric.trim().is_empty() {
+        return Ok((CachedLyrics::Plain { text: rec.plain_lyric }, "simpmusic".into()));
+    }
+    Ok((CachedLyrics::NotFound, "simpmusic".into()))
+}
+
+fn pick_best_simpmusic(
+    mut records: Vec<SimpMusicRecord>,
+    artist: &str,
+    requested_duration_ms: u64,
+) -> Option<SimpMusicRecord> {
+    let requested_secs = (requested_duration_ms / 1000) as i64;
+    let artist_l = artist.trim().to_lowercase();
+    let tolerance: i64 = 5;
+
+    records.retain(|r| {
+        let r_artist = r.artist_name.trim().to_lowercase();
+        let artist_match = !artist_l.is_empty()
+            && (r_artist.contains(&artist_l) || artist_l.contains(&r_artist));
+        if !artist_match && !artist_l.is_empty() {
+            return false;
+        }
+        if requested_secs == 0 {
+            return true;
+        }
+        (r.duration_seconds - requested_secs).abs() <= tolerance
+    });
+
+    // Prefer richSyncLyrics (word-level), then syncedLyrics (line), then plain.
+    records.sort_by_key(|r| {
+        if !r.rich_sync_lyrics.is_empty() {
+            0
+        } else if !r.synced_lyrics.is_empty() {
+            1
+        } else if !r.plain_lyric.is_empty() {
+            2
+        } else {
+            3
+        }
+    });
+    records.into_iter().next()
+}
+
+// ─── NetEase fallback ──────────────────────────────────────────────────────
+//
+// NetEase Cloud Music's undocumented public API. Two-step:
+//   1. POST /api/search/get with form body s=query, type=1 (songs) → song id
+//   2. GET /api/song/lyric?id=X&lv=1&kv=1&tv=-1 → { lrc.lyric, tlyric.lyric }
+//
+// Cookie jar must be enabled (NMTID handshake). Some licensed tracks return
+// empty `lrc.lyric` outside CN — treat that as NotFound.
+
+const NETEASE_HEADERS: &[(&str, &str)] = &[
+    ("Referer", "https://music.163.com"),
+    (
+        "User-Agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+    ),
+];
+
+#[derive(Deserialize, Debug)]
+struct NeteaseSearchResp {
+    #[serde(default)]
+    code: i32,
+    result: Option<NeteaseSearchResult>,
+}
+
+#[derive(Deserialize, Debug)]
+struct NeteaseSearchResult {
+    #[serde(default)]
+    songs: Vec<NeteaseSong>,
+}
+
+#[derive(Deserialize, Debug)]
+struct NeteaseSong {
+    id: u64,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    duration: u64,
+    #[serde(default)]
+    artists: Vec<NeteaseArtist>,
+}
+
+#[derive(Deserialize, Debug)]
+struct NeteaseArtist {
+    #[serde(default)]
+    name: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct NeteaseLyricResp {
+    #[serde(default)]
+    code: i32,
+    lrc: Option<NeteaseLyricBody>,
+    tlyric: Option<NeteaseLyricBody>,
+}
+
+#[derive(Deserialize, Debug)]
+struct NeteaseLyricBody {
+    #[serde(default)]
+    lyric: String,
+}
+
+async fn fetch_netease(
+    client: &reqwest::Client,
+    artist: &str,
+    title: &str,
+    duration_ms: u64,
+) -> Result<(CachedLyrics, String)> {
+    let query = format!("{title} {artist}");
+    // reqwest's RequestBuilder::form gates on a default feature that's been
+    // problematic to enable cleanly; sidestep by manually building the urlen-
+    // coded body via Url::query_pairs_mut (always available, no extra dep).
+    let body = {
+        let mut u = reqwest::Url::parse("https://example.invalid/")
+            .context("build form-body url")?;
+        u.query_pairs_mut()
+            .append_pair("s", &query)
+            .append_pair("type", "1")
+            .append_pair("limit", "10")
+            .append_pair("offset", "0");
+        u.query().unwrap_or("").to_string()
+    };
+    let mut req = client
+        .post("https://music.163.com/api/search/get")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(body);
+    for (k, v) in NETEASE_HEADERS {
+        req = req.header(*k, *v);
+    }
+    let resp = req.send().await.context("POST netease search")?;
+    let status = resp.status();
+    if !status.is_success() {
+        if status.is_client_error() {
+            return Ok((CachedLyrics::NotFound, "netease".into()));
+        }
+        anyhow::bail!("netease search returned {status}");
+    }
+    let body = resp.text().await.context("read netease search body")?;
+    let parsed: NeteaseSearchResp =
+        serde_json::from_str(&body).context("parse netease search json")?;
+    if parsed.code != 200 {
+        return Ok((CachedLyrics::NotFound, "netease".into()));
+    }
+    let songs = parsed.result.map(|r| r.songs).unwrap_or_default();
+    let Some(song) = pick_best_netease(songs, artist, title, duration_ms) else {
+        return Ok((CachedLyrics::NotFound, "netease".into()));
+    };
+
+    let song_id = song.id.to_string();
+    let lyric_url = reqwest::Url::parse_with_params(
+        "https://music.163.com/api/song/lyric",
+        &[
+            ("id", song_id.as_str()),
+            ("lv", "1"),
+            ("kv", "1"),
+            ("tv", "-1"),
+        ],
+    )
+    .context("build netease lyric url")?;
+    let mut req = client.get(lyric_url);
+    for (k, v) in NETEASE_HEADERS {
+        req = req.header(*k, *v);
+    }
+    let resp = req.send().await.context("GET netease lyric")?;
+    let status = resp.status();
+    if !status.is_success() {
+        if status.is_client_error() {
+            return Ok((CachedLyrics::NotFound, "netease".into()));
+        }
+        anyhow::bail!("netease lyric returned {status}");
+    }
+    let body = resp.text().await.context("read netease lyric body")?;
+    let parsed: NeteaseLyricResp =
+        serde_json::from_str(&body).context("parse netease lyric json")?;
+    if parsed.code != 200 {
+        return Ok((CachedLyrics::NotFound, "netease".into()));
+    }
+    let lrc = parsed.lrc.map(|l| l.lyric).unwrap_or_default();
+    if lrc.trim().is_empty() {
+        return Ok((CachedLyrics::NotFound, "netease".into()));
+    }
+    let lines = parse_lrc(&lrc);
+    if lines.is_empty() {
+        return Ok((CachedLyrics::NotFound, "netease".into()));
+    }
+    let translation = parsed
+        .tlyric
+        .map(|t| t.lyric)
+        .filter(|t| !t.trim().is_empty())
+        .map(|t| parse_lrc(&t))
+        .filter(|t| !t.is_empty());
+    Ok((CachedLyrics::Synced { lines, translation }, "netease".into()))
+}
+
+fn pick_best_netease(
+    songs: Vec<NeteaseSong>,
+    artist: &str,
+    title: &str,
+    requested_duration_ms: u64,
+) -> Option<NeteaseSong> {
+    let artist_l = artist.trim().to_lowercase();
+    let title_l = title.trim().to_lowercase();
+    let tolerance_ms: i64 = 5_000;
+
+    let mut candidates: Vec<NeteaseSong> = songs
+        .into_iter()
+        .filter(|s| {
+            let s_title = s.name.trim().to_lowercase();
+            if !s_title.is_empty()
+                && !(s_title.contains(&title_l) || title_l.contains(&s_title))
+            {
+                return false;
+            }
+            if !artist_l.is_empty() {
+                let any_artist_match = s
+                    .artists
+                    .iter()
+                    .any(|a| {
+                        let a_l = a.name.trim().to_lowercase();
+                        !a_l.is_empty()
+                            && (a_l.contains(&artist_l) || artist_l.contains(&a_l))
+                    });
+                if !any_artist_match {
+                    return false;
+                }
+            }
+            if requested_duration_ms == 0 {
+                return true;
+            }
+            (s.duration as i64 - requested_duration_ms as i64).abs() <= tolerance_ms
+        })
+        .collect();
+
+    candidates.sort_by_key(|s| {
+        if requested_duration_ms == 0 {
+            0
+        } else {
+            (s.duration as i64 - requested_duration_ms as i64).abs()
+        }
+    });
+    candidates.into_iter().next()
 }
 
 // ─── Title cleaner ─────────────────────────────────────────────────────────
@@ -557,11 +959,107 @@ pub fn parse_lrc(s: &str) -> Vec<LyricLine> {
         }
         let text = rest.trim().to_string();
         for t in times {
-            lines.push(LyricLine { time_ms: t, text: text.clone() });
+            lines.push(LyricLine { time_ms: t, text: text.clone(), words: None });
         }
     }
     lines.sort_by_key(|l| l.time_ms);
     lines
+}
+
+// Parses SimpMusic-style enhanced LRC, where each line is a sequence of
+// `<mm:ss.xx>word` segments (optionally prefixed with a `[mm:ss.xx]` line
+// timestamp). Produces line-level entries with attached word-level timing.
+//
+// Example input line:
+//   `[00:08.10]<00:08.10>Fonsi <00:08.33>DY`
+// or
+//   `<00:08.10>Fonsi <00:08.33>DY`
+pub fn parse_enhanced_lrc(s: &str) -> Vec<LyricLine> {
+    let line_re = ts_re();
+    let word_re: &OnceLock<Regex> = {
+        static R: OnceLock<Regex> = OnceLock::new();
+        &R
+    };
+    let word_re = word_re.get_or_init(|| {
+        Regex::new(r"<(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?>").unwrap()
+    });
+
+    let mut lines: Vec<LyricLine> = Vec::new();
+    for raw in s.lines() {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut rest = trimmed;
+
+        // Optional leading line-level timestamp
+        let line_time: Option<u32> = if let Some(cap) = line_re.captures(rest) {
+            let mm: u32 = cap[1].parse().unwrap_or(0);
+            let ss: u32 = cap[2].parse().unwrap_or(0);
+            let frac: u32 = cap.get(3).map_or(0, |m| frac_to_ms(m.as_str()));
+            let consumed = cap[0].len();
+            rest = &rest[consumed..];
+            Some(mm.saturating_mul(60_000).saturating_add(ss * 1_000).saturating_add(frac))
+        } else {
+            None
+        };
+
+        // Walk through `<time>word <time>word` segments.
+        let mut words: Vec<WordSpan> = Vec::new();
+        let mut text_acc = String::new();
+        let mut cursor = rest;
+        while let Some(cap) = word_re.captures(cursor) {
+            let m = cap.get(0).unwrap();
+            let start = m.start();
+            let end = m.end();
+            // Any text BEFORE this marker (rare, usually a line-level prefix
+            // word) — append to accumulator at the prior word time, or as
+            // text-only if no prior word exists.
+            if start > 0 {
+                let prefix = &cursor[..start];
+                if !prefix.is_empty() {
+                    text_acc.push_str(prefix);
+                    if let Some(last) = words.last_mut() {
+                        last.text.push_str(prefix);
+                    }
+                }
+            }
+            let mm: u32 = cap[1].parse().unwrap_or(0);
+            let ss: u32 = cap[2].parse().unwrap_or(0);
+            let frac: u32 = cap.get(3).map_or(0, |m| frac_to_ms(m.as_str()));
+            let t = mm.saturating_mul(60_000).saturating_add(ss * 1_000).saturating_add(frac);
+
+            // Word text = chars between this marker and the next `<` (or eol).
+            let after = &cursor[end..];
+            let next_lt = after.find('<').unwrap_or(after.len());
+            let word_text = after[..next_lt].to_string();
+            text_acc.push_str(&word_text);
+            words.push(WordSpan { time_ms: t, text: word_text });
+
+            cursor = &after[next_lt..];
+        }
+
+        if words.is_empty() {
+            continue;
+        }
+        let line_t = line_time.unwrap_or_else(|| words[0].time_ms);
+        lines.push(LyricLine {
+            time_ms: line_t,
+            text: text_acc.trim().to_string(),
+            words: Some(words),
+        });
+    }
+    lines.sort_by_key(|l| l.time_ms);
+    lines
+}
+
+fn frac_to_ms(s: &str) -> u32 {
+    let n: u32 = s.parse().unwrap_or(0);
+    match s.len() {
+        1 => n * 100,
+        2 => n * 10,
+        _ => n,
+    }
 }
 
 // ─── Cache key ─────────────────────────────────────────────────────────────
@@ -639,5 +1137,44 @@ mod tests {
         let s = "[00:05]Five seconds in\n";
         let lines = parse_lrc(s);
         assert_eq!(lines[0].time_ms, 5_000);
+    }
+
+    #[test]
+    fn parses_enhanced_lrc_word_level() {
+        // SimpMusic richSyncLyrics format — `<mm:ss.xx>word` segments
+        let s = "<00:01.00>Hello <00:01.50>world\n<00:03.00>Second <00:03.40>line";
+        let lines = parse_enhanced_lrc(s);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].time_ms, 1_000);
+        assert_eq!(lines[0].text, "Hello world");
+        let words = lines[0].words.as_ref().unwrap();
+        assert_eq!(words.len(), 2);
+        assert_eq!(words[0].time_ms, 1_000);
+        assert_eq!(words[0].text, "Hello ");
+        assert_eq!(words[1].time_ms, 1_500);
+        assert_eq!(words[1].text, "world");
+        assert_eq!(lines[1].time_ms, 3_000);
+        assert_eq!(lines[1].text, "Second line");
+    }
+
+    #[test]
+    fn parses_enhanced_lrc_with_line_prefix() {
+        // Some sources include a leading [mm:ss.xx] line timestamp before
+        // the per-word `<mm:ss.xx>` markers.
+        let s = "[00:08.10]<00:08.10>Fonsi <00:08.33>DY";
+        let lines = parse_enhanced_lrc(s);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].time_ms, 8_100);
+        let words = lines[0].words.as_ref().unwrap();
+        assert_eq!(words.len(), 2);
+        assert_eq!(words[1].time_ms, 8_330);
+    }
+
+    #[test]
+    fn enhanced_lrc_skips_empty_lines() {
+        let s = "\n\n<00:01.00>only line\n\n";
+        let lines = parse_enhanced_lrc(s);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].time_ms, 1_000);
     }
 }

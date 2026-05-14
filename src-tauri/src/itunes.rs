@@ -57,11 +57,26 @@ async fn run(
     snapshot: SharedSnapshot,
     smtc_playing: Arc<AtomicBool>,
 ) -> Result<()> {
-    // Stage the script to a temp file once per process. PowerShell's -File arg
-    // wants a path; -EncodedCommand has a 32KB cap and complicates debugging.
-    let script_path = std::env::temp_dir().join("lyric-overlay-itunes-poll.ps1");
-    std::fs::write(&script_path, SCRIPT).context("write itunes poll script")?;
+    // Stage the script to a UNIQUE temp file per process. The previous fixed
+    // path (%TEMP%\lyric-overlay-itunes-poll.ps1) was writable by any process
+    // running as the same user, opening a TOCTOU window between fs::write and
+    // PowerShell's -File read. NamedTempFile's random suffix closes that, and
+    // the guard auto-deletes on drop.
+    use std::io::Write;
+    let mut tmp = tempfile::Builder::new()
+        .prefix("lyric-overlay-itunes-")
+        .suffix(".ps1")
+        .tempfile()
+        .context("create temp script file")?;
+    tmp.as_file_mut()
+        .write_all(SCRIPT.as_bytes())
+        .context("write itunes poll script")?;
+    tmp.as_file_mut().flush().context("flush itunes poll script")?;
+    let script_path = tmp.path().to_path_buf();
 
+    // kill_on_drop ensures the PowerShell child exits when this future drops
+    // for any reason (cancellation, error return). Without it, the previous
+    // BUGS.md "orphan PowerShell on hot-reload" was guaranteed.
     let mut child = Command::new("powershell.exe")
         .args([
             "-NoProfile",
@@ -75,8 +90,13 @@ async fn run(
         .stderr(Stdio::null())
         .stdin(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW)
+        .kill_on_drop(true)
         .spawn()
         .context("spawn powershell for iTunes poll")?;
+    // _tmp_guard keeps the temp script alive while the child reads it. When
+    // run() returns, the guard drops, Tokio kills the child (kill_on_drop),
+    // and the script is removed from disk.
+    let _tmp_guard = tmp;
 
     let stdout = child.stdout.take().context("no stdout from powershell")?;
     let mut lines = BufReader::new(stdout).lines();

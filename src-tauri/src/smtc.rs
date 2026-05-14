@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use base64::Engine;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, RwLock};
@@ -22,8 +23,10 @@ use windows::Foundation::{EventRegistrationToken, TypedEventHandler};
 use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSession,
     GlobalSystemMediaTransportControlsSessionManager,
+    GlobalSystemMediaTransportControlsSessionMediaProperties,
     GlobalSystemMediaTransportControlsSessionPlaybackStatus,
 };
+use windows::Storage::Streams::DataReader;
 
 #[derive(Clone, Copy, Serialize, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -98,6 +101,20 @@ impl Drop for SessionHooks {
     }
 }
 
+/// Owns the manager-level `CurrentSessionChanged` registration. Dropping it
+/// removes the handler so cancelling the worker future doesn't leave a
+/// dangling COM callback firing into a closed mpsc channel.
+struct ManagerHook {
+    manager: GlobalSystemMediaTransportControlsSessionManager,
+    token: EventRegistrationToken,
+}
+
+impl Drop for ManagerHook {
+    fn drop(&mut self) {
+        let _ = self.manager.RemoveCurrentSessionChanged(self.token);
+    }
+}
+
 /// Spawn the SMTC worker. Logs and exits if it can't initialize — the rest of
 /// the app keeps running so the user can at least see the dev shell.
 ///
@@ -136,12 +153,16 @@ async fn run(
     // Manager-level: fires when the foreground media source changes (e.g. user
     // switches from Spotify to YouTube in Chrome).
     let tx_session = tx.clone();
-    let _session_token = manager.CurrentSessionChanged(&TypedEventHandler::new(
+    let session_token = manager.CurrentSessionChanged(&TypedEventHandler::new(
         move |_, _| {
             let _ = tx_session.send(Msg::SessionChanged);
             Ok(())
         },
     ))?;
+    let _manager_hook = ManagerHook {
+        manager: manager.clone(),
+        token: session_token,
+    };
 
     let mut hooks: Option<SessionHooks> = attach_session(&manager, &tx).ok();
     if let Some(ref h) = hooks {
@@ -172,12 +193,15 @@ async fn run(
             Msg::MediaChanged => {
                 if let Some(ref h) = hooks {
                     if let Ok(track) = read_track(&h.session).await {
+                        let (title, artist) = (track.title.clone(), track.artist.clone());
                         let mut snap = snapshot.write().await;
                         snap.title = track.title;
                         snap.artist = track.artist;
                         snap.album = track.album;
                         snap.duration_ms = track.duration_ms;
                         let _ = app.emit("track-changed", &*snap);
+                        drop(snap);
+                        spawn_art_fetch(app.clone(), h.session.clone(), title, artist);
                     }
                 }
             }
@@ -274,10 +298,106 @@ async fn emit_full(
         snap.source_app_id = source_app_id;
     }
 
-    let snap = snapshot.read().await;
-    let _ = app.emit("track-changed", &*snap);
-    let _ = app.emit("timeline-changed", &*snap);
-    let _ = app.emit("playback-state-changed", &*snap);
+    let (snap_title, snap_artist) = {
+        let snap = snapshot.read().await;
+        let _ = app.emit("track-changed", &*snap);
+        let _ = app.emit("timeline-changed", &*snap);
+        let _ = app.emit("playback-state-changed", &*snap);
+        (snap.title.clone(), snap.artist.clone())
+    };
+
+    if !snap_title.trim().is_empty() {
+        spawn_art_fetch(app.clone(), session.clone(), snap_title, snap_artist);
+    }
+}
+
+#[derive(Clone, Serialize)]
+struct AlbumArtPayload {
+    title: String,
+    artist: String,
+    data_url: String,
+}
+
+// Album art is large (50-200KB base64). Carrying it inside CurrentTrack would
+// bloat every timeline-changed payload by that much; we emit it via a
+// dedicated `album-art-loaded` event the frontend keys against the current
+// track. Best-effort — many sources don't expose a thumbnail at all.
+fn spawn_art_fetch(
+    app: AppHandle,
+    session: GlobalSystemMediaTransportControlsSession,
+    title: String,
+    artist: String,
+) {
+    tauri::async_runtime::spawn(async move {
+        let result = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
+            let props = session.TryGetMediaPropertiesAsync()?.get()?;
+            read_thumbnail_bytes(&props)
+        })
+        .await;
+        let bytes = match result {
+            Ok(Ok(b)) => b,
+            Ok(Err(_)) => return,
+            Err(_) => return,
+        };
+        if bytes.is_empty() {
+            return;
+        }
+        let mime = guess_image_mime(&bytes);
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        let payload = AlbumArtPayload {
+            title,
+            artist,
+            data_url: format!("data:{mime};base64,{b64}"),
+        };
+        let _ = app.emit("album-art-loaded", &payload);
+    });
+}
+
+/// Hard cap on thumbnail size we'll accept from SMTC. Real-world album art
+/// is well under 1MB; anything larger is either a misbehaving source or a
+/// hostile one trying to balloon our memory. 10MB is generous.
+const MAX_THUMBNAIL_BYTES: u64 = 10 * 1024 * 1024;
+
+fn read_thumbnail_bytes(
+    props: &GlobalSystemMediaTransportControlsSessionMediaProperties,
+) -> Result<Vec<u8>> {
+    let thumb_ref = props.Thumbnail().context("Thumbnail()")?;
+    let stream = thumb_ref
+        .OpenReadAsync()
+        .context("OpenReadAsync handle")?
+        .get()
+        .context("OpenReadAsync get")?;
+    let size_u64 = stream.Size().context("Size()")?;
+    if size_u64 == 0 {
+        anyhow::bail!("empty thumbnail stream");
+    }
+    if size_u64 > MAX_THUMBNAIL_BYTES {
+        anyhow::bail!("thumbnail too large: {size_u64} bytes (cap {MAX_THUMBNAIL_BYTES})");
+    }
+    // Cast safe after the cap check above.
+    let size = size_u64 as u32;
+    let reader = DataReader::CreateDataReader(&stream).context("CreateDataReader")?;
+    reader
+        .LoadAsync(size)
+        .context("LoadAsync handle")?
+        .get()
+        .context("LoadAsync get")?;
+    let mut bytes = vec![0u8; size as usize];
+    reader.ReadBytes(&mut bytes).context("ReadBytes")?;
+    Ok(bytes)
+}
+
+fn guess_image_mime(bytes: &[u8]) -> &'static str {
+    if bytes.len() >= 8 && bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        "image/png"
+    } else if bytes.len() >= 3 && &bytes[..3] == b"GIF" {
+        "image/gif"
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        "image/webp"
+    } else {
+        // SMTC almost always returns JPEG.
+        "image/jpeg"
+    }
 }
 
 /// Local mini-shape for the metadata read — assembled into the snapshot.

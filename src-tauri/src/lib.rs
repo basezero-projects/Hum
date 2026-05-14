@@ -15,6 +15,7 @@ mod itunes;
 
 mod lyrics;
 mod mode;
+mod settings;
 
 #[cfg(windows)]
 use smtc::{CurrentTrack, SharedSnapshot};
@@ -38,6 +39,9 @@ use lyrics::{CurrentLyrics, SharedLyrics};
 use mode::{
     apply_mode, cycle_overlay_mode, get_overlay_mode, icon_for, set_overlay_mode, ModeMenuItems,
     OverlayMode, SharedMode, TRAY_ID,
+};
+use settings::{
+    get_settings, open_settings_window, reset_settings, update_settings, SharedSettings,
 };
 
 #[tauri::command]
@@ -88,6 +92,13 @@ pub fn run() {
             let snap = app.state::<SharedSnapshot>().inner().clone();
             let lyrics_shared = app.state::<SharedLyrics>().inner().clone();
 
+            // Load persisted settings (if any) from the store BEFORE building
+            // the tray, so the initial mode + tooltip + check items reflect
+            // the user's last choice rather than always Edit.
+            let loaded_settings = settings::load_from_store(&app.handle());
+            let initial_mode = loaded_settings.last_mode;
+            app.manage::<SharedSettings>(Arc::new(RwLock::new(loaded_settings)));
+
             #[cfg(windows)]
             {
                 smtc::start(app.handle().clone(), snap.clone(), smtc_active.clone());
@@ -104,11 +115,11 @@ pub fn run() {
             // managed state so apply_mode() can keep the checked indicator in
             // sync no matter how the mode was changed.
             let app_handle = app.handle().clone();
-            build_tray(&app_handle)?;
+            build_tray(&app_handle, initial_mode)?;
 
-            // Apply the default mode once at startup so tray tooltip + icon
-            // + window cursor flag all line up with the stored state.
-            apply_mode(&app_handle, OverlayMode::default());
+            // Apply the loaded mode at startup so tray icon + tooltip + window
+            // cursor flag + check items all line up before first paint.
+            apply_mode(&app_handle, initial_mode);
 
             // Ctrl+Alt+L cycles edit -> locked -> ghost -> edit.
             register_hotkey(&app_handle)?;
@@ -122,16 +133,27 @@ pub fn run() {
             set_overlay_mode,
             cycle_overlay_mode,
             toggle_overlay_visibility,
+            get_settings,
+            update_settings,
+            reset_settings,
+            open_settings_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 
-fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
-    let toggle_overlay = MenuItemBuilder::with_id("toggle-overlay", "Show / Hide overlay").build(app)?;
-    let mode_edit = CheckMenuItemBuilder::with_id("mode-edit", "Edit").checked(true).build(app)?;
-    let mode_locked = CheckMenuItemBuilder::with_id("mode-locked", "Locked").build(app)?;
-    let mode_ghost = CheckMenuItemBuilder::with_id("mode-ghost", "Ghost (click-through)").build(app)?;
+fn build_tray(app: &tauri::AppHandle, initial_mode: OverlayMode) -> tauri::Result<()> {
+    let toggle_overlay =
+        MenuItemBuilder::with_id("toggle-overlay", "Show / Hide overlay").build(app)?;
+    let mode_edit = CheckMenuItemBuilder::with_id("mode-edit", "Edit")
+        .checked(matches!(initial_mode, OverlayMode::Edit))
+        .build(app)?;
+    let mode_locked = CheckMenuItemBuilder::with_id("mode-locked", "Locked")
+        .checked(matches!(initial_mode, OverlayMode::Locked))
+        .build(app)?;
+    let mode_ghost = CheckMenuItemBuilder::with_id("mode-ghost", "Ghost (click-through)")
+        .checked(matches!(initial_mode, OverlayMode::Ghost))
+        .build(app)?;
 
     let mode_submenu = SubmenuBuilder::new(app, "Mode")
         .item(&mode_edit)
@@ -139,9 +161,7 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         .item(&mode_ghost)
         .build()?;
 
-    let settings_item = MenuItemBuilder::with_id("settings", "Settings… (coming soon)")
-        .enabled(false)
-        .build(app)?;
+    let settings_item = MenuItemBuilder::with_id("settings", "Settings…").build(app)?;
     let quit_item = MenuItemBuilder::with_id("quit", "Quit Lyric Overlay").build(app)?;
 
     let menu = MenuBuilder::new(app)
@@ -160,12 +180,19 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         ghost: mode_ghost,
     });
 
-    let initial_icon = Image::from_bytes(icon_for(OverlayMode::default()))?;
+    let initial_icon = Image::from_bytes(icon_for(initial_mode))?;
 
     let _tray = TrayIconBuilder::with_id(TRAY_ID)
         .icon(initial_icon)
         .icon_as_template(false)
-        .tooltip("Lyric Overlay — edit mode")
+        .tooltip(format!(
+            "Lyric Overlay — {} mode",
+            match initial_mode {
+                OverlayMode::Edit => "edit",
+                OverlayMode::Locked => "locked",
+                OverlayMode::Ghost => "ghost",
+            }
+        ))
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -180,6 +207,11 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
             "mode-edit" => apply_mode(app, OverlayMode::Edit),
             "mode-locked" => apply_mode(app, OverlayMode::Locked),
             "mode-ghost" => apply_mode(app, OverlayMode::Ghost),
+            "settings" => {
+                if let Err(e) = settings::open_settings_window(app.clone()) {
+                    eprintln!("[tray] open settings failed: {e}");
+                }
+            }
             "quit" => app.exit(0),
             _ => {}
         })

@@ -1,23 +1,33 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { CurrentLyrics, CurrentTrack, LyricLine, OverlayMode } from "./types";
+import type {
+  CurrentLyrics,
+  CurrentTrack,
+  LayoutMode,
+  LyricLine,
+  OverlayMode,
+  Settings,
+  TextAlign,
+} from "./types";
 
-// How many ms to read ahead when looking up the active LRC line. iTunes' COM
-// PlayerPosition and LRCLib's community-contributed timestamps both tend to
-// run slightly behind the actual vocals; shifting our lookup forward by this
-// much makes lines change *just before* the singer sings them, which is the
-// karaoke convention and feels in-sync. Phase 5 will expose this as a user
-// setting; for now it's a tunable constant.
-const LYRIC_ANTICIPATE_MS = 500;
-
-// If a timeline-changed event reports a position that's behind our currently
-// interpolated position by less than this much, we assume the source's
-// internal counter is just slightly stale (iTunes COM and SMTC both report
-// `PlayerPosition` on their own cadence which lags the audio playback head by
-// a few hundred ms) and keep our existing forward-moving anchor instead.
-// Backward jumps larger than this are treated as real seeks and accepted.
-const JITTER_TOLERANCE_MS = 2000;
+const DEFAULT_SETTINGS: Settings = {
+  last_mode: "edit",
+  anticipate_ms: 500,
+  jitter_tolerance_ms: 2000,
+  font_family: "Inter",
+  font_size_px: 26,
+  font_weight: 600,
+  text_color: "#ffffff",
+  text_color_dim: "rgba(255,255,255,0.45)",
+  bg_color: "#000000",
+  bg_opacity: 0,
+  text_align: "center",
+  line_padding_px: 6,
+  layout_mode: "three_line",
+  show_album_art: true,
+  show_translation: false,
+};
 
 export default function Overlay() {
   const [track, setTrack] = useState<CurrentTrack | null>(null);
@@ -27,20 +37,15 @@ export default function Overlay() {
   const [displayIdx, setDisplayIdx] = useState<number>(-1);
   const [mode, setMode] = useState<OverlayMode>("edit");
   const [hovered, setHovered] = useState(false);
-
-  useEffect(() => {
-    const un = listen<OverlayMode>("mode-changed", (e) => setMode(e.payload));
-    invoke<OverlayMode>("get_overlay_mode").then(setMode).catch(() => {});
-    return () => {
-      un.then((fn) => fn()).catch(() => {});
-    };
-  }, []);
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  const [albumArt, setAlbumArt] = useState<{ title: string; artist: string; data_url: string } | null>(null);
 
   // Refs hold the hot-loop data so the rAF closure stays stable across
   // re-renders. Events update these AND the React state.
   const trackRef = useRef<CurrentTrack | null>(null);
   const lyricsRef = useRef<CurrentLyrics | null>(null);
   const indexRef = useRef<number>(-1);
+  const settingsRef = useRef<Settings>(DEFAULT_SETTINGS);
 
   useEffect(() => {
     function interpolatedPositionMs(): number {
@@ -52,7 +57,7 @@ export default function Overlay() {
     }
 
     function lookupPositionMs(): number {
-      return interpolatedPositionMs() + LYRIC_ANTICIPATE_MS;
+      return interpolatedPositionMs() + settingsRef.current.anticipate_ms;
     }
 
     function snapCursorToCurrentPosition(lines: LyricLine[]): number {
@@ -103,7 +108,8 @@ export default function Overlay() {
       // playback and the reported position is slightly BEHIND where our
       // interpolation already is (presumed source-counter staleness, not a
       // real seek), keep advancing from the old anchor. Real seeks crossing
-      // JITTER_TOLERANCE_MS in either direction pass through normally.
+      // the user-tunable jitter tolerance in either direction pass through.
+      const jitter = settingsRef.current.jitter_tolerance_ms;
       if (
         prev &&
         kind === "timeline" &&
@@ -116,7 +122,7 @@ export default function Overlay() {
           prev.position_ms +
           (t.last_update_unix_ms - prev.last_update_unix_ms);
         const drift = expected - t.position_ms;
-        if (drift > 0 && drift < JITTER_TOLERANCE_MS) {
+        if (drift > 0 && drift < jitter) {
           next = { ...t, position_ms: expected };
         }
       }
@@ -124,7 +130,6 @@ export default function Overlay() {
       trackRef.current = next;
       setTrack(next);
 
-      // On title/artist change, clear stale cursor while we wait for new lyrics
       if (!prev || prev.title !== t.title || prev.artist !== t.artist) {
         indexRef.current = -1;
         setDisplayIdx(-1);
@@ -144,6 +149,11 @@ export default function Overlay() {
       }
     }
 
+    function applySettings(s: Settings) {
+      settingsRef.current = s;
+      setSettings(s);
+    }
+
     const unlisteners: Array<Promise<() => void>> = [
       listen<CurrentTrack>("track-changed", (e) => applyTrack(e.payload, "track")),
       listen<CurrentTrack>("timeline-changed", (e) => applyTrack(e.payload, "timeline")),
@@ -151,6 +161,12 @@ export default function Overlay() {
       listen<CurrentLyrics>("lyrics-state", (e) => applyLyrics(e.payload)),
       listen<CurrentLyrics>("lyrics-loaded", (e) => applyLyrics(e.payload)),
       listen<CurrentLyrics>("lyrics-not-found", (e) => applyLyrics(e.payload)),
+      listen<OverlayMode>("mode-changed", (e) => setMode(e.payload)),
+      listen<Settings>("settings-changed", (e) => applySettings(e.payload)),
+      listen<{ title: string; artist: string; data_url: string }>(
+        "album-art-loaded",
+        (e) => setAlbumArt(e.payload),
+      ),
     ];
 
     invoke<CurrentTrack>("get_current_track")
@@ -159,6 +175,8 @@ export default function Overlay() {
     invoke<CurrentLyrics>("get_current_lyrics")
       .then(applyLyrics)
       .catch(() => {});
+    invoke<OverlayMode>("get_overlay_mode").then(setMode).catch(() => {});
+    invoke<Settings>("get_settings").then(applySettings).catch(() => {});
 
     rafId = requestAnimationFrame(tick);
     return () => {
@@ -182,44 +200,162 @@ export default function Overlay() {
   const middleText =
     cur?.text || (lyrics ? statusLine(lyrics, track) : "♪");
 
+  // Translation under the current line — only when the user opted in AND the
+  // source actually returned one (currently only NetEase tlyric).
+  const translationText: string | undefined =
+    settings.show_translation &&
+    lyrics?.translation &&
+    displayIdx >= 0 &&
+    displayIdx < lyrics.translation.length
+      ? lyrics.translation[displayIdx]?.text
+      : undefined;
+
+  // Album art only shows for the *currently playing* track — past art lingers
+  // in state until the next album-art-loaded event arrives.
+  const showArt =
+    settings.show_album_art &&
+    !!albumArt &&
+    !!track &&
+    albumArt.title === track.title &&
+    albumArt.artist === track.artist;
+
   // Edit mode: drag-region active, dashed border on hover, move cursor.
   // Locked: no drag, no border. Ghost: same; the window is also click-through
-  // via set_ignore_cursor_events on the Rust side, so frontend hover never
-  // fires anyway.
+  // via set_ignore_cursor_events on the Rust side.
   const isEdit = mode === "edit";
   const dragProps = isEdit ? { "data-tauri-drag-region": true } : {};
   const borderColor = isEdit && hovered
     ? "rgba(212, 175, 55, 0.85)"
     : "transparent";
 
+  const layoutMode: LayoutMode = settings.layout_mode;
+  const bgRgba = colorWithOpacity(settings.bg_color, settings.bg_opacity);
+
+  const containerStyle: React.CSSProperties = {
+    position: "relative",
+    height: "100vh",
+    width: "100vw",
+    display: "flex",
+    flexDirection: "column",
+    justifyContent: "center",
+    alignItems: alignToFlex(settings.text_align),
+    gap: settings.line_padding_px,
+    padding: "12px 28px",
+    boxSizing: "border-box",
+    background: bgRgba,
+    fontFamily: `"${settings.font_family}", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`,
+    userSelect: "none",
+    cursor: isEdit ? "move" : "default",
+    border: `1px dashed ${borderColor}`,
+    borderRadius: 8,
+    transition: "border-color 160ms ease, background 160ms ease",
+    overflow: layoutMode === "full_page" ? "auto" : "hidden",
+  };
+
+  if (layoutMode === "single_line") {
+    return (
+      <div
+        {...dragProps}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={containerStyle}
+      >
+        <LineRow
+          text={middleText}
+          kind="cur"
+          dragRegion={isEdit}
+          settings={settings}
+        />
+        {translationText ? (
+          <TranslationRow text={translationText} settings={settings} />
+        ) : null}
+      </div>
+    );
+  }
+
+  if (layoutMode === "full_page" && lyrics?.status === "synced") {
+    return (
+      <div
+        {...dragProps}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={containerStyle}
+      >
+        {lyrics.lines.map((line, i) => (
+          <LineRow
+            key={i}
+            text={line.text}
+            kind={i === displayIdx ? "cur" : "prev"}
+            dragRegion={isEdit}
+            settings={settings}
+            scrollIntoView={i === displayIdx}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  // Default: three-line scroll
   return (
     <div
       {...dragProps}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      style={containerStyle}
+    >
+      {showArt && albumArt ? <AlbumArtBadge dataUrl={albumArt.data_url} /> : null}
+      <LineRow text={prev?.text} kind="prev" dragRegion={isEdit} settings={settings} />
+      <LineRow text={middleText} kind="cur" dragRegion={isEdit} settings={settings} />
+      {translationText ? (
+        <TranslationRow text={translationText} settings={settings} />
+      ) : (
+        <LineRow text={next?.text} kind="next" dragRegion={isEdit} settings={settings} />
+      )}
+    </div>
+  );
+}
+
+function AlbumArtBadge({ dataUrl }: { dataUrl: string }) {
+  return (
+    <img
+      src={dataUrl}
+      alt=""
+      draggable={false}
       style={{
-        height: "100vh",
-        width: "100vw",
-        display: "flex",
-        flexDirection: "column",
-        justifyContent: "center",
-        alignItems: "center",
-        gap: 6,
-        padding: "12px 28px",
-        boxSizing: "border-box",
-        background: "transparent",
-        fontFamily:
-          '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-        userSelect: "none",
-        cursor: isEdit ? "move" : "default",
-        border: `1px dashed ${borderColor}`,
-        borderRadius: 8,
-        transition: "border-color 160ms ease",
+        position: "absolute",
+        top: 8,
+        left: 8,
+        width: 40,
+        height: 40,
+        borderRadius: 4,
+        objectFit: "cover",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.6)",
+        opacity: 0.9,
+        pointerEvents: "none",
+      }}
+    />
+  );
+}
+
+function TranslationRow({ text, settings }: { text: string; settings: Settings }) {
+  return (
+    <div
+      style={{
+        fontSize: Math.max(11, settings.font_size_px * 0.55),
+        fontWeight: 400,
+        color: settings.text_color_dim,
+        textAlign: settings.text_align,
+        textShadow: "0 2px 6px rgba(0,0,0,0.95), 0 0 14px rgba(0,0,0,0.65)",
+        opacity: 0.85,
+        lineHeight: 1.2,
+        maxWidth: "92vw",
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        fontStyle: "italic",
       }}
     >
-      <LineRow text={prev?.text} kind="prev" dragRegion={isEdit} />
-      <LineRow text={middleText} kind="cur" dragRegion={isEdit} />
-      <LineRow text={next?.text} kind="next" dragRegion={isEdit} />
+      {text}
     </div>
   );
 }
@@ -228,14 +364,22 @@ function LineRow({
   text,
   kind,
   dragRegion,
+  settings,
+  scrollIntoView,
 }: {
   text: string | undefined;
   kind: "prev" | "cur" | "next";
   dragRegion: boolean;
+  settings: Settings;
+  scrollIntoView?: boolean;
 }) {
   const isCur = kind === "cur";
-  // Current line wraps to up to 2 lines so long lyrics aren't truncated.
-  // Previous/next stay single-line + ellipsis since they're secondary context.
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (scrollIntoView && ref.current) {
+      ref.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [scrollIntoView]);
   const wrapStyle: React.CSSProperties = isCur
     ? {
         whiteSpace: "normal",
@@ -253,12 +397,13 @@ function LineRow({
   const drag = dragRegion ? { "data-tauri-drag-region": true } : {};
   return (
     <div
+      ref={ref}
       {...drag}
       style={{
-        fontSize: isCur ? 26 : 16,
-        fontWeight: isCur ? 600 : 400,
-        color: isCur ? "#ffffff" : "rgba(255,255,255,0.45)",
-        textAlign: "center",
+        fontSize: isCur ? settings.font_size_px : Math.max(12, settings.font_size_px * 0.6),
+        fontWeight: isCur ? settings.font_weight : 400,
+        color: isCur ? settings.text_color : settings.text_color_dim,
+        textAlign: settings.text_align,
         textShadow:
           "0 2px 6px rgba(0,0,0,0.95), 0 0 14px rgba(0,0,0,0.65)",
         opacity: text ? 1 : 0.2,
@@ -293,4 +438,24 @@ function statusLine(l: CurrentLyrics, t: CurrentTrack | null): string {
     default:
       return "♪";
   }
+}
+
+function alignToFlex(a: TextAlign): React.CSSProperties["alignItems"] {
+  if (a === "left") return "flex-start";
+  if (a === "right") return "flex-end";
+  return "center";
+}
+
+// Convert hex (#rrggbb) + opacity-percent to rgba(...) string. Falls back to
+// transparent for invalid input so a typo can't break rendering.
+function colorWithOpacity(hex: string, opacityPct: number): string {
+  const a = Math.max(0, Math.min(1, opacityPct / 100));
+  if (a === 0) return "transparent";
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex);
+  if (!m) return "transparent";
+  const n = parseInt(m[1], 16);
+  const r = (n >> 16) & 0xff;
+  const g = (n >> 8) & 0xff;
+  const b = n & 0xff;
+  return `rgba(${r}, ${g}, ${b}, ${a.toFixed(3)})`;
 }

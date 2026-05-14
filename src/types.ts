@@ -18,7 +18,34 @@ export type CurrentTrack = {
 
 export type OverlayMode = "edit" | "locked" | "ghost";
 
-export type LyricLine = { time_ms: number; text: string };
+export type LayoutMode = "three_line" | "single_line" | "full_page";
+export type TextAlign = "left" | "center" | "right";
+
+export type Settings = {
+  last_mode: OverlayMode;
+  anticipate_ms: number;
+  jitter_tolerance_ms: number;
+  font_family: string;
+  font_size_px: number;
+  font_weight: number;
+  text_color: string;
+  text_color_dim: string;
+  bg_color: string;
+  bg_opacity: number;
+  text_align: TextAlign;
+  line_padding_px: number;
+  layout_mode: LayoutMode;
+  show_album_art: boolean;
+  show_translation: boolean;
+};
+
+export type WordSpan = { time_ms: number; text: string };
+
+export type LyricLine = {
+  time_ms: number;
+  text: string;
+  words?: WordSpan[];
+};
 
 export type LyricsStatus =
   | "idle"
@@ -32,10 +59,13 @@ export type LyricsStatus =
 export type CurrentLyrics = {
   track_key: string;
   status: LyricsStatus;
+  /** "memory" | "store" | "lrclib" | "lrclib-search" | "simpmusic" | "netease" | "all-sources" | "error" */
   source: string | null;
   line_count: number;
   lines: LyricLine[];
   plain: string | null;
+  /** Per-line translation (currently only NetEase Chinese tlyric). */
+  translation: LyricLine[] | null;
   track: {
     title: string;
     artist: string;

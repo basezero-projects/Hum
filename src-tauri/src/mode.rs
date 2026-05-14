@@ -102,6 +102,12 @@ pub fn apply_mode(app: &AppHandle, mode: OverlayMode) {
     }
 
     let _ = app.emit("mode-changed", mode);
+
+    // Persist last_mode so the next cold start restores the user's choice
+    // instead of always defaulting to Edit. Best-effort, async, no panic
+    // path — if the settings store isn't ready yet (very early startup),
+    // this is a no-op and the next mode change will succeed.
+    crate::settings::persist_last_mode(app, mode);
 }
 
 #[tauri::command]

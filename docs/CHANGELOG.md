@@ -4,6 +4,66 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.5.0] - 2026-05-14
+
+### Added — Phase 5 (settings window)
+- **Settings window** opens from the tray menu (the **Settings…** item, no longer disabled). Live-applies every change to the overlay so you can drag the slider and watch the result in real time. Persisted to `%APPDATA%\com.syvr.lyric-overlay\settings.json`. Window is 560×680 (resizable, minimums 480×560), centered, decorated, hidden until requested. Sections, top to bottom:
+  - **Mode & startup**: dropdown for the **Last mode (restored on launch)** value (Edit / Locked / Ghost). The hotkey hint at the bottom of the section reads "Hotkey to cycle modes: Ctrl+Alt+L (system-wide)".
+  - **Lyrics timing**: **Anticipation** slider (0–1500ms, step 25ms, default 500ms) — how far ahead the cursor looks up the active line; karaoke convention. **Seek-jitter tolerance** slider (500–5000ms, step 100ms, default 2000ms) — backward jumps under this threshold are treated as source-counter staleness, not real seeks.
+  - **Typography**: text input for **Font family** (default `Inter`), sliders for **Current line size** (14–48px, default 26), **Current line weight** (300–900, default 600), color picker + hex text box for **Text color (current line)** (default `#ffffff`), text input for **Text color (prev / next, dim)** that accepts hex or `rgba()` (default `rgba(255,255,255,0.45)`), dropdown for **Text alignment** (Left / Center / Right).
+  - **Background**: color picker + hex text box for **Background color**, slider for **Background opacity** 0–100% (default 0% = fully transparent — useful for rendering over dark games / videos).
+  - **Layout**: dropdown for **Layout mode** with three choices — **3-line scroll** (prev / current / next, the original behavior), **Single-line karaoke** (only the current line, larger), **Full-page scroll** (all lines visible, current line auto-scrolled into view). Slider for **Line padding** (0–24px, default 6).
+  - **Extras**: toggle **Show album art (when available)** and toggle **Show translated lyrics (when available)** — both default on / off respectively.
+  - Footer shows the storage path and a **Reset to defaults** button (with a confirm prompt).
+- **Live preview** — every slider/picker emits a debounced `update_settings` IPC (200ms coalesce) which fires `settings-changed`; the overlay listens and reapplies fonts, colors, opacity, layout, anticipation, jitter tolerance, and translation visibility immediately, no restart.
+- **Mode persistence** — the overlay now restores your last-used mode at cold start instead of always defaulting to Edit. Tray icon, tooltip, menu checkmarks, and the click-through window flag are all driven by the loaded `last_mode` before first paint.
+- **Tray menu's "Settings…" item enabled.** Previously disabled placeholder; now opens / focuses / unminimizes the settings window.
+
+### Added — Phase 6 (lyric source fallbacks + album art + translations)
+- **SimpMusic + NetEase fallback after LRCLib NotFound.** When LRCLib has no result for the current track, the lyrics worker now falls through to SimpMusic (`https://api-lyrics.simpmusic.org/v1/search/title`), then NetEase (`music.163.com/api/search/get` → `/api/song/lyric`). Each source is filtered client-side by artist name and duration (±5s SimpMusic, ±5s NetEase) so a different song with the same title can't sneak in. The overlay's source attribution (`lyrics.source` field) now reads `lrclib` / `lrclib-search` / `simpmusic` / `netease` / `all-sources` so the dev console shows where a hit came from. Cached results carry the source through restarts.
+- **Word-level (enhanced) LRC support.** SimpMusic's `richSyncLyrics` field uses `<mm:ss.xx>word` per-word timestamps; the new `parse_enhanced_lrc` parses these into `LyricLine.words: WordSpan[]` (3 unit tests cover basic, line-prefix, and empty-line cases). The frontend type now exposes `words?: WordSpan[]` on every `LyricLine`. **No UI yet** — the rendered overlay still highlights at line granularity. Phase 7 (unwritten) would add per-word color sweep using these timestamps.
+- **Translated lyrics (NetEase only).** When the NetEase fallback succeeds AND the song has a `tlyric` field (typically Chinese), the lyrics state now carries an aligned `translation: LyricLine[]` array. With the **Show translated lyrics** setting on, the translation text appears as a small italic dim line under the current lyric in the 3-line and single-line layouts (replaces the "next" line slot in 3-line mode when translation is present, since they'd compete for the same vertical space).
+- **Album art badge** in the overlay corner. Extracted from SMTC's `MediaProperties.Thumbnail()` stream as raw bytes, converted to a base64 `data:` URL, sent to the frontend via a new dedicated `album-art-loaded` event (kept separate from the per-tick `track-changed` payload to avoid 60 × 200KB IPC bloats per minute). Renders as a 40×40 rounded thumbnail at top-left with subtle shadow when **Show album art** is on AND the loaded art matches the currently playing track. Falls back silently when SMTC has no thumbnail (most YouTube tabs, some streamers). MIME auto-detected from bytes (PNG / GIF / WebP / JPEG default).
+
+### Fixed (security audit findings — pre-launch sweep)
+- **Settings input validation** (audit H1, H2). The `update_settings` Tauri command now sanitizes every patch field after merging: hex colors must match `^#[0-9a-fA-F]{6}$` or fall back to defaults; `text_color_dim` accepts hex or `rgb()/rgba()` only (no CSS expressions like `url(...)`); `text_align` and `layout_mode` are validated against an allowlist; `font_family` is filtered to ASCII alphanumerics + safe punctuation, capped at 80 chars; numeric fields are clamped to sensible ranges (anticipate −2000…5000ms, font 8–96px, etc.). The same `sanitize()` runs on `load_from_store` so a hand-edited `settings.json` can't bypass.
+- **NetEase URL built unsafely** (audit M1). Switched `lyrics.rs::fetch_netease`'s lyric-by-id endpoint from `format!()` string concat to `reqwest::Url::parse_with_params`, matching the LRCLib + SimpMusic paths. No exploit was possible (the song id is a `u64`), but the pattern is now consistent and defense-in-depth.
+- **PowerShell child script TOCTOU + orphan-on-shutdown** (audit M2 + L2). `itunes.rs` now stages the iTunes COM poll script via `tempfile::NamedTempFile` (random suffix, auto-cleanup) instead of a fixed `%TEMP%\lyric-overlay-itunes-poll.ps1`. The child process is spawned with `kill_on_drop(true)` so any clean exit / panic / future cancellation kills the PowerShell child + removes the temp script. (Externally-killed-parent case is still in BUGS.md, needs a Windows JobObject for full cleanup.)
+- **SMTC manager-level event token leak** (audit M3). The `CurrentSessionChanged` registration is now wrapped in a `ManagerHook` struct with a `Drop` impl that calls `RemoveCurrentSessionChanged`. Mirrors the existing `SessionHooks` pattern for per-session tokens. Prevents dangling COM callbacks if the worker future is ever cancelled.
+- **Album art memory cap** (audit M4). `read_thumbnail_bytes` now rejects thumbnails reporting > 10MB before allocating, so a misbehaving (or hostile) media source can't balloon the buffer. Real album art is well under 1MB.
+- **CSP `img-src` tightened** (audit M5). Removed `https:` from the `img-src` allowlist in `tauri.conf.json` — album art is delivered as `data:` URLs from Rust, no external image origins are needed by the renderer. Now `img-src 'self' asset: data:` only.
+
+### Architecture / files
+- **`src-tauri/src/settings.rs` (new)** — `Settings` struct (Serde, with defaults for every field so older store entries auto-fill), `SharedSettings = Arc<RwLock<Settings>>`, `load_from_store` + `save_to_store`, `sanitize()` validation, `persist_last_mode()` helper called by `mode.rs`, and four Tauri commands (`get_settings`, `update_settings(patch: Value)`, `reset_settings`, `open_settings_window`).
+- **`src-tauri/src/lyrics.rs` (large refactor)** — `LyricLine` gains an optional `words: Option<Vec<WordSpan>>`, `CachedLyrics::Synced` gains an optional `translation: Option<Vec<LyricLine>>`, both `#[serde(default, skip_serializing_if)]` so existing cache files stay readable. New `fetch_simpmusic` + `fetch_netease` functions (each with its own `pick_best_*` filter), new `parse_enhanced_lrc` for SimpMusic's rich format, `resolve_lyrics` rewritten to chain LRCLib → SimpMusic → NetEase. `reqwest::Client` now built with `cookie_store(true)` for NetEase's NMTID handshake.
+- **`src-tauri/src/smtc.rs`** — adds `spawn_art_fetch` background task that reads SMTC's thumbnail stream off-thread and emits the new `album-art-loaded` event with `{ title, artist, data_url }`. New `ManagerHook` Drop guard.
+- **`src-tauri/src/mode.rs`** — `apply_mode` now calls `crate::settings::persist_last_mode` so toggling mode (tray, hotkey, command) updates the saved value automatically.
+- **`src-tauri/src/lib.rs`** — loads settings before building the tray (so initial check items + tooltip + icon reflect persisted `last_mode`), manages `SharedSettings`, registers the new commands, opens the settings window from the tray menu.
+- **`src-tauri/tauri.conf.json`** — adds the third window `settings` (decorated, 560×680, centered, `visible: false` so it only appears when summoned).
+- **`src-tauri/capabilities/default.json`** — adds the `settings` window to the windows allowlist plus `core:window:allow-set-focus` and `core:window:allow-unminimize` for the tray-open path.
+- **`src/Settings.tsx` (new)** — the React settings UI. Inline-styled, dark theme, gold (`#d4af37`) accent on sliders + hex value labels (matches SYVR brand). Shared primitives: `Section`, `Row`, `Slider`, `Select`, `Toggle`, `ColorInput`. Debounced 200ms write + live emit.
+- **`src/Overlay.tsx`** — listens to `settings-changed`, `mode-changed`, `album-art-loaded`. All previously-hardcoded constants (font, colors, anticipate, jitter, padding, alignment) now read from settings state; rAF closure reads via `settingsRef` to stay stable. Three layout-mode renderers (three-line / single-line / full-page-scroll-to-cur). New `AlbumArtBadge` + `TranslationRow` components.
+- **`src/main.tsx`** — third route: window label `settings` → `<SettingsView />`.
+- **`src/types.ts`** — exports `OverlayMode`, `LayoutMode`, `TextAlign`, `WordSpan`, `Settings`. `LyricLine.words` and `CurrentLyrics.translation` added.
+
+### Dependencies added
+- `tauri-plugin-global-shortcut = "2"` was Phase 4. Phase 5+6 added: `base64 = "0.22"` (album art encoding), `tempfile = "3"` (audit M2 fix), and `cookies` feature on `reqwest`.
+
+### Tray icons regenerated
+The Phase 4 ♪-glyph icons washed out at the actual tray render size (~16px). Replaced with three visually distinct shapes that read at any size:
+- **Edit** — bright yellow filled circle (`rgb(255,200,0)`) with a dark diagonal slash (pencil-tip mark).
+- **Locked** — white rounded square (`rgb(245,245,245)`) with a dark padlock keyhole.
+- **Ghost** — gray dashed circle outline only (no fill), 1.5px stroke.
+
+Same `include_bytes!` + `Image::from_bytes` plumbing as before. `tray.set_icon` swaps on every `apply_mode` call.
+
+### Notes / known limitations
+- Word-level data is parsed and exposed in `LyricLine.words` but the overlay still renders at line granularity. Per-word color sweep would need a future Phase 7.
+- Translated lyrics field is currently NetEase-only (LRCLib has no translation field; SimpMusic doesn't either). Most English-language tracks won't surface a translation.
+- Mode persistence is per-machine (lives in `%APPDATA%\com.syvr.lyric-overlay\settings.json`). No cross-device sync.
+- The `Full-page scroll` layout assumes the overlay window is taller than ~3 lines tall. Resize the window via the edit-mode drag corners to suit.
+- Cache key `artist|title|duration_secs` collides if `|` appears in artist or title. Logged in `BUGS.md` as L1; fix is to switch delimiter or hash.
+
 ## [0.4.0] - 2026-05-14
 
 ### Added
