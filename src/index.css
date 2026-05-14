@@ -64,12 +64,16 @@
 
 html, body, #root {
   height: 100%;
+  margin: 0;
 }
 
-body {
+/* Body must be transparent so the `overlay` window's OS-level transparency
+   works. The DevConsole window paints its own dark background inside its
+   container, so this doesn't affect it. */
+html, body {
+  background: transparent;
   font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: hsl(var(--background));
   color: hsl(var(--foreground));
 }
