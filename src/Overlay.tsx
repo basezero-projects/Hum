@@ -3,6 +3,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { CurrentLyrics, CurrentTrack, LyricLine } from "./types";
 
+// How many ms to read ahead when looking up the active LRC line. iTunes' COM
+// PlayerPosition and LRCLib's community-contributed timestamps both tend to
+// run slightly behind the actual vocals; shifting our lookup forward by this
+// much makes lines change *just before* the singer sings them, which is the
+// karaoke convention and feels in-sync. Phase 5 will expose this as a user
+// setting; for now it's a tunable constant.
+const LYRIC_ANTICIPATE_MS = 300;
+
 export default function Overlay() {
   const [track, setTrack] = useState<CurrentTrack | null>(null);
   const [lyrics, setLyrics] = useState<CurrentLyrics | null>(null);
@@ -25,9 +33,13 @@ export default function Overlay() {
       return t.position_ms + Math.max(0, wallElapsed);
     }
 
+    function lookupPositionMs(): number {
+      return interpolatedPositionMs() + LYRIC_ANTICIPATE_MS;
+    }
+
     function snapCursorToCurrentPosition(lines: LyricLine[]): number {
       if (lines.length === 0) return -1;
-      const pos = interpolatedPositionMs();
+      const pos = lookupPositionMs();
       let lo = 0;
       let hi = lines.length;
       let found = -1;
@@ -47,7 +59,7 @@ export default function Overlay() {
     function tick() {
       const l = lyricsRef.current;
       if (l && l.status === "synced" && l.lines.length > 0) {
-        const pos = interpolatedPositionMs();
+        const pos = lookupPositionMs();
         const lines = l.lines;
         let idx = indexRef.current;
         // Advance forward (the usual case during normal playback)
@@ -159,11 +171,27 @@ function LineRow({
   kind: "prev" | "cur" | "next";
 }) {
   const isCur = kind === "cur";
+  // Current line wraps to up to 2 lines so long lyrics aren't truncated.
+  // Previous/next stay single-line + ellipsis since they're secondary context.
+  const wrapStyle: React.CSSProperties = isCur
+    ? {
+        whiteSpace: "normal",
+        display: "-webkit-box",
+        WebkitLineClamp: 2,
+        WebkitBoxOrient: "vertical",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+      }
+    : {
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+      };
   return (
     <div
       data-tauri-drag-region
       style={{
-        fontSize: isCur ? 28 : 16,
+        fontSize: isCur ? 26 : 16,
         fontWeight: isCur ? 600 : 400,
         color: isCur ? "#ffffff" : "rgba(255,255,255,0.45)",
         textAlign: "center",
@@ -171,12 +199,10 @@ function LineRow({
           "0 2px 6px rgba(0,0,0,0.95), 0 0 14px rgba(0,0,0,0.65)",
         opacity: text ? 1 : 0.2,
         transition: "opacity 220ms ease, color 220ms ease",
-        lineHeight: 1.25,
+        lineHeight: 1.2,
         maxWidth: "92vw",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
         letterSpacing: isCur ? 0.2 : 0,
+        ...wrapStyle,
       }}
     >
       {text || "♪"}
