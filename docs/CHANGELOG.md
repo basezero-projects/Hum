@@ -4,6 +4,34 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.6.0] - 2026-05-14
+
+### Added
+- **iTunes album art now appears in the overlay.** Previously the 40×40 rounded thumbnail at the top-left of the overlay only worked for SMTC sources (Spotify desktop, Chrome with YouTube, Edge, the new Apple Music app) — iTunes-COM-sourced tracks silently had no artwork. The PowerShell COM poller (`src-tauri/scripts/itunes_poll.ps1`) now reads the first entry of `track.Artwork`, saves it via `IITArtwork.SaveArtworkToFile()` to a temp file, base64-encodes the bytes, detects MIME from `IITArtwork.Format` (1=jpeg, 2=png, 3=bmp), embeds it in the JSON line as `art_data_url`, then deletes the temp file. The Rust side emits the same `album-art-loaded` event SMTC uses, so the frontend's existing badge component picks it up with no changes. Artwork is only re-extracted when the iTunes track key (`title|artist|album`) actually changes — once per track, not once per poll, so the stdin pipe doesn't carry hundreds of KB per second.
+- **Per-word karaoke sweep on synced lines with word-level timing.** When the active line came from a source with rich (enhanced) LRC data — currently only SimpMusic's `richSyncLyrics` field — the current line now renders word-by-word with three visual states:
+  - **Past words** (cursor has moved past them): full **Text color (current line)** from settings.
+  - **Current word** (cursor is inside it): smoothly transitions from **Text color (prev / next, dim)** → **Text color (current line)** via a CSS `transition: color <Nms> linear` where N = the word's playback duration (next word's start - this word's start, floored at 80ms; for the last word, until the next line starts or +4000ms fallback). The result is a Spotify-style sweep across each word as the singer reaches it.
+  - **Future words**: dim **Text color (prev / next, dim)**.
+  - Lines without word-level data (LRCLib-only tracks, NetEase-only tracks) keep the existing line-granularity highlight unchanged. No new setting — the karaoke sweep just appears whenever the data is available. Active in all three layout modes (3-line scroll, single-line karaoke, full-page scroll).
+- **Tint background from album art** toggle in **Settings → Background**. When on AND the current track has album art, samples the dominant color from the artwork's data URL via a 32×32 offscreen canvas (skips near-transparent and near-black border pixels so the average leans toward the real artwork color), blends it 50/50 in RGB with the user's **Background color**, and renders that as the overlay background. To make the toggle actually visible by default, the effective opacity is clamped to a minimum of 22% when the user's **Background opacity** slider is below that — the user's higher opacity values are still respected. Changes smoothly on track-change via the existing 160ms `background` transition. Default: off (existing users won't see surprise color changes after upgrading).
+
+### Architecture / files
+- **`src-tauri/scripts/itunes_poll.ps1`** — adds `Get-ArtworkDataUrl` helper, a `$lastTrackKey` track-change tracker so artwork extraction only fires on track changes (not every 1Hz poll), and a 10MB size cap matching SMTC's `MAX_THUMBNAIL_BYTES`.
+- **`src-tauri/src/itunes.rs`** — `Line` struct gains `art_data_url: Option<String>`. When set, the Rust worker emits `album-art-loaded` with the same `AlbumArtPayload` shape SMTC uses (now `pub struct` in `smtc.rs`). Adds `[itunes] track-changed → ...` and `[itunes] album-art-loaded for '...'` log lines for visibility.
+- **`src-tauri/src/smtc.rs`** — `AlbumArtPayload` is now `pub` so iTunes can construct one.
+- **`src-tauri/src/settings.rs`** — `Settings` gains `tint_bg_from_album_art: bool` (default false). No new validator entry needed — bool is bool.
+- **`src/types.ts`** — `Settings` type adds `tint_bg_from_album_art: boolean`.
+- **`src/Overlay.tsx`** — new `currentWordIdx` state + `wordIdxRef`, rAF tick advances/rewinds the per-word cursor, resets on line/track change. New `karaoke` prop on `LineRow` swaps the single-text render for per-word `<span>` array when present. New `extractDominantColor` (32×32 canvas average), `mixHexWithRgb` (linear-interpolated hex+rgb in RGB space), updated `colorWithOpacity` (now accepts `rgb(...)` input alongside `#rrggbb`). Container background uses the tinted color when toggle is on AND tint extraction succeeded.
+- **`src/Settings.tsx`** — adds **Tint background from album art** toggle + hint to the **Background** section.
+
+### Fixed (incidental, surfaced during build)
+- **iTunes worker now logs track-change events to stderr** (`[itunes] track-changed → title='X' artist='Y' state=Z`). Previously only album-art and stderr lines were logged. Makes it easier to spot whether the iTunes COM bridge is actually reaching the snapshot when something looks wrong.
+
+### Notes / known limitations
+- **Per-word sweep depends on SimpMusic data.** LRCLib (the primary source) returns line-level only. NetEase fallback also returns line-level only. So tracks that LRCLib has → per-line highlight. Tracks LRCLib lacks but SimpMusic has rich data for → per-word sweep. This means the visual experience is inconsistent across your library; that's a source-data limitation, not a render bug.
+- **Tint extraction skips near-white pixels** (lum > 720) too, since pure-white pop-album backgrounds would otherwise dominate the average and produce a near-white tint that's invisible against the default white text. Heavy-white-art tracks may produce subtler tints than expected.
+- **Tint requires album art to be successfully extracted.** No art → no tint, even with the toggle on. iTunes art now works (fixed this version); SMTC art works via the existing `MediaProperties.Thumbnail()` path; YouTube tabs via SMTC often have no thumbnail at all.
+
 ## [0.5.2] - 2026-05-14
 
 ### Fixed

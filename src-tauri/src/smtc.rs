@@ -371,10 +371,10 @@ async fn emit_full(
 }
 
 #[derive(Clone, Serialize)]
-struct AlbumArtPayload {
-    title: String,
-    artist: String,
-    data_url: String,
+pub struct AlbumArtPayload {
+    pub title: String,
+    pub artist: String,
+    pub data_url: String,
 }
 
 // Album art is large (50-200KB base64). Carrying it inside CurrentTrack would

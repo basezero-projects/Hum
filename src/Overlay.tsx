@@ -9,6 +9,7 @@ import type {
   OverlayMode,
   Settings,
   TextAlign,
+  WordSpan,
 } from "./types";
 
 const DEFAULT_SETTINGS: Settings = {
@@ -27,6 +28,7 @@ const DEFAULT_SETTINGS: Settings = {
   layout_mode: "three_line",
   show_album_art: true,
   show_translation: false,
+  tint_bg_from_album_art: false,
 };
 
 export default function Overlay() {
@@ -39,12 +41,19 @@ export default function Overlay() {
   const [hovered, setHovered] = useState(false);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [albumArt, setAlbumArt] = useState<{ title: string; artist: string; data_url: string } | null>(null);
+  // Per-word karaoke cursor — only relevant when the active line has
+  // .words populated (SimpMusic-sourced tracks). -1 = before-first.
+  const [currentWordIdx, setCurrentWordIdx] = useState<number>(-1);
+  // Dominant color extracted from the current album art's data URL — fed
+  // into the overlay background when tint_bg_from_album_art is on.
+  const [tintColor, setTintColor] = useState<{ r: number; g: number; b: number } | null>(null);
 
   // Refs hold the hot-loop data so the rAF closure stays stable across
   // re-renders. Events update these AND the React state.
   const trackRef = useRef<CurrentTrack | null>(null);
   const lyricsRef = useRef<CurrentLyrics | null>(null);
   const indexRef = useRef<number>(-1);
+  const wordIdxRef = useRef<number>(-1);
   const settingsRef = useRef<Settings>(DEFAULT_SETTINGS);
 
   useEffect(() => {
@@ -91,7 +100,26 @@ export default function Overlay() {
         while (idx >= 0 && lines[idx].time_ms > pos) idx--;
         if (idx !== indexRef.current) {
           indexRef.current = idx;
+          wordIdxRef.current = -1;
           setDisplayIdx(idx);
+          setCurrentWordIdx(-1);
+        }
+
+        // Per-word cursor inside the current line. Only when SimpMusic gave
+        // us word-level timing; otherwise per-line highlight is the whole story.
+        if (idx >= 0) {
+          const words = lines[idx].words;
+          if (words && words.length > 0) {
+            let wIdx = wordIdxRef.current;
+            // Forward
+            while (wIdx + 1 < words.length && words[wIdx + 1].time_ms <= pos) wIdx++;
+            // Backward (seek inside the line)
+            while (wIdx >= 0 && words[wIdx].time_ms > pos) wIdx--;
+            if (wIdx !== wordIdxRef.current) {
+              wordIdxRef.current = wIdx;
+              setCurrentWordIdx(wIdx);
+            }
+          }
         }
       }
       rafId = requestAnimationFrame(tick);
@@ -139,6 +167,8 @@ export default function Overlay() {
     function applyLyrics(l: CurrentLyrics) {
       lyricsRef.current = l;
       setLyrics(l);
+      wordIdxRef.current = -1;
+      setCurrentWordIdx(-1);
       if (l.status === "synced" && l.lines.length > 0) {
         const idx = snapCursorToCurrentPosition(l.lines);
         indexRef.current = idx;
@@ -165,7 +195,13 @@ export default function Overlay() {
       listen<Settings>("settings-changed", (e) => applySettings(e.payload)),
       listen<{ title: string; artist: string; data_url: string }>(
         "album-art-loaded",
-        (e) => setAlbumArt(e.payload),
+        (e) => {
+          setAlbumArt(e.payload);
+          // Extract the dominant color asynchronously; tint render reads
+          // it from state on the next paint. Failure → null = no tint
+          // applied (background stays as user-configured).
+          extractDominantColor(e.payload.data_url).then(setTintColor);
+        },
       ),
     ];
 
@@ -229,7 +265,24 @@ export default function Overlay() {
     : "transparent";
 
   const layoutMode: LayoutMode = settings.layout_mode;
-  const bgRgba = colorWithOpacity(settings.bg_color, settings.bg_opacity);
+  // When tint is on AND we have a color extracted from the current art, blend
+  // the user's bg_color with the tint at 50/50 in RGB. Force a minimum 22%
+  // opacity so the toggle is visibly doing something even when the user has
+  // bg_opacity=0 (the default — fully transparent background). Otherwise the
+  // toggle would be a no-op for most users.
+  const tintActive =
+    settings.tint_bg_from_album_art &&
+    !!tintColor &&
+    !!track &&
+    !!albumArt &&
+    albumArt.title === track.title &&
+    albumArt.artist === track.artist;
+  const effectiveBgColor = tintActive
+    ? mixHexWithRgb(settings.bg_color, tintColor!, 0.5)
+    : settings.bg_color;
+  const effectiveOpacity =
+    tintActive && settings.bg_opacity < 22 ? 22 : settings.bg_opacity;
+  const bgRgba = colorWithOpacity(effectiveBgColor, effectiveOpacity);
 
   const containerStyle: React.CSSProperties = {
     position: "relative",
@@ -252,6 +305,18 @@ export default function Overlay() {
     overflow: layoutMode === "full_page" ? "auto" : "hidden",
   };
 
+  // Karaoke per-word render kicks in only when the current line came from a
+  // source with word-level timing (SimpMusic richSyncLyrics). Falls through
+  // to plain text otherwise.
+  const nextLineTimeMs: number =
+    lyrics?.lines[displayIdx + 1]?.time_ms ??
+    track?.duration_ms ??
+    (cur?.time_ms ?? 0) + 4000;
+  const curKaraoke =
+    cur && cur.words && cur.words.length > 0
+      ? { words: cur.words, currentWordIdx, nextTimeMs: nextLineTimeMs }
+      : undefined;
+
   if (layoutMode === "single_line") {
     return (
       <div
@@ -266,6 +331,7 @@ export default function Overlay() {
           kind="cur"
           dragRegion={isEdit}
           settings={settings}
+          karaoke={curKaraoke}
         />
         {translationText ? (
           <TranslationRow text={translationText} settings={settings} />
@@ -293,6 +359,7 @@ export default function Overlay() {
               dragRegion={isEdit}
               settings={settings}
               scrollIntoView={i === displayIdx}
+              karaoke={i === displayIdx ? curKaraoke : undefined}
             />
           ))
         ) : (
@@ -317,7 +384,13 @@ export default function Overlay() {
     >
       {showArt && albumArt ? <AlbumArtBadge dataUrl={albumArt.data_url} /> : null}
       <LineRow text={prev?.text} kind="prev" dragRegion={isEdit} settings={settings} />
-      <LineRow text={middleText} kind="cur" dragRegion={isEdit} settings={settings} />
+      <LineRow
+        text={middleText}
+        kind="cur"
+        dragRegion={isEdit}
+        settings={settings}
+        karaoke={curKaraoke}
+      />
       {translationText ? (
         <TranslationRow text={translationText} settings={settings} />
       ) : (
@@ -378,12 +451,14 @@ function LineRow({
   dragRegion,
   settings,
   scrollIntoView,
+  karaoke,
 }: {
   text: string | undefined;
   kind: "prev" | "cur" | "next";
   dragRegion: boolean;
   settings: Settings;
   scrollIntoView?: boolean;
+  karaoke?: { words: WordSpan[]; currentWordIdx: number; nextTimeMs: number };
 }) {
   const isCur = kind === "cur";
   const ref = useRef<HTMLDivElement | null>(null);
@@ -407,6 +482,7 @@ function LineRow({
         textOverflow: "ellipsis",
       };
   const drag = dragRegion ? { "data-tauri-drag-region": true } : {};
+  const useKaraoke = isCur && !!karaoke && !!text;
   return (
     <div
       ref={ref}
@@ -414,21 +490,56 @@ function LineRow({
       style={{
         fontSize: isCur ? settings.font_size_px : Math.max(12, settings.font_size_px * 0.6),
         fontWeight: isCur ? settings.font_weight : 400,
+        // When karaoke is on, the per-word spans own their color. The container
+        // color still matters for any leftover non-span text (none in practice).
         color: isCur ? settings.text_color : settings.text_color_dim,
         textAlign: settings.text_align,
         textShadow:
           "0 2px 6px rgba(0,0,0,0.95), 0 0 14px rgba(0,0,0,0.65)",
         opacity: text ? 1 : 0.2,
-        transition: "opacity 220ms ease, color 220ms ease",
+        // Disable color-transition on the container while karaoke is active
+        // so it doesn't fight the per-word transitions.
+        transition: useKaraoke
+          ? "opacity 220ms ease"
+          : "opacity 220ms ease, color 220ms ease",
         lineHeight: 1.2,
         maxWidth: "92vw",
         letterSpacing: isCur ? 0.2 : 0,
         ...wrapStyle,
       }}
     >
-      {text || "♪"}
+      {useKaraoke
+        ? karaoke!.words.map((w, i) => {
+            const idx = karaoke!.currentWordIdx;
+            const isPast = idx > i;
+            const isCurrent = idx === i;
+            const lit = isPast || isCurrent;
+            const dur = wordDurationMs(karaoke!.words, i, karaoke!.nextTimeMs);
+            return (
+              <span
+                key={i}
+                style={{
+                  color: lit ? settings.text_color : settings.text_color_dim,
+                  transition: isCurrent ? `color ${dur}ms linear` : "none",
+                }}
+              >
+                {w.text}
+              </span>
+            );
+          })
+        : text || "♪"}
     </div>
   );
+}
+
+// A word's "duration" = time until the next word starts (or until the next
+// LINE starts for the last word). Floored at 80ms so the color transition
+// stays visible on tightly-packed words.
+function wordDurationMs(words: WordSpan[], idx: number, lineEndMs: number): number {
+  const w = words[idx];
+  if (!w) return 500;
+  const nextStart = idx + 1 < words.length ? words[idx + 1].time_ms : lineEndMs;
+  return Math.max(80, nextStart - w.time_ms);
 }
 
 function statusLine(l: CurrentLyrics, t: CurrentTrack | null): string {
@@ -458,16 +569,87 @@ function alignToFlex(a: TextAlign): React.CSSProperties["alignItems"] {
   return "center";
 }
 
-// Convert hex (#rrggbb) + opacity-percent to rgba(...) string. Falls back to
-// transparent for invalid input so a typo can't break rendering.
-function colorWithOpacity(hex: string, opacityPct: number): string {
+// Convert hex (#rrggbb) + opacity-percent to rgba(...) string. Also accepts
+// rgb(r, g, b) input from mixHexWithRgb's output. Falls back to transparent
+// for invalid input so a typo can't break rendering.
+function colorWithOpacity(color: string, opacityPct: number): string {
   const a = Math.max(0, Math.min(1, opacityPct / 100));
   if (a === 0) return "transparent";
+  const hex = /^#([0-9a-fA-F]{6})$/.exec(color);
+  if (hex) {
+    const n = parseInt(hex[1], 16);
+    return `rgba(${(n >> 16) & 0xff}, ${(n >> 8) & 0xff}, ${n & 0xff}, ${a.toFixed(3)})`;
+  }
+  const rgb = /^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/.exec(color);
+  if (rgb) {
+    return `rgba(${rgb[1]}, ${rgb[2]}, ${rgb[3]}, ${a.toFixed(3)})`;
+  }
+  return "transparent";
+}
+
+// Linear-interpolate a hex color (#rrggbb) toward an RGB color. t=0 → all hex,
+// t=1 → all rgb. Returns rgb(r,g,b). Used for tinting the user's bg_color
+// toward the album-art dominant color.
+function mixHexWithRgb(
+  hex: string,
+  rgb: { r: number; g: number; b: number },
+  t: number,
+): string {
   const m = /^#([0-9a-fA-F]{6})$/.exec(hex);
-  if (!m) return "transparent";
+  if (!m) return `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`;
   const n = parseInt(m[1], 16);
-  const r = (n >> 16) & 0xff;
-  const g = (n >> 8) & 0xff;
-  const b = n & 0xff;
-  return `rgba(${r}, ${g}, ${b}, ${a.toFixed(3)})`;
+  const ar = (n >> 16) & 0xff;
+  const ag = (n >> 8) & 0xff;
+  const ab = n & 0xff;
+  const k = Math.max(0, Math.min(1, t));
+  const r = Math.round(ar * (1 - k) + rgb.r * k);
+  const g = Math.round(ag * (1 - k) + rgb.g * k);
+  const b = Math.round(ab * (1 - k) + rgb.b * k);
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+// Sample the dominant color from an album-art data URL by drawing it to a
+// tiny offscreen canvas and averaging the visible pixels. Skips near-black
+// pixels (album art often has dark borders) and near-transparent pixels so
+// the average leans toward the real artwork color rather than the bars.
+// Returns null on any failure (cors, image decode, no usable pixels).
+function extractDominantColor(
+  dataUrl: string,
+): Promise<{ r: number; g: number; b: number } | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const size = 32;
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return resolve(null);
+        ctx.drawImage(img, 0, 0, size, size);
+        const data = ctx.getImageData(0, 0, size, size).data;
+        let sr = 0, sg = 0, sb = 0, n = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          if (data[i + 3] < 128) continue;
+          const lum = data[i] + data[i + 1] + data[i + 2];
+          if (lum < 30) continue;
+          if (lum > 720) continue; // very near-white, often a single-color BG
+          sr += data[i];
+          sg += data[i + 1];
+          sb += data[i + 2];
+          n++;
+        }
+        if (n === 0) return resolve(null);
+        resolve({
+          r: Math.round(sr / n),
+          g: Math.round(sg / n),
+          b: Math.round(sb / n),
+        });
+      } catch {
+        resolve(null);
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = dataUrl;
+  });
 }

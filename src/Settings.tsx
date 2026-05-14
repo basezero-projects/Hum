@@ -166,6 +166,16 @@ export default function SettingsView() {
           onChange={(v) => update("bg_opacity", v)}
           help="0% = fully transparent. Useful for dark games / videos behind the overlay."
         />
+        <Toggle
+          label="Tint background from album art"
+          checked={s.tint_bg_from_album_art}
+          onChange={(v) => update("tint_bg_from_album_art", v)}
+        />
+        <Hint>
+          Blends the dominant color of the current track's album art into the
+          background. No effect on tracks without art. Forces a minimum 22%
+          opacity so the tint is visible even when Background opacity is 0.
+        </Hint>
       </Section>
 
       <Section title="Layout">

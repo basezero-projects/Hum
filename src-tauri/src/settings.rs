@@ -33,6 +33,11 @@ pub struct Settings {
 
     pub show_album_art: bool,
     pub show_translation: bool,
+    /// When on, the overlay's background blends a tint of the dominant color
+    /// extracted from the current track's album art. No-op when album art
+    /// isn't available for the track. Defaults off so existing users aren't
+    /// surprised by a color change after upgrading.
+    pub tint_bg_from_album_art: bool,
 }
 
 impl Default for Settings {
@@ -53,6 +58,7 @@ impl Default for Settings {
             layout_mode: "three_line".to_string(),
             show_album_art: true,
             show_translation: false,
+            tint_bg_from_album_art: false,
         }
     }
 }

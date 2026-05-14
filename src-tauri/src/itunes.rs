@@ -19,7 +19,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
-use crate::smtc::{CurrentTrack, PlaybackState, SharedSnapshot};
+use crate::smtc::{AlbumArtPayload, CurrentTrack, PlaybackState, SharedSnapshot};
 
 const SCRIPT: &str = include_str!("../scripts/itunes_poll.ps1");
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -40,6 +40,11 @@ struct Line {
     duration_ms: Option<u64>,
     #[serde(default)]
     position_ms: Option<u64>,
+    /// Populated on track changes only (the PS script tracks the last-seen
+    /// track key and only re-extracts when the track changes). Kept off of
+    /// per-tick poll lines to avoid 100-500KB/sec stdin bloat.
+    #[serde(default)]
+    art_data_url: Option<String>,
     #[serde(default)]
     error: Option<String>,
 }
@@ -192,10 +197,29 @@ async fn run(
                 let snap_ro = snapshot.read().await;
                 if track_changed {
                     let _ = app.emit("track-changed", &*snap_ro);
+                    eprintln!(
+                        "[itunes] track-changed → title='{}' artist='{}' state={:?}",
+                        snap_ro.title, snap_ro.artist, snap_ro.state
+                    );
                 }
                 let _ = app.emit("timeline-changed", &*snap_ro);
                 if state_changed {
                     let _ = app.emit("playback-state-changed", &*snap_ro);
+                }
+                drop(snap_ro);
+
+                // Album art arrives only on track-change frames. Emit on the
+                // same channel SMTC uses so the frontend has a single matcher.
+                if let Some(url) = parsed.art_data_url {
+                    let _ = app.emit(
+                        "album-art-loaded",
+                        &AlbumArtPayload {
+                            title: title.clone(),
+                            artist: snapshot.read().await.artist.clone(),
+                            data_url: url,
+                        },
+                    );
+                    eprintln!("[itunes] album-art-loaded for '{title}'");
                 }
 
                 last_emitted_title = Some(title);
