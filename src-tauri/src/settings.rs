@@ -65,7 +65,12 @@ impl Default for Settings {
             show_album_art: true,
             show_translation: false,
             tint_bg_from_album_art: false,
-            auto_contrast: false,
+            // Default ON — the whole point of this app is "show lyrics
+            // over whatever you're doing", which means the background is
+            // unpredictable. Auto-contrast keeps the text readable
+            // everywhere by default. Users who want fixed colors can
+            // turn it off in Settings → Extras.
+            auto_contrast: true,
         }
     }
 }

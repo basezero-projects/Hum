@@ -29,7 +29,7 @@ const DEFAULT_SETTINGS: Settings = {
   show_album_art: true,
   show_translation: false,
   tint_bg_from_album_art: false,
-  auto_contrast: false,
+  auto_contrast: true,
 };
 
 export default function Overlay() {

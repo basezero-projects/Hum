@@ -4,6 +4,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.7.6] - 2026-05-14
+
+### Changed
+- **Auto-contrast text is now ON by default for fresh installs.** v0.7.0 shipped this feature off-by-default to avoid surprising existing users with color changes after upgrading. In practice the whole point of the overlay is "show lyrics over whatever you're doing on the desktop" — which means the background underneath is unpredictable, which is exactly when auto-contrast is most valuable. New installs will pick up the toggle as ON; existing settings.json files keep whatever value they had saved (no surprise change). To opt out, flip Settings → Extras → **Auto-contrast text** off.
+
 ## [0.7.5] - 2026-05-14
 
 ### Added
