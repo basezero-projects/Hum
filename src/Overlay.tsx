@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
@@ -47,6 +47,12 @@ export default function Overlay() {
   // Dominant color extracted from the current album art's data URL — fed
   // into the overlay background when tint_bg_from_album_art is on.
   const [tintColor, setTintColor] = useState<{ r: number; g: number; b: number } | null>(null);
+  // Measured pixel height of the lyrics column. Drives the side-by-side
+  // album art's size so it's exactly as tall as the lyrics next to it
+  // (CSS `align-self: stretch + aspect-ratio: 1` was off by a few px in
+  // practice — the row height was driven by the image's intrinsic size).
+  const [lyricsColEl, setLyricsColEl] = useState<HTMLDivElement | null>(null);
+  const [artSize, setArtSize] = useState<number>(80);
 
   // Refs hold the hot-loop data so the rAF closure stays stable across
   // re-renders. Events update these AND the React state.
@@ -221,6 +227,25 @@ export default function Overlay() {
     };
   }, []);
 
+  // Sync the album art's size to the lyrics column's measured height.
+  // useLayoutEffect for the initial measure (before browser paint, so no
+  // flash). ResizeObserver for live updates (font-size slider, line wrap,
+  // line-padding slider, layout-mode change).
+  useLayoutEffect(() => {
+    if (!lyricsColEl) return;
+    const h = lyricsColEl.getBoundingClientRect().height;
+    if (h > 0) setArtSize(Math.round(h));
+  }, [lyricsColEl]);
+  useEffect(() => {
+    if (!lyricsColEl) return;
+    const ro = new ResizeObserver((entries) => {
+      const h = entries[0]?.contentRect.height;
+      if (h && h > 0) setArtSize(Math.round(h));
+    });
+    ro.observe(lyricsColEl);
+    return () => ro.disconnect();
+  }, [lyricsColEl]);
+
   let prev: LyricLine | undefined;
   let cur: LyricLine | undefined;
   let next: LyricLine | undefined;
@@ -350,8 +375,8 @@ export default function Overlay() {
         style={containerStyle}
       >
         <div style={innerRowStyle}>
-          {showArt && albumArt ? <AlbumArtSide dataUrl={albumArt.data_url} /> : null}
-          <div style={lyricsColStyle}>
+          {showArt && albumArt ? <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} /> : null}
+          <div ref={setLyricsColEl} style={lyricsColStyle}>
             <LineRow
               text={middleText}
               kind="cur"
@@ -411,8 +436,8 @@ export default function Overlay() {
       style={containerStyle}
     >
       <div style={innerRowStyle}>
-        {showArt && albumArt ? <AlbumArtSide dataUrl={albumArt.data_url} /> : null}
-        <div style={lyricsColStyle}>
+        {showArt && albumArt ? <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} /> : null}
+        <div ref={setLyricsColEl} style={lyricsColStyle}>
           <LineRow text={prev?.text} kind="prev" dragRegion={isEdit} settings={settings} />
           <LineRow
             text={middleText}
@@ -456,20 +481,20 @@ function AlbumArtBadge({ dataUrl }: { dataUrl: string }) {
   );
 }
 
-// Side-by-side album art used by 3-line and single-line layouts. Stretches
-// vertically to match the lyrics column height (via align-self:stretch on the
-// flex item) and stays square (aspect-ratio:1). The image inside fills the
-// box with object-fit:cover so non-square art doesn't get distorted.
-function AlbumArtSide({ dataUrl }: { dataUrl: string }) {
+// Side-by-side album art used by 3-line and single-line layouts. The size
+// prop comes from a ResizeObserver on the lyrics column in the parent — this
+// is exact, not approximate, because pure CSS (align-self:stretch +
+// aspect-ratio:1) was off by a handful of px when the image's intrinsic
+// dimensions interacted with flex's hypothetical-size pass.
+function AlbumArtSide({ dataUrl, size }: { dataUrl: string; size: number }) {
+  // Floor at 40 so a tiny font doesn't shrink the art to a sliver.
+  const px = Math.max(40, size);
   return (
     <div
       style={{
-        alignSelf: "stretch",
-        aspectRatio: "1 / 1",
+        width: px,
+        height: px,
         flexShrink: 0,
-        // Floor so a tiny font doesn't make the art shrink to invisibility.
-        minWidth: 32,
-        minHeight: 32,
         position: "relative",
       }}
     >

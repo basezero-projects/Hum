@@ -4,6 +4,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.6.3] - 2026-05-14
+
+### Fixed
+- **Side-by-side album art is now exactly the same height as the lyrics column**, no longer slightly taller. The previous CSS-only approach (`align-self: stretch + aspect-ratio: 1`) ended up taking row height from the album art image's intrinsic dimensions during flex's hypothetical-size resolution pass, which produced a square that was a few px taller than the lyrics block next to it. The art now reads its size from a `ResizeObserver` + `useLayoutEffect` measurement of the lyrics column's bounding-rect height — exact-pixel match, updates live as font size / line padding / line wrap changes.
+
 ## [0.6.2] - 2026-05-14
 
 ### Changed
