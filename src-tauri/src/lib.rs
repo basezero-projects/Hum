@@ -13,7 +13,6 @@ mod smtc;
 #[cfg(windows)]
 mod itunes;
 
-mod commentary;
 mod contrast;
 mod lyrics;
 mod mode;
@@ -64,17 +63,6 @@ async fn get_current_lyrics(
 }
 
 #[tauri::command]
-fn open_commentary_window(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(w) = app.get_webview_window("commentary") {
-        let _ = w.show();
-        let _ = w.set_focus();
-        let _ = w.unminimize();
-        return Ok(());
-    }
-    Err("commentary window not registered".to_string())
-}
-
-#[tauri::command]
 fn toggle_overlay_visibility(app: tauri::AppHandle) -> Result<bool, String> {
     let window = app
         .get_webview_window("overlay")
@@ -97,6 +85,8 @@ pub fn run() {
     let mode_state: SharedMode = Arc::new(AtomicU8::new(OverlayMode::default() as u8));
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         // Save / restore position + size for the OVERLAY window only.
         // Dev console and settings windows are not tracked — they always
@@ -151,7 +141,6 @@ pub fn run() {
             app.manage::<std::sync::Arc<streamer::StreamerSupervisor>>(
                 std::sync::Arc::new(streamer::StreamerSupervisor::new()),
             );
-            app.manage::<commentary::CommentaryCache>(commentary::new_cache());
 
             // Tray + mode submenu. We hold onto the CheckMenuItem handles via
             // managed state so apply_mode() can keep the checked indicator in
@@ -193,8 +182,6 @@ pub fn run() {
             update_settings,
             reset_settings,
             open_settings_window,
-            commentary::get_track_commentary,
-            open_commentary_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -220,8 +207,8 @@ fn build_tray(app: &tauri::AppHandle, initial_mode: OverlayMode) -> tauri::Resul
         .build()?;
 
     let settings_item = MenuItemBuilder::with_id("settings", "Settings…").build(app)?;
-    let commentary_item =
-        MenuItemBuilder::with_id("commentary", "AI Commentary…").build(app)?;
+    let check_updates_item =
+        MenuItemBuilder::with_id("check-updates", "Check for updates").build(app)?;
     let toggle_console =
         MenuItemBuilder::with_id("toggle-console", "Show / Hide dev console").build(app)?;
     let quit_item = MenuItemBuilder::with_id("quit", "Quit Lyric Overlay").build(app)?;
@@ -232,7 +219,7 @@ fn build_tray(app: &tauri::AppHandle, initial_mode: OverlayMode) -> tauri::Resul
         .item(&mode_submenu)
         .separator()
         .item(&settings_item)
-        .item(&commentary_item)
+        .item(&check_updates_item)
         .item(&toggle_console)
         .separator()
         .item(&quit_item)
@@ -276,10 +263,12 @@ fn build_tray(app: &tauri::AppHandle, initial_mode: OverlayMode) -> tauri::Resul
                     eprintln!("[tray] open settings failed: {e}");
                 }
             }
-            "commentary" => {
-                if let Err(e) = open_commentary_window(app.clone()) {
-                    eprintln!("[tray] open commentary failed: {e}");
-                }
+            "check-updates" => {
+                use tauri::Emitter;
+                // Frontend (Overlay.tsx) owns the check + install + relaunch
+                // sequence so all UI feedback lives in one place. We just
+                // poke it to re-run the check.
+                let _ = app.emit("updater-check-requested", ());
             }
             "toggle-console" => {
                 if let Some(w) = app.get_webview_window("main") {

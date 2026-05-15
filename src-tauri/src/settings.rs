@@ -50,10 +50,6 @@ pub struct Settings {
     /// lyrics in their stream. Off by default — opens a TCP port.
     pub streamer_enabled: bool,
     pub streamer_port: u16,
-    /// Anthropic API key for the AI Commentary window. Empty = feature
-    /// disabled. Stored in plaintext in settings.json on disk; rotate
-    /// via Anthropic console if compromised.
-    pub claude_api_key: String,
 }
 
 impl Default for Settings {
@@ -85,7 +81,6 @@ impl Default for Settings {
             // 38247 chosen as an unused-by-known-services port. Users
             // can change in Settings if it conflicts with anything local.
             streamer_port: 38247,
-            claude_api_key: String::new(),
         }
     }
 }
@@ -246,12 +241,6 @@ fn sanitize(s: &mut Settings) {
     // below 65535 obviously. 0 → fallback to default.
     if s.streamer_port < 1024 {
         s.streamer_port = defaults.streamer_port;
-    }
-    // Claude API key — strip whitespace; cap length defensively. Anthropic
-    // keys are ~100 chars; anything > 500 is almost certainly garbage.
-    s.claude_api_key = s.claude_api_key.trim().to_string();
-    if s.claude_api_key.len() > 500 {
-        s.claude_api_key.truncate(500);
     }
 }
 

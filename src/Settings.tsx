@@ -255,26 +255,6 @@ export default function SettingsView() {
         </Hint>
       </Section>
 
-      <Section title="Commentary">
-        <Row label="Claude API key">
-          <input
-            type="password"
-            value={s.claude_api_key}
-            onChange={(e) => update("claude_api_key", e.target.value)}
-            placeholder="sk-ant-..."
-            autoComplete="off"
-            style={{ ...inputStyle, width: 240, fontFamily: "ui-monospace, monospace", fontSize: 12 }}
-          />
-        </Row>
-        <Hint>
-          AI Commentary window (tray → AI Commentary…) uses the Anthropic
-          Claude API to generate a 2-3 sentence context note for each track —
-          references, era, samples, callbacks. Get a key at console.anthropic.com.
-          Stored in plaintext in settings.json — rotate via the Anthropic
-          console if compromised. Each unique track ≈ 1 cheap API call;
-          replays come from in-process cache for free.
-        </Hint>
-      </Section>
 
       <footer
         style={{

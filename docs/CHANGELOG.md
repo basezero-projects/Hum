@@ -4,6 +4,30 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.10.0] - 2026-05-14
+
+### Removed
+- **AI Commentary window + Claude API integration removed entirely.** Cost concern: an Anthropic API key was required, every unique track triggered a paid call, and the value (decorative trivia) didn't justify the recurring expense for keeping the app free. Removed: `commentary.rs` module, `Commentary.tsx` window, `commentary` window declaration in `tauri.conf.json` + capabilities allowlist, `claude_api_key` field from `Settings`, "AI Commentary…" tray menu item, "Commentary" section from the Settings UI. Saved `claude_api_key` value in any existing user's `settings.json` is now an orphan field — serde ignores unknown fields on load, so no errors. To fully clean it from disk, just open Settings and toggle anything (next save writes only the current schema).
+
+### Added
+- **In-overlay auto-update banner.** A small gold pill — `update v0.X.Y → click to install` — pinned to the top-right of the overlay window appears whenever a newer version is available. No popup dialogs, no dev console intrusion: the banner lives inside the overlay you already see. Click it → the app downloads the new NSIS installer in the background (banner switches to `installing v0.X.Y…`), installs it (`v0.X.Y installed → restarting`), and relaunches itself within ~1s. Total UX cost of an update = one click. If an update fails (e.g. network drop mid-download), the banner switches to red `update failed` instead of crashing.
+- **Tray menu item: Check for updates.** Sits between **Settings…** and **Show / Hide dev console**. On click, re-runs the same update check the overlay performs at startup. Useful for forcing a check between official releases or after fixing a network problem.
+
+### Architecture / files
+- **`src-tauri/Cargo.toml`** — added `tauri-plugin-updater = "2.10.1"` and `tauri-plugin-process = "2.3.1"`. Removed the in-house Claude API client (was using the existing `reqwest` dep).
+- **`package.json`** — added `@tauri-apps/plugin-updater` and `@tauri-apps/plugin-process`.
+- **`src-tauri/src/lib.rs`** — registers both plugins on the Tauri Builder. New tray menu handler for `"check-updates"` emits the `updater-check-requested` event so the overlay's frontend code owns the entire check + install + relaunch sequence (single source of UI feedback). Dropped: `mod commentary`, the `commentary::CommentaryCache` managed state, the `commentary::get_track_commentary` and `open_commentary_window` Tauri command registrations, and the AI Commentary tray menu item + handler.
+- **`src-tauri/tauri.conf.json`** — `bundle.createUpdaterArtifacts: true` tells Tauri's bundler to emit the updater manifest alongside the NSIS installer. New `plugins.updater` config: `endpoints` points at `https://github.com/syvrstudios/lyric-overlay/releases/latest/download/latest.json` (the standard `tauri-action` GHA workflow output path — works once the repo is pushed and a release exists), `windows.installMode: "passive"` so the user sees a brief installer progress bar but no clicks required. `pubkey` is intentionally empty for now; required when the repo + release pipeline is set up. Removed the `commentary` window declaration.
+- **`src-tauri/capabilities/default.json`** — added `updater:default` and `process:allow-restart`. Removed `commentary` from the windows allowlist.
+- **`src/Overlay.tsx`** — imports `check` from `@tauri-apps/plugin-updater` and `relaunch` from `@tauri-apps/plugin-process`. New `updateState` state machine (`idle → available → downloading → ready → restart`, with `error` as a terminal alt branch). `useEffect` runs `check()` once on mount + on `updater-check-requested` events. New `UpdateBanner` component handles rendering for each phase (gold pill, position absolute, top-right of overlay). Click-to-install triggers `update.downloadAndInstall()` then `relaunch()` after an 800ms beat so the user sees the "ready" badge.
+- **Removed:** `src-tauri/src/commentary.rs`, `src/Commentary.tsx`, all references in `lib.rs` / `main.tsx` / `Settings.tsx` / `types.ts` / `Overlay.tsx::DEFAULT_SETTINGS`.
+
+### Notes / what's needed before the updater actually works
+- Push the repo to GitHub (Tauri policy still says ask first — Wes hasn't OK'd this).
+- Set up a `tauri-action` GitHub Actions workflow that builds the NSIS installer + updater manifest on every release tag (`v*`) and publishes both to the GitHub Release.
+- Generate a Tauri updater signing keypair (`pnpm tauri signer generate -- -w ~/.tauri/lyric-overlay.key`), commit the public key into `tauri.conf.json::plugins.updater.pubkey`, and add the private key + password as `TAURI_SIGNING_PRIVATE_KEY` + `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` GHA secrets.
+- Until then, the in-overlay update check returns silently (no endpoint reachable) and no banner ever appears. The infrastructure works as soon as the first release exists.
+
 ## [0.9.1] - 2026-05-14
 
 ### Fixed

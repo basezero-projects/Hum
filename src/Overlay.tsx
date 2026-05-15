@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { check as checkForUpdate, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import type {
   CurrentLyrics,
   CurrentTrack,
@@ -32,7 +34,6 @@ const DEFAULT_SETTINGS: Settings = {
   auto_contrast: true,
   streamer_enabled: false,
   streamer_port: 38247,
-  claude_api_key: "",
 };
 
 export default function Overlay() {
@@ -73,6 +74,15 @@ export default function Overlay() {
   // it; the React state is the brief on-screen banner only.
   const nudgeMsRef = useRef<number>(0);
   const [nudgeBanner, setNudgeBanner] = useState<{ value: number; until: number } | null>(null);
+  // Auto-update banner state. `available` shows the gold "v X.Y.Z" pill;
+  // `installing` shows the spinner state; `ready` prompts to restart.
+  const [updateState, setUpdateState] = useState<
+    | { phase: "idle" }
+    | { phase: "available"; version: string; update: Update }
+    | { phase: "downloading"; version: string }
+    | { phase: "ready"; version: string }
+    | { phase: "error"; message: string }
+  >({ phase: "idle" });
 
   // Refs hold the hot-loop data so the rAF closure stays stable across
   // re-renders. Events update these AND the React state.
@@ -282,6 +292,46 @@ export default function Overlay() {
     window.addEventListener("resize", handler);
     return () => window.removeEventListener("resize", handler);
   }, []);
+
+  // Auto-update check. Runs once on overlay mount + whenever the user
+  // picks "Check for updates" from the tray menu. Failures are swallowed
+  // (no endpoint configured / offline / not yet released) so the banner
+  // never shows when there's nothing to install.
+  useEffect(() => {
+    const run = async () => {
+      try {
+        const update = await checkForUpdate();
+        if (update?.available) {
+          setUpdateState({ phase: "available", version: update.version, update });
+        }
+      } catch {
+        // Silent — don't surface "no endpoint reachable" noise to users.
+      }
+    };
+    run();
+    const un = listen("updater-check-requested", () => {
+      run();
+    });
+    return () => {
+      un.then((fn) => fn()).catch(() => {});
+    };
+  }, []);
+
+  async function installUpdate() {
+    if (updateState.phase !== "available") return;
+    const { version, update } = updateState;
+    setUpdateState({ phase: "downloading", version });
+    try {
+      await update.downloadAndInstall();
+      setUpdateState({ phase: "ready", version });
+      // Give the user a beat to see the "ready" badge before restarting.
+      window.setTimeout(() => {
+        relaunch().catch(() => {});
+      }, 800);
+    } catch (e) {
+      setUpdateState({ phase: "error", message: String(e) });
+    }
+  }
 
   // Sync the album art's size to the lyrics column's measured height.
   // useLayoutEffect for the initial measure (before browser paint, so no
@@ -524,6 +574,7 @@ export default function Overlay() {
       style={containerStyle}
     >
       <NudgeBanner banner={nudgeBanner} />
+      <UpdateBanner state={updateState} onInstall={installUpdate} />
       <div style={innerRowStyle}>
         {showArt && albumArt ? <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} /> : null}
         <div ref={setLyricsColEl} style={lyricsColStyle}>
@@ -543,6 +594,60 @@ export default function Overlay() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Subtle update banner pinned to the top-right of the overlay. Stays
+// visible until the user clicks (downloading) or dismisses by clicking
+// the X. Auto-install + relaunch on click. Designed to fit in the
+// overlay's existing chrome — gold pill, dark backdrop, small.
+function UpdateBanner({
+  state,
+  onInstall,
+}: {
+  state:
+    | { phase: "idle" }
+    | { phase: "available"; version: string; update: Update }
+    | { phase: "downloading"; version: string }
+    | { phase: "ready"; version: string }
+    | { phase: "error"; message: string };
+  onInstall: () => void;
+}) {
+  if (state.phase === "idle") return null;
+  const baseStyle: React.CSSProperties = {
+    position: "absolute",
+    top: 4,
+    right: 8,
+    background: "rgba(0,0,0,0.65)",
+    color: "#d4af37",
+    padding: "3px 10px",
+    borderRadius: 6,
+    fontSize: 11,
+    fontWeight: 500,
+    fontVariantNumeric: "tabular-nums",
+    letterSpacing: 0.4,
+    border: "1px solid rgba(212,175,55,0.35)",
+    cursor: state.phase === "available" ? "pointer" : "default",
+    userSelect: "none",
+  };
+  if (state.phase === "available") {
+    return (
+      <div style={baseStyle} onClick={onInstall} title="Click to install update + restart">
+        update v{state.version} → click to install
+      </div>
+    );
+  }
+  if (state.phase === "downloading") {
+    return <div style={baseStyle}>installing v{state.version}…</div>;
+  }
+  if (state.phase === "ready") {
+    return <div style={baseStyle}>v{state.version} installed → restarting</div>;
+  }
+  // error
+  return (
+    <div style={{ ...baseStyle, color: "#e57373", borderColor: "rgba(229,115,115,0.4)" }}>
+      update failed
     </div>
   );
 }
