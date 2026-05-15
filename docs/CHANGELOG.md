@@ -4,6 +4,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.7.7] - 2026-05-14
+
+### Fixed
+- **Text shadow now inverts with the text color when auto-contrast is on.** Previously the shadow was hardcoded black (a 6px drop + 14px halo), which worked great over dark backgrounds with white text but became invisible-or-worse when auto-contrast flipped the text to dark over a light background — the dark text + black shadow blurred together into mush. Now the shadow color tracks the text color: dark text gets a WHITE 6px drop + 14px halo (so the dark glyphs stay crisp against any light background); light text keeps the existing black drop + halo (works against any dark / mid-tone background). Wired through both `LineRow` and `TranslationRow` via a new `textShadow` prop computed in `Overlay.tsx`.
+
 ## [0.7.6] - 2026-05-14
 
 ### Changed

@@ -364,6 +364,14 @@ export default function Overlay() {
     font_size_px: baseSettings.font_size_px * scale,
     line_padding_px: Math.max(0, Math.round(baseSettings.line_padding_px * scale)),
   };
+  // Text shadow is the opposite color of the text — black halo over light
+  // bg made the dark text invisible. When auto-contrast says the bg is
+  // light, we render dark text + WHITE halo. Otherwise default = light
+  // text + BLACK halo (works against any dark / mid-tone background).
+  const effectiveTextShadow =
+    autoColorActive && bgIsLight
+      ? "0 2px 6px rgba(255,255,255,0.95), 0 0 14px rgba(255,255,255,0.7)"
+      : "0 2px 6px rgba(0,0,0,0.95), 0 0 14px rgba(0,0,0,0.65)";
   // When tint is on AND we have a color extracted from the current art, blend
   // the user's bg_color with the tint at 50/50 in RGB. Force a minimum 22%
   // opacity so the toggle is visibly doing something even when the user has
@@ -457,9 +465,10 @@ export default function Overlay() {
               dragRegion={isEdit}
               settings={settingsForRender}
               karaoke={curKaraoke}
+              textShadow={effectiveTextShadow}
             />
             {translationText ? (
-              <TranslationRow text={translationText} settings={settingsForRender} />
+              <TranslationRow text={translationText} settings={settingsForRender} textShadow={effectiveTextShadow} />
             ) : null}
           </div>
         </div>
@@ -487,6 +496,7 @@ export default function Overlay() {
               settings={settingsForRender}
               scrollIntoView={i === displayIdx}
               karaoke={i === displayIdx ? curKaraoke : undefined}
+              textShadow={effectiveTextShadow}
             />
           ))
         ) : (
@@ -495,6 +505,7 @@ export default function Overlay() {
             kind="cur"
             dragRegion={isEdit}
             settings={settingsForRender}
+            textShadow={effectiveTextShadow}
           />
         )}
       </div>
@@ -513,18 +524,19 @@ export default function Overlay() {
       <div style={innerRowStyle}>
         {showArt && albumArt ? <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} /> : null}
         <div ref={setLyricsColEl} style={lyricsColStyle}>
-          <LineRow text={prev?.text} kind="prev" dragRegion={isEdit} settings={settingsForRender} />
+          <LineRow text={prev?.text} kind="prev" dragRegion={isEdit} settings={settingsForRender} textShadow={effectiveTextShadow} />
           <LineRow
             text={middleText}
             kind="cur"
             dragRegion={isEdit}
             settings={settingsForRender}
             karaoke={curKaraoke}
+            textShadow={effectiveTextShadow}
           />
           {translationText ? (
-            <TranslationRow text={translationText} settings={settingsForRender} />
+            <TranslationRow text={translationText} settings={settingsForRender} textShadow={effectiveTextShadow} />
           ) : (
-            <LineRow text={next?.text} kind="next" dragRegion={isEdit} settings={settingsForRender} />
+            <LineRow text={next?.text} kind="next" dragRegion={isEdit} settings={settingsForRender} textShadow={effectiveTextShadow} />
           )}
         </div>
       </div>
@@ -626,7 +638,15 @@ function AlbumArtSide({ dataUrl, size }: { dataUrl: string; size: number }) {
   );
 }
 
-function TranslationRow({ text, settings }: { text: string; settings: Settings }) {
+function TranslationRow({
+  text,
+  settings,
+  textShadow,
+}: {
+  text: string;
+  settings: Settings;
+  textShadow?: string;
+}) {
   return (
     <div
       style={{
@@ -634,7 +654,7 @@ function TranslationRow({ text, settings }: { text: string; settings: Settings }
         fontWeight: 400,
         color: settings.text_color_dim,
         textAlign: settings.text_align,
-        textShadow: "0 2px 6px rgba(0,0,0,0.95), 0 0 14px rgba(0,0,0,0.65)",
+        textShadow: textShadow ?? "0 2px 6px rgba(0,0,0,0.95), 0 0 14px rgba(0,0,0,0.65)",
         opacity: 0.85,
         lineHeight: 1.2,
         maxWidth: "92vw",
@@ -656,6 +676,7 @@ function LineRow({
   settings,
   scrollIntoView,
   karaoke,
+  textShadow,
 }: {
   text: string | undefined;
   kind: "prev" | "cur" | "next";
@@ -663,6 +684,7 @@ function LineRow({
   settings: Settings;
   scrollIntoView?: boolean;
   karaoke?: { words: WordSpan[]; currentWordIdx: number; nextTimeMs: number };
+  textShadow?: string;
 }) {
   const isCur = kind === "cur";
   const ref = useRef<HTMLDivElement | null>(null);
@@ -698,8 +720,7 @@ function LineRow({
         // color still matters for any leftover non-span text (none in practice).
         color: isCur ? settings.text_color : settings.text_color_dim,
         textAlign: settings.text_align,
-        textShadow:
-          "0 2px 6px rgba(0,0,0,0.95), 0 0 14px rgba(0,0,0,0.65)",
+        textShadow: textShadow ?? "0 2px 6px rgba(0,0,0,0.95), 0 0 14px rgba(0,0,0,0.65)",
         opacity: text ? 1 : 0.2,
         // Disable color-transition on the container while karaoke is active
         // so it doesn't fight the per-word transitions.
