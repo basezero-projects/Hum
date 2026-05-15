@@ -4,6 +4,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.7.2] - 2026-05-14
+
+### Fixed
+- **Dev console window stops popping up at launch (for real this time).** v0.6.2 set `visible: false` on the main window in `tauri.conf.json`, but two paths bypassed it in practice: (1) Tauri dev mode's hot-reload binary restart sometimes leaves the window visible briefly, and (2) the v0.7.1 `tauri-plugin-window-state` plugin's default behavior also restored last-known visibility, undoing the conf-file setting. Both paths now neutralized: the plugin's state-flag set is restricted to `POSITION | SIZE | MAXIMIZED` (no VISIBLE), and `setup()` calls `main.hide()` explicitly at the end of startup as a belt-and-suspenders guard. The dev console only appears when you right-click the tray and pick **Show / Hide dev console**.
+
 ## [0.7.1] - 2026-05-14
 
 ### Changed

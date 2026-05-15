@@ -85,9 +85,22 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
-        // Auto-saves overlay window position + size on close, restores on
-        // launch so users don't have to re-place the overlay every time.
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // Auto-saves window position + size on close, restores on launch so
+        // users don't have to re-place the overlay every time. We
+        // explicitly EXCLUDE the VISIBLE state flag because the plugin's
+        // default also restores last-known visibility — which would
+        // override tauri.conf.json's `visible: false` on the dev-console
+        // ("main") window if it was ever opened during a previous session.
+        // POSITION + SIZE + MAXIMIZED is what we actually want.
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED,
+                )
+                .build(),
+        )
         .plugin(build_global_shortcut_plugin())
         .manage(snapshot)
         .manage(lyrics_state)
@@ -128,6 +141,15 @@ pub fn run() {
 
             // Ctrl+Alt+L cycles edit -> locked -> ghost -> edit.
             register_hotkey(&app_handle)?;
+
+            // Belt + suspenders: tauri.conf.json sets `visible: false` on
+            // the main (dev console) window, but Tauri dev hot-reload paths
+            // and the window-state plugin have both been observed to leave
+            // it visible in practice. Explicitly hide on every startup so
+            // it only appears when the user clicks the tray menu item.
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.hide();
+            }
 
             Ok(())
         })
