@@ -85,13 +85,11 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
-        // Auto-saves window position + size on close, restores on launch so
-        // users don't have to re-place the overlay every time. We
-        // explicitly EXCLUDE the VISIBLE state flag because the plugin's
-        // default also restores last-known visibility — which would
-        // override tauri.conf.json's `visible: false` on the dev-console
-        // ("main") window if it was ever opened during a previous session.
-        // POSITION + SIZE + MAXIMIZED is what we actually want.
+        // Save / restore position + size for the OVERLAY window only.
+        // Dev console and settings windows are not tracked — they always
+        // open at the position tauri.conf.json declares (centered).
+        // VISIBLE flag is excluded so saved state can never re-show a
+        // window that conf says should start hidden.
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(
@@ -99,6 +97,7 @@ pub fn run() {
                         | tauri_plugin_window_state::StateFlags::SIZE
                         | tauri_plugin_window_state::StateFlags::MAXIMIZED,
                 )
+                .with_filter(|label| label == "overlay")
                 .build(),
         )
         .plugin(build_global_shortcut_plugin())

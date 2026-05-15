@@ -4,6 +4,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.7.3] - 2026-05-14
+
+### Changed
+- **Position / size persistence is now overlay-only.** v0.7.1 saved and restored window position + size for ALL three windows (overlay, dev console, settings). Now restricted to just the **overlay** window via the `tauri-plugin-window-state` plugin's `with_filter` callback. The dev console and settings windows always open at the position declared in `tauri.conf.json` (centered, default size) — they're transient debug / configuration windows that don't need their own preference memory.
+
 ## [0.7.2] - 2026-05-14
 
 ### Fixed
