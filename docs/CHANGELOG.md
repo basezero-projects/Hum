@@ -4,6 +4,20 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.7.1] - 2026-05-14
+
+### Changed
+- **Lyric text now scales with the overlay window in BOTH dimensions, not just height.** Previous v0.6.5 used `vh` units which only respond to height changes; dragging just the window's width narrower would crop the text instead of shrinking it. Switched to a JS-driven scale factor `min(window.innerWidth / 720, window.innerHeight / 200)` that's the smaller of the two ratios — so whichever side becomes the tighter constraint is the one that drives text sizing. Drag the window to half-width = text is half-size. Drag to half-height = text is half-size. Drag a wider but shorter window = text is bounded by height ratio. Album art on the side picks up the new lyrics-column height via the existing `ResizeObserver` chain and scales with it.
+
+### Added
+- **Overlay window position + size now persist across app restarts.** Drag the overlay to your preferred spot, resize it however you like, quit the app — next launch it comes back exactly where you left it. Implemented via the official `tauri-plugin-window-state` plugin (saves to `%APPDATA%\com.syvr.lyric-overlay\.window-state.json` on app close, restores on next launch). Same persistence covers the dev console and settings windows too — they remember their last position when you re-open them via the tray.
+
+### Architecture / files
+- **`src-tauri/src/lib.rs`** — `tauri_plugin_window_state::Builder::default().build()` registered on the Tauri Builder right after the existing `tauri_plugin_store` registration.
+- **`src-tauri/Cargo.toml`** — `tauri-plugin-window-state = "2.4.1"` added.
+- **`src-tauri/capabilities/default.json`** — `window-state:default` permission added so the plugin can call its own save/restore commands.
+- **`src/Overlay.tsx`** — new `winSize` state (initialized to `window.innerWidth/innerHeight`), updated by a `resize` listener. New `scale` derivation `min(winSize.w/720, winSize.h/200)`. The existing `settingsForRender` derivation now also pre-scales `font_size_px` and `line_padding_px` by `scale` before passing to `LineRow` / `TranslationRow`, so all the size-using styles get the right pixel value without having to know about scaling. Removed the v0.6.5 `pxToVh` helper and its `vh` unit usages.
+
 ## [0.7.0] - 2026-05-14
 
 ### Added

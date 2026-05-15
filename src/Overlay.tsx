@@ -58,6 +58,12 @@ export default function Overlay() {
   // until the first sample arrives. Frontend uses hysteresis around the
   // threshold to avoid color-flicker on dynamic backgrounds (videos).
   const [bgIsLight, setBgIsLight] = useState<boolean | null>(null);
+  // Window inner dimensions — drives the scale factor for text + gap +
+  // album art sizing. Updates on resize via the listener below.
+  const [winSize, setWinSize] = useState<{ w: number; h: number }>({
+    w: typeof window !== "undefined" ? window.innerWidth : BASELINE_WINDOW_W_PX,
+    h: typeof window !== "undefined" ? window.innerHeight : BASELINE_WINDOW_H_PX,
+  });
 
   // Refs hold the hot-loop data so the rAF closure stays stable across
   // re-renders. Events update these AND the React state.
@@ -247,6 +253,14 @@ export default function Overlay() {
     };
   }, []);
 
+  // Track the overlay window's inner dimensions for the scale-with-window
+  // text feature. Throttled implicitly by the browser's resize coalescing.
+  useEffect(() => {
+    const handler = () => setWinSize({ w: window.innerWidth, h: window.innerHeight });
+    window.addEventListener("resize", handler);
+    return () => window.removeEventListener("resize", handler);
+  }, []);
+
   // Sync the album art's size to the lyrics column's measured height.
   // useLayoutEffect for the initial measure (before browser paint, so no
   // flash). ResizeObserver for live updates (font-size slider, line wrap,
@@ -319,9 +333,18 @@ export default function Overlay() {
   const effectiveTextColorDim = autoColorActive
     ? (bgIsLight ? "rgba(0,0,0,0.45)" : "rgba(255,255,255,0.45)")
     : settings.text_color_dim;
-  const settingsForRender: Settings = autoColorActive
+  // Scale factor: drives font sizes + line padding so the whole comp
+  // shrinks/grows with the window. Min of width/height ratio to baseline,
+  // so text never overflows when only width is narrower than baseline.
+  const scale = Math.min(winSize.w / BASELINE_WINDOW_W_PX, winSize.h / BASELINE_WINDOW_H_PX);
+  const baseSettings = autoColorActive
     ? { ...settings, text_color: effectiveTextColor, text_color_dim: effectiveTextColorDim }
     : settings;
+  const settingsForRender: Settings = {
+    ...baseSettings,
+    font_size_px: baseSettings.font_size_px * scale,
+    line_padding_px: Math.max(0, Math.round(baseSettings.line_padding_px * scale)),
+  };
   // When tint is on AND we have a color extracted from the current art, blend
   // the user's bg_color with the tint at 50/50 in RGB. Force a minimum 22%
   // opacity so the toggle is visibly doing something even when the user has
@@ -383,7 +406,7 @@ export default function Overlay() {
     flex: 1,
     minWidth: 0, // allows ellipsis on overflowing lines inside the flex child
     alignItems: alignToFlex(settings.text_align),
-    gap: pxToVh(settings.line_padding_px),
+    gap: settingsForRender.line_padding_px,
   };
 
   // Karaoke per-word render kicks in only when the current line came from a
@@ -552,7 +575,7 @@ function TranslationRow({ text, settings }: { text: string; settings: Settings }
   return (
     <div
       style={{
-        fontSize: pxToVh(Math.max(11, settings.font_size_px * 0.55)),
+        fontSize: Math.max(8, settings.font_size_px * 0.55),
         fontWeight: 400,
         color: settings.text_color_dim,
         textAlign: settings.text_align,
@@ -605,17 +628,16 @@ function LineRow({
   };
   const drag = dragRegion ? { "data-tauri-drag-region": true } : {};
   const useKaraoke = isCur && !!karaoke && !!text;
-  // Font sizes use vh (viewport-height-relative) so the text scales when
-  // the user drags the overlay window smaller / bigger in edit mode. The
-  // slider value is the literal pixel size at the baseline 200px window
-  // height; smaller window scales text down proportionally.
-  const sizePx = isCur ? settings.font_size_px : Math.max(12, settings.font_size_px * 0.6);
+  // settings.font_size_px is already pre-scaled by the window-resize
+  // factor in Overlay (settingsForRender). Just apply the prev/next dim
+  // shrink ratio on top.
+  const sizePx = isCur ? settings.font_size_px : Math.max(8, settings.font_size_px * 0.6);
   return (
     <div
       ref={ref}
       {...drag}
       style={{
-        fontSize: pxToVh(sizePx),
+        fontSize: sizePx,
         fontWeight: isCur ? settings.font_weight : 400,
         // When karaoke is on, the per-word spans own their color. The container
         // color still matters for any leftover non-span text (none in practice).
@@ -697,16 +719,14 @@ function alignToFlex(a: TextAlign): React.CSSProperties["alignItems"] {
 }
 
 // The overlay window is resizable via the edit-mode drag corners. We want
-// the lyric text to scale WITH the window so dragging it smaller shrinks
-// the whole composition (text, gaps, art via the ResizeObserver chain)
-// instead of just cropping. The slider value in Settings is calibrated to
-// this baseline height — at 200px window height, font_size_px renders as
-// the literal pixel value the user picked. Window 100px tall → text is
-// half. Window 400px tall → text is double. Linear in viewport height.
-const BASELINE_WINDOW_HEIGHT_PX = 200;
-function pxToVh(px: number): string {
-  return `${((px / BASELINE_WINDOW_HEIGHT_PX) * 100).toFixed(3)}vh`;
-}
+// the lyric text + gaps + album art to scale WITH the window — both width
+// AND height — so dragging it smaller shrinks the whole composition
+// instead of just cropping. The slider value in Settings is the literal
+// pixel size at the baseline 720×200 window. Smaller window scales down,
+// larger scales up; whichever dimension is the tighter constraint wins
+// (so text never overflows when only the width is dragged narrower).
+const BASELINE_WINDOW_W_PX = 720;
+const BASELINE_WINDOW_H_PX = 200;
 
 // Convert hex (#rrggbb) + opacity-percent to rgba(...) string. Also accepts
 // rgb(r, g, b) input from mixHexWithRgb's output. Falls back to transparent

@@ -85,6 +85,9 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
+        // Auto-saves overlay window position + size on close, restores on
+        // launch so users don't have to re-place the overlay every time.
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(build_global_shortcut_plugin())
         .manage(snapshot)
         .manage(lyrics_state)
