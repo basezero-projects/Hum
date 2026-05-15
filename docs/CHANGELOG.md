@@ -4,6 +4,15 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.6.2] - 2026-05-14
+
+### Changed
+- **Album art now sits to the LEFT of the lyrics, sized to match the lyrics column height** in the **3-line scroll** and **Single-line karaoke** layouts. Was a 40×40 absolute-positioned thumbnail in the top-left corner that overlapped the start of left-aligned lyric lines and looked tacked-on. Now the art is a square card whose height equals the natural height of the lyrics block (computed at render time via flexbox `align-self: stretch` + `aspect-ratio: 1`), with the lyrics flowing in their own column to its right. Result: the leading edge of every line is the same horizontal position regardless of art presence, the art scales with the user's font size, and rounded corners + subtle shadow give it card-like prominence without competing with the text. **Full-page scroll** layout still uses the small corner-pinned 40×40 thumbnail (the side-by-side layout would fight the scrolling column).
+- **Dev console window no longer pops up at launch.** The "Lyric Overlay (dev)" window with its CURRENT TRACK / LYRICS / EVENT LOG cards is now hidden by default and removed from the taskbar — most users never need to see it. To open it on demand, right-click the system tray icon and pick **Show / Hide dev console**. The same menu item closes it when you're done. Useful when something looks wrong and you want to confirm what `track-changed` events the app is receiving.
+
+### Added
+- **Tray menu item: Show / Hide dev console.** Sits between **Settings…** and **Quit Lyric Overlay** in the tray context menu. Toggles visibility of the main dev-console window. The window itself is the same one as before — just no longer auto-shown.
+
 ## [0.6.1] - 2026-05-14
 
 ### Changed

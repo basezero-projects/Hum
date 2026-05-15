@@ -284,6 +284,9 @@ export default function Overlay() {
     tintActive && settings.bg_opacity < 22 ? 22 : settings.bg_opacity;
   const bgRgba = colorWithOpacity(effectiveBgColor, effectiveOpacity);
 
+  // Outer frame for all layouts: full window, visual chrome, vertical centering
+  // of the inner content. The inner row (3-line / single-line) OR the inner
+  // scrolling column (full-page) controls horizontal layout.
   const containerStyle: React.CSSProperties = {
     position: "relative",
     height: "100vh",
@@ -291,9 +294,9 @@ export default function Overlay() {
     display: "flex",
     flexDirection: "column",
     justifyContent: "center",
-    alignItems: alignToFlex(settings.text_align),
-    gap: settings.line_padding_px,
-    padding: "12px 28px",
+    alignItems: layoutMode === "full_page" ? alignToFlex(settings.text_align) : "stretch",
+    gap: layoutMode === "full_page" ? settings.line_padding_px : 0,
+    padding: "12px 16px",
     boxSizing: "border-box",
     background: bgRgba,
     fontFamily: `"${settings.font_family}", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`,
@@ -303,6 +306,27 @@ export default function Overlay() {
     borderRadius: 8,
     transition: "border-color 160ms ease, background 160ms ease",
     overflow: layoutMode === "full_page" ? "auto" : "hidden",
+  };
+
+  // Row layout used by 3-line and single-line: art on the left, lyrics column
+  // on the right. The art's height comes from align-self: stretch on the art
+  // element, which equals the row's height = lyrics column's natural height.
+  const innerRowStyle: React.CSSProperties = {
+    display: "flex",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: showArt && albumArt ? 14 : 0,
+    width: "100%",
+    minHeight: 0,
+  };
+
+  const lyricsColStyle: React.CSSProperties = {
+    display: "flex",
+    flexDirection: "column",
+    flex: 1,
+    minWidth: 0, // allows ellipsis on overflowing lines inside the flex child
+    alignItems: alignToFlex(settings.text_align),
+    gap: settings.line_padding_px,
   };
 
   // Karaoke per-word render kicks in only when the current line came from a
@@ -325,17 +349,21 @@ export default function Overlay() {
         onMouseLeave={() => setHovered(false)}
         style={containerStyle}
       >
-        {showArt && albumArt ? <AlbumArtBadge dataUrl={albumArt.data_url} /> : null}
-        <LineRow
-          text={middleText}
-          kind="cur"
-          dragRegion={isEdit}
-          settings={settings}
-          karaoke={curKaraoke}
-        />
-        {translationText ? (
-          <TranslationRow text={translationText} settings={settings} />
-        ) : null}
+        <div style={innerRowStyle}>
+          {showArt && albumArt ? <AlbumArtSide dataUrl={albumArt.data_url} /> : null}
+          <div style={lyricsColStyle}>
+            <LineRow
+              text={middleText}
+              kind="cur"
+              dragRegion={isEdit}
+              settings={settings}
+              karaoke={curKaraoke}
+            />
+            {translationText ? (
+              <TranslationRow text={translationText} settings={settings} />
+            ) : null}
+          </div>
+        </div>
       </div>
     );
   }
@@ -374,7 +402,7 @@ export default function Overlay() {
     );
   }
 
-  // Default: three-line scroll
+  // Default: three-line scroll, with optional album art on the left.
   return (
     <div
       {...dragProps}
@@ -382,25 +410,31 @@ export default function Overlay() {
       onMouseLeave={() => setHovered(false)}
       style={containerStyle}
     >
-      {showArt && albumArt ? <AlbumArtBadge dataUrl={albumArt.data_url} /> : null}
-      <LineRow text={prev?.text} kind="prev" dragRegion={isEdit} settings={settings} />
-      <LineRow
-        text={middleText}
-        kind="cur"
-        dragRegion={isEdit}
-        settings={settings}
-        karaoke={curKaraoke}
-      />
-      {translationText ? (
-        <TranslationRow text={translationText} settings={settings} />
-      ) : (
-        <LineRow text={next?.text} kind="next" dragRegion={isEdit} settings={settings} />
-      )}
+      <div style={innerRowStyle}>
+        {showArt && albumArt ? <AlbumArtSide dataUrl={albumArt.data_url} /> : null}
+        <div style={lyricsColStyle}>
+          <LineRow text={prev?.text} kind="prev" dragRegion={isEdit} settings={settings} />
+          <LineRow
+            text={middleText}
+            kind="cur"
+            dragRegion={isEdit}
+            settings={settings}
+            karaoke={curKaraoke}
+          />
+          {translationText ? (
+            <TranslationRow text={translationText} settings={settings} />
+          ) : (
+            <LineRow text={next?.text} kind="next" dragRegion={isEdit} settings={settings} />
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 
 function AlbumArtBadge({ dataUrl }: { dataUrl: string }) {
+  // Used by full-page layout — small absolute-positioned thumbnail in the
+  // corner since side-by-side would conflict with the scrolling column.
   return (
     <img
       src={dataUrl}
@@ -419,6 +453,41 @@ function AlbumArtBadge({ dataUrl }: { dataUrl: string }) {
         pointerEvents: "none",
       }}
     />
+  );
+}
+
+// Side-by-side album art used by 3-line and single-line layouts. Stretches
+// vertically to match the lyrics column height (via align-self:stretch on the
+// flex item) and stays square (aspect-ratio:1). The image inside fills the
+// box with object-fit:cover so non-square art doesn't get distorted.
+function AlbumArtSide({ dataUrl }: { dataUrl: string }) {
+  return (
+    <div
+      style={{
+        alignSelf: "stretch",
+        aspectRatio: "1 / 1",
+        flexShrink: 0,
+        // Floor so a tiny font doesn't make the art shrink to invisibility.
+        minWidth: 32,
+        minHeight: 32,
+        position: "relative",
+      }}
+    >
+      <img
+        src={dataUrl}
+        alt=""
+        draggable={false}
+        style={{
+          width: "100%",
+          height: "100%",
+          objectFit: "cover",
+          borderRadius: 6,
+          boxShadow: "0 2px 8px rgba(0,0,0,0.6)",
+          display: "block",
+          pointerEvents: "none",
+        }}
+      />
+    </div>
   );
 }
 

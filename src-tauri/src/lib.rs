@@ -162,6 +162,8 @@ fn build_tray(app: &tauri::AppHandle, initial_mode: OverlayMode) -> tauri::Resul
         .build()?;
 
     let settings_item = MenuItemBuilder::with_id("settings", "Settings…").build(app)?;
+    let toggle_console =
+        MenuItemBuilder::with_id("toggle-console", "Show / Hide dev console").build(app)?;
     let quit_item = MenuItemBuilder::with_id("quit", "Quit Lyric Overlay").build(app)?;
 
     let menu = MenuBuilder::new(app)
@@ -170,6 +172,7 @@ fn build_tray(app: &tauri::AppHandle, initial_mode: OverlayMode) -> tauri::Resul
         .item(&mode_submenu)
         .separator()
         .item(&settings_item)
+        .item(&toggle_console)
         .separator()
         .item(&quit_item)
         .build()?;
@@ -210,6 +213,20 @@ fn build_tray(app: &tauri::AppHandle, initial_mode: OverlayMode) -> tauri::Resul
             "settings" => {
                 if let Err(e) = settings::open_settings_window(app.clone()) {
                     eprintln!("[tray] open settings failed: {e}");
+                }
+            }
+            "toggle-console" => {
+                if let Some(w) = app.get_webview_window("main") {
+                    match w.is_visible() {
+                        Ok(true) => {
+                            let _ = w.hide();
+                        }
+                        _ => {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                            let _ = w.unminimize();
+                        }
+                    }
                 }
             }
             "quit" => app.exit(0),
