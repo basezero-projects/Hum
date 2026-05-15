@@ -4,6 +4,15 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.9.1] - 2026-05-14
+
+### Fixed
+- **AI Commentary no longer fires Claude API calls when the window is hidden.** Previously, once you'd opened the Commentary window once, its `track-changed` listener stayed active even after you closed (hid) the window — every new track meant another API call you couldn't see and didn't asked for. Now the React component checks `document.visibilityState` and skips the fetch when hidden. When you re-open the window it fetches the current track immediately so the body isn't stale.
+- **Commentary text now reads less like an AI wrote it.** The Claude prompt has hard bans on the dead-giveaway patterns: em-dashes, "essentially / basically / ultimately / really / truly / arguably", sentence shapes like "It's not just X, it's Y" and "X is a Y that Z", lyric-summarizing back at the listener, vague attributions ("many critics"), promotional adjectives ("iconic / legendary / timeless / groundbreaking / classic"), and triple-list rule-of-three structures. The prompt asks for concrete specifics — sample names, years, producers, places, beefs, chart positions, cover origins — over general vibes. Cached responses generated with the old prompt clear on next binary restart (in-memory cache).
+
+### Changed
+- **Commentary window typography is no longer a wall of text.** The body now splits the response into paragraphs of ~1-2 sentences each (sentence-boundary detection looks for `.`, `!`, `?` followed by space + capital letter), with the lead paragraph rendered slightly larger (15px) and at full opacity, follow-on paragraphs at 14px and 78% opacity for visual hierarchy. Body has a 56-character readable measure (max-width capped) and 20×22px padding so nothing slams into the card edges. The `FRESH FROM CLAUDE` / `CACHED` indicator at the bottom shrunk from 11px to 10px and dropped to 35% opacity since it's metadata, not content.
+
 ## [0.9.0] - 2026-05-14
 
 ### Added

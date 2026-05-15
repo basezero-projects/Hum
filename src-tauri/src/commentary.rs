@@ -20,6 +20,7 @@ use tokio::sync::RwLock;
 
 use crate::settings::SharedSettings;
 
+// Sonnet 4.5 — small, cheap, fast for ~200-token responses.
 const MODEL: &str = "claude-sonnet-4-5";
 const MAX_TOKENS: u32 = 220;
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -127,15 +128,23 @@ async fn fetch_commentary(
         .context("build reqwest client")?;
 
     let user_prompt = format!(
-        "Give a tight 2-3 sentence context note about the song \"{title}\" by {artist}{album_part}. \
-         Focus on: what the lyrics reference, the era / cultural moment, any notable samples \
-         or callbacks the listener might miss, or one unusual fact. Conversational tone. No preamble, \
-         no markdown, no bullet points, no lists. If you genuinely don't know the song, say \"No reliable \
-         info on this track\" — do NOT make things up.",
+        "Write 2-3 short sentences about \"{title}\" by {artist}{album_part}. \
+         Pretend you're a friend who knows music texting another friend who just heard the song. \
+         Specific concrete facts beat general vibes: name the sample, the year, the producer, the place, the beef, the chart position, the cover origin — whatever's actually interesting and verifiable. \
+         \n\nHARD BANS (do not use these phrases or patterns at all):\n\
+         - Em-dashes (— or --). Use periods or commas instead.\n\
+         - The words: essentially, basically, ultimately, really, truly, perhaps, arguably, underscores, delves, captures, explores, weaves, navigates, transcends, elevates, masterfully, beautifully, profoundly\n\
+         - Sentence shapes like \"It's not just X, it's Y\" / \"X is a Y that Z\" / \"More than just X, it's Y\"\n\
+         - Summarizing the lyrics back to the listener (assume they hear them right now)\n\
+         - Vague attributions like \"many critics\", \"some say\", \"often considered\"\n\
+         - Promotional language (\"iconic\", \"legendary\", \"timeless\", \"groundbreaking\", \"classic\")\n\
+         - Triple lists (rule-of-three): \"X, Y, and Z\" structures used for emphasis\n\
+         \nWrite plainly. Short sentences. Direct claims with specifics. Plain paragraph, no markdown, no bullets, no headers. \
+         If you genuinely don't know the song, just write: \"No reliable info on this track.\" Don't guess.",
         album_part = if album.trim().is_empty() {
             String::new()
         } else {
-            format!(" (album: \"{}\")", album)
+            format!(" from the album \"{}\"", album)
         }
     );
 

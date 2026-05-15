@@ -17,6 +17,12 @@ export default function CommentaryView() {
   const [resp, setResp] = useState<CommentaryResp | null>(null);
   const [loading, setLoading] = useState(false);
   const [hasKey, setHasKey] = useState<boolean | null>(null);
+  // Track when the window is actually visible so we don't burn API
+  // tokens fetching commentary while the user has the window minimized
+  // / hidden via the tray. Fetches resume when visibility returns.
+  const [isVisible, setIsVisible] = useState<boolean>(
+    typeof document !== "undefined" ? document.visibilityState === "visible" : true,
+  );
   // Avoid double-firing the same track's API call when track-changed
   // events arrive in pairs (iTunes pause-then-resume produces two of these).
   const lastFetchedKey = useRef<string>("");
@@ -31,13 +37,17 @@ export default function CommentaryView() {
     const unSettings = listen<Settings>("settings-changed", (e) => {
       setHasKey(e.payload.claude_api_key.trim().length > 0);
     });
+    const onVis = () => setIsVisible(document.visibilityState === "visible");
+    document.addEventListener("visibilitychange", onVis);
     return () => {
       unTrack.then((fn) => fn()).catch(() => {});
       unSettings.then((fn) => fn()).catch(() => {});
+      document.removeEventListener("visibilitychange", onVis);
     };
   }, []);
 
   useEffect(() => {
+    if (!isVisible) return; // Window hidden → don't burn API tokens.
     if (!track || !track.title || !track.artist) return;
     const key = `${track.artist}|${track.title}|${track.album}`;
     if (key === lastFetchedKey.current) return;
@@ -60,7 +70,7 @@ export default function CommentaryView() {
         });
       })
       .finally(() => setLoading(false));
-  }, [track?.title, track?.artist, track?.album]);
+  }, [track?.title, track?.artist, track?.album, isVisible]);
 
   return (
     <div style={pageStyle}>
@@ -95,20 +105,7 @@ export default function CommentaryView() {
             <strong style={{ color: "#e57373" }}>Error:</strong> {resp.error}
           </Placeholder>
         ) : resp?.text ? (
-          <div style={{ fontSize: 14, lineHeight: 1.55, padding: "16px 18px" }}>
-            {resp.text}
-            <div
-              style={{
-                marginTop: 12,
-                fontSize: 11,
-                opacity: 0.4,
-                letterSpacing: 0.5,
-                textTransform: "uppercase",
-              }}
-            >
-              {resp.source === "cache" ? "cached" : resp.source === "api" ? "fresh from claude" : resp.source}
-            </div>
-          </div>
+          <CommentaryBody text={resp.text} source={resp.source} />
         ) : (
           <Placeholder>
             {track?.title ? "No commentary available." : "Play a track to see commentary."}
@@ -117,6 +114,73 @@ export default function CommentaryView() {
       </div>
     </div>
   );
+}
+
+function CommentaryBody({ text, source }: { text: string; source: string }) {
+  // Split on sentence boundaries followed by a space + capital, but keep
+  // the punctuation. Resulting "paragraphs" are each 1-2 sentences for
+  // breathing room — way more readable than one wall-of-text block.
+  const sentences = splitSentences(text);
+  const groups: string[] = [];
+  for (let i = 0; i < sentences.length; i += 2) {
+    groups.push(sentences.slice(i, i + 2).join(" "));
+  }
+  return (
+    <div style={{ padding: "20px 22px" }}>
+      {groups.map((para, i) => (
+        <p
+          key={i}
+          style={{
+            margin: i === 0 ? "0 0 12px" : "0 0 12px",
+            // Lead paragraph is slightly larger; subsequent paragraphs settle.
+            fontSize: i === 0 ? 15 : 14,
+            lineHeight: 1.55,
+            color: i === 0 ? "#eaeaea" : "rgba(234,234,234,0.78)",
+            maxWidth: 56 * 8, // ~56ch readable measure
+          }}
+        >
+          {para}
+        </p>
+      ))}
+      <div
+        style={{
+          marginTop: 14,
+          fontSize: 10,
+          opacity: 0.35,
+          letterSpacing: 0.6,
+          textTransform: "uppercase",
+        }}
+      >
+        {source === "cache" ? "cached" : source === "api" ? "fresh from claude" : source}
+      </div>
+    </div>
+  );
+}
+
+// Split a paragraph into individual sentences. Handles ., !, ? followed
+// by space + capital letter / quote / paren. Keeps the punctuation with
+// the sentence it belongs to. Conservative — false negatives (under-split)
+// are way better than false positives (mid-sentence breaks).
+function splitSentences(text: string): string[] {
+  const parts: string[] = [];
+  let buf = "";
+  for (let i = 0; i < text.length; i++) {
+    buf += text[i];
+    const ch = text[i];
+    if (ch === "." || ch === "!" || ch === "?") {
+      const next1 = text[i + 1] ?? "";
+      const next2 = text[i + 2] ?? "";
+      const looksLikeBoundary =
+        next1 === " " &&
+        (/[A-Z"'(]/.test(next2) || next2 === "");
+      if (looksLikeBoundary) {
+        parts.push(buf.trim());
+        buf = "";
+      }
+    }
+  }
+  if (buf.trim()) parts.push(buf.trim());
+  return parts.length > 0 ? parts : [text];
 }
 
 function Placeholder({ children }: { children: React.ReactNode }) {
