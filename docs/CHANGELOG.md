@@ -4,6 +4,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.6.4] - 2026-05-14
+
+### Fixed
+- **Album art no longer changes size as lyrics change.** When a long current-line lyric wrapped to 2 visual lines (the previous behavior — `-webkit-line-clamp: 2`), the lyrics column got taller, the side-by-side album art tracked that height via `ResizeObserver`, and the art card pulsed bigger then smaller as long lines came and went. Now the current line renders single-line just like prev / next, so the column height is constant across the entire song and the art card is rock-steady. Long lines that don't fit the overlay width get ellipsis-truncated (`…`) at the end. Trade-off: long-line songs (e.g. "Have You Ever Seen the Rain" — "Someone told me long ago there's a calm before the storm") will show the truncated version instead of the wrapped full text. If long-line readability matters more than visual steadiness, drag the overlay window wider in edit mode to fit more characters per line.
+
 ## [0.6.3] - 2026-05-14
 
 ### Fixed

@@ -561,20 +561,16 @@ function LineRow({
       ref.current.scrollIntoView({ behavior: "smooth", block: "center" });
     }
   }, [scrollIntoView]);
-  const wrapStyle: React.CSSProperties = isCur
-    ? {
-        whiteSpace: "normal",
-        display: "-webkit-box",
-        WebkitLineClamp: 2,
-        WebkitBoxOrient: "vertical",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-      }
-    : {
-        whiteSpace: "nowrap",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-      };
+  // Single-line for ALL rows (prev / cur / next). Wrapping the cur row to 2
+  // lines made long-line songs readable but caused the lyrics column height
+  // — and therefore the side-by-side album art height — to jitter every
+  // time a long line came up. Long lines now ellipsis-truncate instead.
+  // Trade-off: catches truncated for line-stability + constant art size.
+  const wrapStyle: React.CSSProperties = {
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  };
   const drag = dragRegion ? { "data-tauri-drag-region": true } : {};
   const useKaraoke = isCur && !!karaoke && !!text;
   return (
