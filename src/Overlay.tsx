@@ -725,7 +725,7 @@ function alignToFlex(a: TextAlign): React.CSSProperties["alignItems"] {
 // pixel size at the baseline 720×200 window. Smaller window scales down,
 // larger scales up; whichever dimension is the tighter constraint wins
 // (so text never overflows when only the width is dragged narrower).
-const BASELINE_WINDOW_W_PX = 720;
+const BASELINE_WINDOW_W_PX = 1100;
 const BASELINE_WINDOW_H_PX = 200;
 
 // Convert hex (#rrggbb) + opacity-percent to rgba(...) string. Also accepts

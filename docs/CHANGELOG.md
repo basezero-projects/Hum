@@ -4,6 +4,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.7.4] - 2026-05-14
+
+### Changed
+- **Default overlay window width is now 1100px (was 720px)** so most lyric lines fit on one row without ellipsis truncation. The previous 720px default cut off mid-line on a lot of songs (anything beyond ~10–11 mid-length words at 26px font), which forced manual resizing on every install. 1100px fits the long-line case the previous size missed without becoming overwhelming on a 1920px screen. Height stays at 200px. Existing installs that already saved a custom width via the `tauri-plugin-window-state` plugin keep their saved value; only fresh installs (no `.window-state.json` yet) pick up the new default. The width-/height-based text scaling baseline in `Overlay.tsx` is also bumped to 1100×200 so the text size at the new default window matches what the **Current line size** slider value says.
+
 ## [0.7.3] - 2026-05-14
 
 ### Changed
