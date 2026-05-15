@@ -41,6 +41,7 @@ export type Settings = {
   auto_contrast: boolean;
   streamer_enabled: boolean;
   streamer_port: number;
+  claude_api_key: string;
 };
 
 export type WordSpan = { time_ms: number; text: string };

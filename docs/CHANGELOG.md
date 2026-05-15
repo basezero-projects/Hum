@@ -4,6 +4,23 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.9.0] - 2026-05-14
+
+### Added
+- **AI Commentary window** — a new tray menu item, **AI Commentary…**, opens a dedicated window (480×280, decorated, opens centered) that displays a 2-3 sentence Claude-generated context note for whatever track is currently playing. The note covers what the lyrics reference, the era / cultural moment, notable samples or callbacks the listener might miss, or one unusual fact. Updates automatically when the track changes. Layout is dark themed to match the Settings window: gold accent for the track title in the header, a card body containing the commentary text, and a small lowercase "fresh from claude" or "cached" tag at the bottom-right of the card so you know whether a fresh API call was made or the answer came from in-process cache.
+- **`Settings → Commentary` section** with a single password-style input for your **Claude API key** (Anthropic). Stored in plaintext in `settings.json` (rotate via the Anthropic console if compromised). Empty key = the Commentary window shows "No Claude API key set" and never makes a network call. Get a key at console.anthropic.com — they have a generous free tier and Sonnet 4.5 calls for this 200-token-max prompt cost a fraction of a cent each.
+
+### Architecture / files
+- **`src-tauri/src/commentary.rs` (new)** — Tauri command `get_track_commentary(title, artist, album)` that hits Anthropic's `/v1/messages` endpoint via the existing `reqwest` client (no new crates), with the `claude-sonnet-4-5` model and `max_tokens=220`. In-memory `CommentaryCache` (managed Tauri state, `Arc<RwLock<HashMap<String, String>>>`) keyed by `artist|title|album` so replays don't re-spend API tokens. Returns `Commentary { track_key, text, source: "cache"|"api"|"empty"|"error", error }` so the frontend can surface why a result is empty.
+- **`src-tauri/src/lib.rs`** — `mod commentary;`, manages the cache, registers `commentary::get_track_commentary` and `open_commentary_window` Tauri commands, adds **AI Commentary…** tray menu item between **Settings…** and **Show / Hide dev console**.
+- **`src-tauri/src/settings.rs`** — new `claude_api_key: String` field (default empty), trimmed + length-capped at 500 chars in `sanitize`.
+- **`src-tauri/tauri.conf.json`** — new `commentary` window declared (decorated, 480×280, `visible: false`, `skipTaskbar: false`).
+- **`src-tauri/capabilities/default.json`** — `commentary` added to the windows allowlist.
+- **`src/Commentary.tsx` (new)** — listens for `track-changed`, dedupes against the last-fetched key (iTunes pause/resume sometimes fires the same track-changed twice), invokes `get_track_commentary`, renders text. Three placeholder states: no API key set, loading, error.
+- **`src/main.tsx`** — `commentary` window label routes to the new component.
+- **`src/Settings.tsx`** — new **Commentary** section with password input + hint explaining where to get a key and the per-track caching behavior.
+- **`src/types.ts`** + **`src/Overlay.tsx`** — `claude_api_key` added to `Settings` type and `DEFAULT_SETTINGS`.
+
 ## [0.8.0] - 2026-05-14
 
 ### Added

@@ -32,6 +32,7 @@ const DEFAULT_SETTINGS: Settings = {
   auto_contrast: true,
   streamer_enabled: false,
   streamer_port: 38247,
+  claude_api_key: "",
 };
 
 export default function Overlay() {

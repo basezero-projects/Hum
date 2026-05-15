@@ -13,6 +13,7 @@ mod smtc;
 #[cfg(windows)]
 mod itunes;
 
+mod commentary;
 mod contrast;
 mod lyrics;
 mod mode;
@@ -60,6 +61,17 @@ async fn get_current_lyrics(
 ) -> Result<CurrentLyrics, String> {
     let s = state.read().await;
     Ok(s.clone())
+}
+
+#[tauri::command]
+fn open_commentary_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window("commentary") {
+        let _ = w.show();
+        let _ = w.set_focus();
+        let _ = w.unminimize();
+        return Ok(());
+    }
+    Err("commentary window not registered".to_string())
 }
 
 #[tauri::command]
@@ -139,6 +151,7 @@ pub fn run() {
             app.manage::<std::sync::Arc<streamer::StreamerSupervisor>>(
                 std::sync::Arc::new(streamer::StreamerSupervisor::new()),
             );
+            app.manage::<commentary::CommentaryCache>(commentary::new_cache());
 
             // Tray + mode submenu. We hold onto the CheckMenuItem handles via
             // managed state so apply_mode() can keep the checked indicator in
@@ -180,6 +193,8 @@ pub fn run() {
             update_settings,
             reset_settings,
             open_settings_window,
+            commentary::get_track_commentary,
+            open_commentary_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -205,6 +220,8 @@ fn build_tray(app: &tauri::AppHandle, initial_mode: OverlayMode) -> tauri::Resul
         .build()?;
 
     let settings_item = MenuItemBuilder::with_id("settings", "Settings…").build(app)?;
+    let commentary_item =
+        MenuItemBuilder::with_id("commentary", "AI Commentary…").build(app)?;
     let toggle_console =
         MenuItemBuilder::with_id("toggle-console", "Show / Hide dev console").build(app)?;
     let quit_item = MenuItemBuilder::with_id("quit", "Quit Lyric Overlay").build(app)?;
@@ -215,6 +232,7 @@ fn build_tray(app: &tauri::AppHandle, initial_mode: OverlayMode) -> tauri::Resul
         .item(&mode_submenu)
         .separator()
         .item(&settings_item)
+        .item(&commentary_item)
         .item(&toggle_console)
         .separator()
         .item(&quit_item)
@@ -256,6 +274,11 @@ fn build_tray(app: &tauri::AppHandle, initial_mode: OverlayMode) -> tauri::Resul
             "settings" => {
                 if let Err(e) = settings::open_settings_window(app.clone()) {
                     eprintln!("[tray] open settings failed: {e}");
+                }
+            }
+            "commentary" => {
+                if let Err(e) = open_commentary_window(app.clone()) {
+                    eprintln!("[tray] open commentary failed: {e}");
                 }
             }
             "toggle-console" => {
