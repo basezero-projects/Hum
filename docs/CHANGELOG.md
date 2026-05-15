@@ -4,6 +4,19 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.7.5] - 2026-05-14
+
+### Added
+- **Live lyric offset nudge via global hotkeys.** When LRCLib (or one of the fallback sources) returns a lyric file with timestamps that don't match the audio — common on radio edits, remastered versions, and crowdsourced LRC for less-popular tracks — you can now correct it on the fly without opening Settings:
+  - **Ctrl+Alt+]** pushes the lyrics 250ms LATER (use when the lyrics are showing ahead of the audio).
+  - **Ctrl+Alt+[** pulls the lyrics 250ms EARLIER (use when the lyrics are lagging behind the audio).
+  - Each press stacks; mash either key 4 times to shift ±1000ms, etc. The current offset value flashes briefly at the top-right of the overlay as a small gold-on-translucent indicator (`lyric offset +500 ms`) for 1.5 seconds after each press, so you know how much you've nudged.
+  - **The nudge is session-only and resets to 0 automatically when the track changes**, so a one-off fix for a bad-LRC song doesn't bleed into the next one. There's no per-track persisted offset yet — that's a candidate for a later version if you find yourself nudging the same songs repeatedly.
+
+### Architecture / files
+- **`src-tauri/src/lib.rs`** — `build_global_shortcut_plugin` registers two new shortcuts: `Modifiers::CONTROL | Modifiers::ALT + Code::BracketLeft` and `BracketRight`. Each handler emits `lyric-offset-nudge` with a `-250` or `+250` payload. `register_hotkey` now registers all three shortcuts (cycle + nudge-back + nudge-forward) in a loop, with per-shortcut error logging if the OS denies the registration.
+- **`src/Overlay.tsx`** — `nudgeMsRef` (read by the rAF tick), `nudgeBanner` state for the on-screen indicator, listener for `lyric-offset-nudge`, reset on `track-changed`. `lookupPositionMs` now returns `interpolatedPositionMs() + anticipate_ms - nudgeMs` (positive nudge = lyrics later = subtract from cursor lookup). New `NudgeBanner` component for the brief top-right flash.
+
 ## [0.7.4] - 2026-05-14
 
 ### Changed

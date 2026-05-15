@@ -64,6 +64,12 @@ export default function Overlay() {
     w: typeof window !== "undefined" ? window.innerWidth : BASELINE_WINDOW_W_PX,
     h: typeof window !== "undefined" ? window.innerHeight : BASELINE_WINDOW_H_PX,
   });
+  // Live lyric-offset nudge (Ctrl+Alt+[ / Ctrl+Alt+]). Session-only;
+  // resets on track change so a nudge for one bad LRC doesn't bleed
+  // into the next song. Stored in a ref because the rAF closure reads
+  // it; the React state is the brief on-screen banner only.
+  const nudgeMsRef = useRef<number>(0);
+  const [nudgeBanner, setNudgeBanner] = useState<{ value: number; until: number } | null>(null);
 
   // Refs hold the hot-loop data so the rAF closure stays stable across
   // re-renders. Events update these AND the React state.
@@ -83,7 +89,10 @@ export default function Overlay() {
     }
 
     function lookupPositionMs(): number {
-      return interpolatedPositionMs() + settingsRef.current.anticipate_ms;
+      // anticipate_ms = global setting; nudgeMs = per-track live nudge via
+      // Ctrl+Alt+[ / Ctrl+Alt+]. POSITIVE nudge means lyrics show LATER,
+      // so we SUBTRACT from the lookup position (look further back).
+      return interpolatedPositionMs() + settingsRef.current.anticipate_ms - nudgeMsRef.current;
     }
 
     function snapCursorToCurrentPosition(lines: LyricLine[]): number {
@@ -178,6 +187,10 @@ export default function Overlay() {
       if (!prev || prev.title !== t.title || prev.artist !== t.artist) {
         indexRef.current = -1;
         setDisplayIdx(-1);
+        // Reset the live nudge so a fix for one bad-LRC track doesn't bleed
+        // into the next song.
+        nudgeMsRef.current = 0;
+        setNudgeBanner(null);
       }
     }
 
@@ -220,6 +233,12 @@ export default function Overlay() {
           extractDominantColor(e.payload.data_url).then(setTintColor);
         },
       ),
+      listen<number>("lyric-offset-nudge", (e) => {
+        const delta = e.payload;
+        const next = nudgeMsRef.current + delta;
+        nudgeMsRef.current = next;
+        setNudgeBanner({ value: next, until: Date.now() + 1500 });
+      }),
       listen<{ luminance: number; r: number; g: number; b: number }>(
         "bg-luminance",
         (e) => {
@@ -490,6 +509,7 @@ export default function Overlay() {
       onMouseLeave={() => setHovered(false)}
       style={containerStyle}
     >
+      <NudgeBanner banner={nudgeBanner} />
       <div style={innerRowStyle}>
         {showArt && albumArt ? <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} /> : null}
         <div ref={setLyricsColEl} style={lyricsColStyle}>
@@ -508,6 +528,41 @@ export default function Overlay() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Brief 1.5s indicator showing the current lyric-offset nudge value when
+// the user presses Ctrl+Alt+[ / Ctrl+Alt+]. Auto-fades out via a timer
+// so it doesn't sit on top of the lyrics permanently.
+function NudgeBanner({ banner }: { banner: { value: number; until: number } | null }) {
+  const [, force] = useState(0);
+  useEffect(() => {
+    if (!banner) return;
+    const remaining = banner.until - Date.now();
+    if (remaining <= 0) return;
+    const t = setTimeout(() => force((n) => n + 1), remaining + 50);
+    return () => clearTimeout(t);
+  }, [banner]);
+  if (!banner || Date.now() > banner.until) return null;
+  const sign = banner.value >= 0 ? "+" : "";
+  return (
+    <div
+      style={{
+        position: "absolute",
+        top: 4,
+        right: 8,
+        background: "rgba(0,0,0,0.55)",
+        color: "#d4af37",
+        padding: "2px 8px",
+        borderRadius: 6,
+        fontSize: 11,
+        fontVariantNumeric: "tabular-nums",
+        pointerEvents: "none",
+        letterSpacing: 0.5,
+      }}
+    >
+      lyric offset {sign}{banner.value} ms
     </div>
   );
 }

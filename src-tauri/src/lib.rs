@@ -264,9 +264,12 @@ fn build_tray(app: &tauri::AppHandle, initial_mode: OverlayMode) -> tauri::Resul
 }
 
 fn build_global_shortcut_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    use tauri::Emitter;
     use tauri_plugin_global_shortcut::{Builder, Code, Modifiers, Shortcut, ShortcutState};
 
     let cycle_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyL);
+    let nudge_back = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::BracketLeft);
+    let nudge_fwd = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::BracketRight);
 
     Builder::new()
         .with_handler(move |app, shortcut, event| {
@@ -278,6 +281,12 @@ fn build_global_shortcut_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
                     let next = OverlayMode::from_u8(state.load(Ordering::Acquire)).next();
                     apply_mode(app, next);
                 }
+            } else if shortcut == &nudge_back {
+                // Pull lyrics earlier (audio is ahead of lyrics).
+                let _ = app.emit("lyric-offset-nudge", -250i32);
+            } else if shortcut == &nudge_fwd {
+                // Push lyrics later (lyrics are running ahead of audio).
+                let _ = app.emit("lyric-offset-nudge", 250i32);
             }
         })
         .build()
@@ -286,8 +295,16 @@ fn build_global_shortcut_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
 fn register_hotkey(app: &tauri::AppHandle) -> tauri::Result<()> {
     use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
     let cycle_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyL);
-    if let Err(e) = app.global_shortcut().register(cycle_shortcut) {
-        eprintln!("[hotkey] failed to register Ctrl+Alt+L: {e}");
+    let nudge_back = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::BracketLeft);
+    let nudge_fwd = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::BracketRight);
+    for (name, sc) in [
+        ("Ctrl+Alt+L", cycle_shortcut),
+        ("Ctrl+Alt+[", nudge_back),
+        ("Ctrl+Alt+]", nudge_fwd),
+    ] {
+        if let Err(e) = app.global_shortcut().register(sc) {
+            eprintln!("[hotkey] failed to register {name}: {e}");
+        }
     }
     Ok(())
 }
