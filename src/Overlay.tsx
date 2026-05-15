@@ -30,6 +30,8 @@ const DEFAULT_SETTINGS: Settings = {
   show_translation: false,
   tint_bg_from_album_art: false,
   auto_contrast: true,
+  streamer_enabled: false,
+  streamer_port: 38247,
 };
 
 export default function Overlay() {

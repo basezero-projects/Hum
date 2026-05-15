@@ -39,6 +39,8 @@ export type Settings = {
   show_translation: boolean;
   tint_bg_from_album_art: boolean;
   auto_contrast: boolean;
+  streamer_enabled: boolean;
+  streamer_port: number;
 };
 
 export type WordSpan = { time_ms: number; text: string };

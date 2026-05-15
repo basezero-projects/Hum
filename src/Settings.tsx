@@ -225,6 +225,36 @@ export default function SettingsView() {
         </Hint>
       </Section>
 
+      <Section title="OBS / Streamer">
+        <Toggle
+          label="Expose lyrics as a browser source"
+          checked={s.streamer_enabled}
+          onChange={(v) => update("streamer_enabled", v)}
+        />
+        <Row label="Port">
+          <input
+            type="number"
+            min={1024}
+            max={65535}
+            value={s.streamer_port}
+            onChange={(e) => update("streamer_port", Number(e.target.value))}
+            style={{ ...inputStyle, width: 100, textAlign: "right" }}
+          />
+        </Row>
+        {s.streamer_enabled ? (
+          <Row label="Browser source URL">
+            <CopyableUrl value={`http://localhost:${s.streamer_port}/overlay`} />
+          </Row>
+        ) : null}
+        <Hint>
+          When on, runs a local HTTP server on the selected port. Paste the
+          URL above into OBS as a Browser Source (recommended size 1100×200,
+          custom CSS empty) — the overlay shows on your stream with a
+          transparent background, no chroma key needed. Off by default
+          since it opens a TCP port on localhost.
+        </Hint>
+      </Section>
+
       <footer
         style={{
           marginTop: 24,
@@ -414,6 +444,48 @@ function ColorInput({
         onChange={(e) => onChange(e.target.value)}
         style={{ ...inputStyle, width: 130, fontVariantNumeric: "tabular-nums", fontSize: 12 }}
       />
+    </div>
+  );
+}
+
+function CopyableUrl({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      // No-op: clipboard may be unavailable in some webviews.
+    }
+  };
+  return (
+    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+      <code
+        style={{
+          ...inputStyle,
+          fontFamily: "ui-monospace, SFMono-Regular, monospace",
+          fontSize: 12,
+          padding: "5px 10px",
+        }}
+      >
+        {value}
+      </code>
+      <button
+        onClick={onCopy}
+        style={{
+          background: "transparent",
+          color: copied ? "#7ad07a" : ACCENT,
+          border: `1px solid ${copied ? "rgba(122,208,122,0.5)" : "rgba(212,175,55,0.5)"}`,
+          borderRadius: 6,
+          padding: "5px 12px",
+          fontSize: 12,
+          cursor: "pointer",
+          fontFamily: "inherit",
+        }}
+      >
+        {copied ? "Copied" : "Copy"}
+      </button>
     </div>
   );
 }

@@ -17,6 +17,7 @@ mod contrast;
 mod lyrics;
 mod mode;
 mod settings;
+mod streamer;
 
 #[cfg(windows)]
 use smtc::{CurrentTrack, SharedSnapshot};
@@ -113,6 +114,9 @@ pub fn run() {
             // the user's last choice rather than always Edit.
             let loaded_settings = settings::load_from_store(&app.handle());
             let initial_mode = loaded_settings.last_mode;
+            // Capture streamer fields before move so we can apply after manage.
+            let streamer_enabled_at_start = loaded_settings.streamer_enabled;
+            let streamer_port_at_start = loaded_settings.streamer_port;
             app.manage::<SharedSettings>(Arc::new(RwLock::new(loaded_settings)));
 
             #[cfg(windows)]
@@ -128,10 +132,23 @@ pub fn run() {
             lyrics::start(app.handle().clone(), lyrics_shared, snap);
             contrast::start(app.handle().clone());
 
+            // Streamer / OBS browser-source HTTP server. Managed via the
+            // StreamerSupervisor in app state; toggled by the
+            // `streamer_enabled` setting. Apply initial settings here so
+            // a user who had it on at last close gets it back on start.
+            app.manage::<std::sync::Arc<streamer::StreamerSupervisor>>(
+                std::sync::Arc::new(streamer::StreamerSupervisor::new()),
+            );
+
             // Tray + mode submenu. We hold onto the CheckMenuItem handles via
             // managed state so apply_mode() can keep the checked indicator in
             // sync no matter how the mode was changed.
             let app_handle = app.handle().clone();
+            streamer::apply_settings(
+                &app_handle,
+                streamer_enabled_at_start,
+                streamer_port_at_start,
+            );
             build_tray(&app_handle, initial_mode)?;
 
             // Apply the loaded mode at startup so tray icon + tooltip + window

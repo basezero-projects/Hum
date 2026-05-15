@@ -4,6 +4,25 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.8.0] - 2026-05-14
+
+### Added
+- **OBS / browser-source streamer mode.** A new section in **Settings → OBS / Streamer** with a toggle (**Expose lyrics as a browser source**), a port input (default 38247), and a **Browser source URL** row with a Copy button. When enabled, the desktop app spins up a local HTTP server on `http://localhost:<port>` that exposes:
+  - **`GET /overlay`** (also at `/`) — a self-contained HTML page with inline CSS + JS that polls `/state` four times per second and renders the same 3-line lyrics layout (prev / cur / next, white text, dark drop shadow) the desktop overlay does. **Background is fully transparent**, so OBS browser source shows it cleanly over your stream without any chroma-key tricks. Recommended OBS source size: 1100×200.
+  - **`GET /state`** — JSON snapshot of `{ track, lyrics, cursor, server_now_ms }`. The server computes the current cursor position itself (mirroring the desktop's rAF logic) so consumers don't have to interpolate. Useful for any third-party tool that wants the lyric state — not just OBS.
+  - **`GET /healthz`** — minimal liveness probe returning `"ok"`.
+- The streamer toggles take effect immediately — no app restart needed. Toggling off cleanly shuts down the server task and frees the port. Settings persist across restarts (saved to `settings.json`); if you had it on at last close, it auto-starts on launch.
+- **Off by default** since enabling opens a TCP port on localhost.
+
+### Architecture / files
+- **`src-tauri/src/streamer.rs` (new)** — `start(app, port)` boots an axum 0.8 server on `127.0.0.1:<port>` with the three routes above, spawned on the existing tokio runtime via `tauri::async_runtime::spawn`. Returns a `ServerHandle` whose `Drop` impl sends a `oneshot::channel` shutdown signal to the server's `with_graceful_shutdown` so toggling streamer off cleanly stops it. `StreamerSupervisor` (held in Tauri-managed state) wraps a `Mutex<Option<ServerHandle>>` so `apply_settings(enabled, port)` can stop / start idempotently.
+- **`src-tauri/src/streamer_overlay.html` (new)** — embedded via `include_str!`. ~150 lines of inline HTML/CSS/JS. Polls `/state` every 250ms; renders prev/cur/next with the same fonts and shadow as the desktop overlay; status fallback for fetching/not_found/instrumental/etc. Album art is hidden in v1 (would need an extra `/art` endpoint serving the data URL — easy follow-up if streamers ask).
+- **`src-tauri/src/lib.rs`** — `mod streamer;`, manages `Arc<StreamerSupervisor>`, calls `streamer::apply_settings` once at setup with the loaded settings, and again from `update_settings` whenever settings change.
+- **`src-tauri/src/settings.rs`** — `streamer_enabled: bool` (default false), `streamer_port: u16` (default 38247, clamped to ≥1024 in `sanitize`). `update_settings` now also calls `streamer::apply_settings` so toggling the UI live-starts / stops the server.
+- **`src-tauri/Cargo.toml`** — `axum = "0.8.9"` added (with the `tokio` feature; pulls in `tower`, `hyper-util`, `serde_urlencoded`).
+- **`src/Settings.tsx`** — new **OBS / Streamer** section with toggle + port input + `CopyableUrl` component (gold "Copy" button that flips to green "Copied" for 1.2s on click).
+- **`src/types.ts`** + **`src/Overlay.tsx`** — `streamer_enabled` + `streamer_port` added to the `Settings` type and `DEFAULT_SETTINGS`.
+
 ## [0.7.7] - 2026-05-14
 
 ### Fixed

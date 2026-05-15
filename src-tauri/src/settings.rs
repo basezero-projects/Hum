@@ -44,6 +44,12 @@ pub struct Settings {
     /// light text — for readability over any background. Off by default
     /// because it overrides the user's `text_color` setting while active.
     pub auto_contrast: bool,
+    /// When on, spins up a local HTTP server on `streamer_port` that
+    /// serves `/state` (JSON snapshot) and `/overlay` (self-contained
+    /// HTML page) so OBS / browser-source streamers can embed the
+    /// lyrics in their stream. Off by default — opens a TCP port.
+    pub streamer_enabled: bool,
+    pub streamer_port: u16,
 }
 
 impl Default for Settings {
@@ -71,6 +77,10 @@ impl Default for Settings {
             // everywhere by default. Users who want fixed colors can
             // turn it off in Settings → Extras.
             auto_contrast: true,
+            streamer_enabled: false,
+            // 38247 chosen as an unused-by-known-services port. Users
+            // can change in Settings if it conflicts with anything local.
+            streamer_port: 38247,
         }
     }
 }
@@ -164,6 +174,9 @@ pub async fn update_settings(
         *s = merged.clone();
     }
     save_to_store(&app, &merged);
+    // React to streamer-enabled / port changes by starting or stopping the
+    // local HTTP server. Idempotent if no streamer fields changed.
+    crate::streamer::apply_settings(&app, merged.streamer_enabled, merged.streamer_port);
     let _ = app.emit("settings-changed", &merged);
     Ok(merged)
 }
@@ -224,6 +237,11 @@ fn sanitize(s: &mut Settings) {
     s.font_weight = s.font_weight.clamp(100, 900);
     s.bg_opacity = s.bg_opacity.clamp(0.0, 100.0);
     s.line_padding_px = s.line_padding_px.clamp(0, 64);
+    // Streamer port — keep above 1024 to avoid privileged-port issues,
+    // below 65535 obviously. 0 → fallback to default.
+    if s.streamer_port < 1024 {
+        s.streamer_port = defaults.streamer_port;
+    }
 }
 
 fn is_valid_hex_color(s: &str) -> bool {
