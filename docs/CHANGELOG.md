@@ -4,6 +4,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.6.5] - 2026-05-14
+
+### Changed
+- **Lyric text now scales with the overlay window size when you resize it in edit mode.** Previously dragging the window's bottom-right corner only changed the visible viewport — the text stayed the same fixed pixel size, so a smaller window just clipped it. Now font sizes (current line, prev / next dim lines, translation row) and the line-padding gap render in viewport-height units (`vh`) anchored to a baseline 200px window height. Drag the overlay shorter → everything in the lyric column shrinks proportionally → the side-by-side album art ResizeObserver picks up the new height and shrinks too. Drag taller → everything scales up. The **Current line size** slider value in Settings is the literal pixel size at the baseline 200px height; window 100px tall = half size, window 400px tall = double, linear in between.
+
 ## [0.6.4] - 2026-05-14
 
 ### Fixed

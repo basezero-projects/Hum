@@ -351,7 +351,7 @@ export default function Overlay() {
     flex: 1,
     minWidth: 0, // allows ellipsis on overflowing lines inside the flex child
     alignItems: alignToFlex(settings.text_align),
-    gap: settings.line_padding_px,
+    gap: pxToVh(settings.line_padding_px),
   };
 
   // Karaoke per-word render kicks in only when the current line came from a
@@ -520,7 +520,7 @@ function TranslationRow({ text, settings }: { text: string; settings: Settings }
   return (
     <div
       style={{
-        fontSize: Math.max(11, settings.font_size_px * 0.55),
+        fontSize: pxToVh(Math.max(11, settings.font_size_px * 0.55)),
         fontWeight: 400,
         color: settings.text_color_dim,
         textAlign: settings.text_align,
@@ -573,12 +573,17 @@ function LineRow({
   };
   const drag = dragRegion ? { "data-tauri-drag-region": true } : {};
   const useKaraoke = isCur && !!karaoke && !!text;
+  // Font sizes use vh (viewport-height-relative) so the text scales when
+  // the user drags the overlay window smaller / bigger in edit mode. The
+  // slider value is the literal pixel size at the baseline 200px window
+  // height; smaller window scales text down proportionally.
+  const sizePx = isCur ? settings.font_size_px : Math.max(12, settings.font_size_px * 0.6);
   return (
     <div
       ref={ref}
       {...drag}
       style={{
-        fontSize: isCur ? settings.font_size_px : Math.max(12, settings.font_size_px * 0.6),
+        fontSize: pxToVh(sizePx),
         fontWeight: isCur ? settings.font_weight : 400,
         // When karaoke is on, the per-word spans own their color. The container
         // color still matters for any leftover non-span text (none in practice).
@@ -657,6 +662,18 @@ function alignToFlex(a: TextAlign): React.CSSProperties["alignItems"] {
   if (a === "left") return "flex-start";
   if (a === "right") return "flex-end";
   return "center";
+}
+
+// The overlay window is resizable via the edit-mode drag corners. We want
+// the lyric text to scale WITH the window so dragging it smaller shrinks
+// the whole composition (text, gaps, art via the ResizeObserver chain)
+// instead of just cropping. The slider value in Settings is calibrated to
+// this baseline height — at 200px window height, font_size_px renders as
+// the literal pixel value the user picked. Window 100px tall → text is
+// half. Window 400px tall → text is double. Linear in viewport height.
+const BASELINE_WINDOW_HEIGHT_PX = 200;
+function pxToVh(px: number): string {
+  return `${((px / BASELINE_WINDOW_HEIGHT_PX) * 100).toFixed(3)}vh`;
 }
 
 // Convert hex (#rrggbb) + opacity-percent to rgba(...) string. Also accepts
