@@ -23,7 +23,7 @@ const DEFAULT_SETTINGS: Settings = {
   text_color_dim: "rgba(255,255,255,0.45)",
   bg_color: "#000000",
   bg_opacity: 0,
-  text_align: "center",
+  text_align: "left",
   line_padding_px: 6,
   layout_mode: "three_line",
   show_album_art: true,

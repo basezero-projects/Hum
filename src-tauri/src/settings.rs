@@ -53,7 +53,7 @@ impl Default for Settings {
             text_color_dim: "rgba(255,255,255,0.45)".to_string(),
             bg_color: "#000000".to_string(),
             bg_opacity: 0.0,
-            text_align: "center".to_string(),
+            text_align: "left".to_string(),
             line_padding_px: 6,
             layout_mode: "three_line".to_string(),
             show_album_art: true,

@@ -4,6 +4,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.6.1] - 2026-05-14
+
+### Changed
+- **Default Text alignment is now Left, not Center.** The first character of every lyric line now lands in the same horizontal position regardless of line length, so your eye doesn't have to chase the leading edge as lines change. Center alignment looked nicer when idle but actively hurt readability while singing along — short lines started further right, long lines started further left, and the constant jitter forced you to re-find the start of every line. The Settings → Typography → **Text alignment** dropdown still offers Left / Center / Right, so anyone who preferred Center can switch back. Existing installs with a saved `text_align: "center"` in their settings.json keep that value (no surprise change on upgrade); new installs and Reset-to-defaults now produce Left.
+
 ## [0.6.0] - 2026-05-14
 
 ### Added
