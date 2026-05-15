@@ -38,6 +38,12 @@ pub struct Settings {
     /// isn't available for the track. Defaults off so existing users aren't
     /// surprised by a color change after upgrading.
     pub tint_bg_from_album_art: bool,
+    /// When on, the overlay samples a small strip of pixels just outside
+    /// the window every ~2s and inverts the lyric text color based on the
+    /// background's luminance — light desktop → dark text, dark desktop →
+    /// light text — for readability over any background. Off by default
+    /// because it overrides the user's `text_color` setting while active.
+    pub auto_contrast: bool,
 }
 
 impl Default for Settings {
@@ -59,6 +65,7 @@ impl Default for Settings {
             show_album_art: true,
             show_translation: false,
             tint_bg_from_album_art: false,
+            auto_contrast: false,
         }
     }
 }

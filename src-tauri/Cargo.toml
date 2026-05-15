@@ -1,6 +1,6 @@
 [package]
 name = "lyric-overlay"
-version = "0.6.5"
+version = "0.7.0"
 description = "Real-time synced lyrics overlay for any Windows media source"
 authors = ["SYVR Studios"]
 edition = "2021"
@@ -26,6 +26,7 @@ reqwest = { version = "0.13", features = ["json", "cookies"] }
 base64 = "0.22"
 tempfile = "3"
 regex = "1"
+xcap = "0.9.4"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [

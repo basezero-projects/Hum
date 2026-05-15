@@ -38,6 +38,7 @@ export type Settings = {
   show_album_art: boolean;
   show_translation: boolean;
   tint_bg_from_album_art: boolean;
+  auto_contrast: boolean;
 };
 
 export type WordSpan = { time_ms: number; text: string };

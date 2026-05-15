@@ -212,6 +212,17 @@ export default function SettingsView() {
           checked={s.show_translation}
           onChange={(v) => update("show_translation", v)}
         />
+        <Toggle
+          label="Auto-contrast text (read background, invert if needed)"
+          checked={s.auto_contrast}
+          onChange={(v) => update("auto_contrast", v)}
+        />
+        <Hint>
+          Samples a strip of pixels just outside the overlay every ~2s and
+          flips text to white over dark backgrounds, dark over light. Useful
+          when the desktop / app behind the overlay isn't predictably dark.
+          Overrides the Text color settings while active.
+        </Hint>
       </Section>
 
       <footer

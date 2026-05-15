@@ -4,6 +4,19 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.7.0] - 2026-05-14
+
+### Added
+- **Auto-contrast text color toggle in Settings → Extras → Auto-contrast text (read background, invert if needed).** When on, the lyrics overlay reads what's behind it every ~2 seconds via a Windows desktop-capture worker (`xcap` crate, sampling a 240×30 strip just below the overlay window — falls back to a strip above when the below sample lands off-screen) and flips the text color based on the average background luminance: light desktop → near-black text (`#0a0a0a` for current line, `rgba(0,0,0,0.45)` for prev / next dim) so lyrics stay readable over a white browser tab; dark desktop → near-white text (`#ffffff` and `rgba(255,255,255,0.45)`) so they stay readable over a game / dark IDE / dark browser. Hysteresis around the 0.5 luminance threshold (only flips light → dark below 0.45, dark → light above 0.55) prevents the text from flickering when the bg sits near mid-gray. **Off by default** because it overrides the Text color settings while active — turn it on if you find the lyrics hard to read over varying backgrounds.
+
+### Architecture / files
+- **`src-tauri/src/contrast.rs` (new)** — `start(app)` spawns a tokio task that wakes every 2s, queries the overlay window's outer position + size, samples a 240px-wide strip outside it, computes average RGB + luminance via the standard `0.299 R + 0.587 G + 0.114 B` weighting, emits `bg-luminance` Tauri event with `{ luminance: 0..1, r, g, b }`. Sampling outside the overlay (rather than inside) avoids a feedback loop where the overlay's own text glyphs would skew the read. First sample failure is logged once; subsequent failures are silent to keep stderr quiet.
+- **`src-tauri/Cargo.toml`** — `xcap = "0.9.4"` added (cross-platform desktop capture; on Windows uses Direct3D 11 / DXGI desktop duplication).
+- **`src-tauri/src/lib.rs`** — `mod contrast;` + `contrast::start(app.handle().clone())` called in `setup()` after the overlay window exists.
+- **`src-tauri/src/settings.rs`** — `auto_contrast: bool` field added (default false). No new validator entry needed — bool is bool.
+- **`src/Overlay.tsx`** — listens for `bg-luminance` events, maintains `bgIsLight: boolean | null` state with hysteresis, derives `effectiveTextColor` / `effectiveTextColorDim` when toggle is on, passes a copied `settingsForRender` (with the overrides applied) into all `LineRow` and `TranslationRow` instances.
+- **`src/Settings.tsx`** — new toggle in Extras section with hint explaining the override.
+
 ## [0.6.5] - 2026-05-14
 
 ### Changed

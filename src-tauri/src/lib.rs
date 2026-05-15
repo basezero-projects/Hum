@@ -13,6 +13,7 @@ mod smtc;
 #[cfg(windows)]
 mod itunes;
 
+mod contrast;
 mod lyrics;
 mod mode;
 mod settings;
@@ -110,6 +111,7 @@ pub fn run() {
             }
 
             lyrics::start(app.handle().clone(), lyrics_shared, snap);
+            contrast::start(app.handle().clone());
 
             // Tray + mode submenu. We hold onto the CheckMenuItem handles via
             // managed state so apply_mode() can keep the checked indicator in

@@ -29,6 +29,7 @@ const DEFAULT_SETTINGS: Settings = {
   show_album_art: true,
   show_translation: false,
   tint_bg_from_album_art: false,
+  auto_contrast: false,
 };
 
 export default function Overlay() {
@@ -53,6 +54,10 @@ export default function Overlay() {
   // practice — the row height was driven by the image's intrinsic size).
   const [lyricsColEl, setLyricsColEl] = useState<HTMLDivElement | null>(null);
   const [artSize, setArtSize] = useState<number>(80);
+  // Background luminance from contrast.rs's screen-capture worker. Null
+  // until the first sample arrives. Frontend uses hysteresis around the
+  // threshold to avoid color-flicker on dynamic backgrounds (videos).
+  const [bgIsLight, setBgIsLight] = useState<boolean | null>(null);
 
   // Refs hold the hot-loop data so the rAF closure stays stable across
   // re-renders. Events update these AND the React state.
@@ -209,6 +214,21 @@ export default function Overlay() {
           extractDominantColor(e.payload.data_url).then(setTintColor);
         },
       ),
+      listen<{ luminance: number; r: number; g: number; b: number }>(
+        "bg-luminance",
+        (e) => {
+          // Hysteresis around 0.5: light → dark requires drop below 0.45,
+          // dark → light requires rise above 0.55. Stops flickering when
+          // bg sits near the threshold (e.g. mid-gray desktop).
+          setBgIsLight((prev) => {
+            const lum = e.payload.luminance;
+            if (prev === null) return lum > 0.5;
+            if (prev && lum < 0.45) return false;
+            if (!prev && lum > 0.55) return true;
+            return prev;
+          });
+        },
+      ),
     ];
 
     invoke<CurrentTrack>("get_current_track")
@@ -290,6 +310,18 @@ export default function Overlay() {
     : "transparent";
 
   const layoutMode: LayoutMode = settings.layout_mode;
+  // Auto-contrast override: when the toggle is on AND we have a luminance
+  // read, replace the user's text colors with high-contrast values.
+  const autoColorActive = settings.auto_contrast && bgIsLight !== null;
+  const effectiveTextColor = autoColorActive
+    ? (bgIsLight ? "#0a0a0a" : "#ffffff")
+    : settings.text_color;
+  const effectiveTextColorDim = autoColorActive
+    ? (bgIsLight ? "rgba(0,0,0,0.45)" : "rgba(255,255,255,0.45)")
+    : settings.text_color_dim;
+  const settingsForRender: Settings = autoColorActive
+    ? { ...settings, text_color: effectiveTextColor, text_color_dim: effectiveTextColorDim }
+    : settings;
   // When tint is on AND we have a color extracted from the current art, blend
   // the user's bg_color with the tint at 50/50 in RGB. Force a minimum 22%
   // opacity so the toggle is visibly doing something even when the user has
@@ -381,11 +413,11 @@ export default function Overlay() {
               text={middleText}
               kind="cur"
               dragRegion={isEdit}
-              settings={settings}
+              settings={settingsForRender}
               karaoke={curKaraoke}
             />
             {translationText ? (
-              <TranslationRow text={translationText} settings={settings} />
+              <TranslationRow text={translationText} settings={settingsForRender} />
             ) : null}
           </div>
         </div>
@@ -410,7 +442,7 @@ export default function Overlay() {
               text={line.text}
               kind={i === displayIdx ? "cur" : "prev"}
               dragRegion={isEdit}
-              settings={settings}
+              settings={settingsForRender}
               scrollIntoView={i === displayIdx}
               karaoke={i === displayIdx ? curKaraoke : undefined}
             />
@@ -420,7 +452,7 @@ export default function Overlay() {
             text={middleText}
             kind="cur"
             dragRegion={isEdit}
-            settings={settings}
+            settings={settingsForRender}
           />
         )}
       </div>
@@ -438,18 +470,18 @@ export default function Overlay() {
       <div style={innerRowStyle}>
         {showArt && albumArt ? <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} /> : null}
         <div ref={setLyricsColEl} style={lyricsColStyle}>
-          <LineRow text={prev?.text} kind="prev" dragRegion={isEdit} settings={settings} />
+          <LineRow text={prev?.text} kind="prev" dragRegion={isEdit} settings={settingsForRender} />
           <LineRow
             text={middleText}
             kind="cur"
             dragRegion={isEdit}
-            settings={settings}
+            settings={settingsForRender}
             karaoke={curKaraoke}
           />
           {translationText ? (
-            <TranslationRow text={translationText} settings={settings} />
+            <TranslationRow text={translationText} settings={settingsForRender} />
           ) : (
-            <LineRow text={next?.text} kind="next" dragRegion={isEdit} settings={settings} />
+            <LineRow text={next?.text} kind="next" dragRegion={isEdit} settings={settingsForRender} />
           )}
         </div>
       </div>
