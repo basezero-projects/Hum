@@ -16,6 +16,9 @@ mod smtc;
 #[cfg(windows)]
 mod web_bridge;
 
+#[cfg(windows)]
+mod backdrop;
+
 mod contrast;
 mod lyrics;
 mod mode;
