@@ -6,6 +6,20 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.10.9] - 2026-05-21
+
+### Fixed
+- **LRCLib now finds tracks like "Zach Bryan - Pink Skies | Lyrics".** The trailing `" | Lyrics"` (and other pipe-delimited YouTube uploader tags) was sitting outside the bracketed-noise cleaner, so the search query was `"Zach Bryan - Pink Skies | Lyrics"` — way too noisy for LRCLib's fulltext index to match the canonical `"Pink Skies"` record. Strip catches: `" | Lyrics"`, `" | Lyric"`, `" | Lyric Video"`, `" | Music Video"`, `" | Official Video"`, `" | Official Music Video"`, `" | Official Lyric Video"`, `" | Official HD Video"`, `" | Audio"`, `" | Visualizer"`, `" | HD"`, `" | UHD"`, `" | MV"`, `" | 4K"`, `" | 8K"`. Case-insensitive. Only stripped from the END of the title — interior pipes (e.g. `"Hard Out Here | Live at Glastonbury"`) are left alone. Combined with the existing v0.10.5 `strip_youtube_noise` retry that drops the leading `"Artist - "` prefix, the resolver chain for "Zach Bryan - Pink Skies | Lyrics" is now: clean_title strips `" | Lyrics"` → search "Zach Bryan - Pink Skies" → zero hits → retry with `strip_youtube_noise` → search "Pink Skies" → match.
+- **Removed the temporary demo update banner.** The gold "New Update Available: v0.11.0-demo" pill that was firing on every launch was leftover demo code from when the v0.10.7 banner UX was being designed. The real updater check (`tauri-plugin-updater`'s `check()` against the configured endpoint) is still wired up — it just won't show a banner until the endpoint actually serves a `latest.json` with a newer version than what's installed.
+
+### Architecture / files
+- **`src-tauri/src/lyrics.rs`** — new `pipe_tag_cleaner()` regex (case-insensitive, same noise vocabulary as the bracketed `cleaner()` plus `4k` / `8k`). `clean_title()` applies both cleaners in sequence: bracketed first, then pipe-tag. User-Agent bumped to `hum/0.10.9`.
+- **`src/Overlay.tsx`** — removed the `useEffect` that force-set `setUpdateState({ phase: "available", version: "0.11.0-demo", ... })` 800ms after mount, plus the `invoke("set_update_indicator", ...)` next to it. The genuine updater check that runs in the other `useEffect` (above the demo) is untouched.
+
+### Known limitations
+- Titles that use pipes for legit categorization at the END (e.g. `"Song | Album Name"`) would not be stripped — only the specific noise-keyword vocabulary is matched after the pipe. A hand-edited LRC search on LRCLib would still need to be done manually for those edge cases. Out of scope for this fix.
+- `" - Lyrics"` / `" Lyrics"` suffixes (without the pipe delimiter) are NOT stripped. Too risky given there are legitimate song titles ending in "Lyrics" (e.g. punk / hardcore song titles). Re-evaluate if a real-world case surfaces.
+
 ## [0.10.8] - 2026-05-21
 
 ### Added

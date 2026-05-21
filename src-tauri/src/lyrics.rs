@@ -30,7 +30,7 @@ use crate::smtc::SharedSnapshot;
 
 const STORE_FILE: &str = "lyrics-cache.json";
 const USER_AGENT: &str =
-    "hum/0.10.8 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
+    "hum/0.10.9 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WordSpan {
@@ -1061,8 +1061,37 @@ fn cleaner() -> &'static Regex {
     })
 }
 
+// Trailing pipe-delimited tags ("Song | Lyrics", "Song | Official Video",
+// "Song | Music Video", etc.) are an extremely common YouTube uploader
+// convention for lyric / promo videos. The bracketed `cleaner()` above
+// misses these because they sit outside `[]` / `()`. Stripped from the
+// END of the title only — interior pipes (e.g. "Hard Out Here | Live at
+// Glastonbury") are left alone.
+fn pipe_tag_cleaner() -> &'static Regex {
+    static C: OnceLock<Regex> = OnceLock::new();
+    C.get_or_init(|| {
+        Regex::new(
+            r"(?ix)
+              \s*\|\s*
+              (?:
+                  official\s+(?:music\s+|lyric\s+|hd\s+)?video |
+                  music\s+video |
+                  lyric\s+video |
+                  lyrics? |
+                  audio |
+                  visualizer |
+                  hd | uhd | mv | 4k | 8k
+              )
+              \s*$
+            ",
+        )
+        .unwrap()
+    })
+}
+
 pub fn clean_title(title: &str) -> String {
     let cleaned = cleaner().replace_all(title, "").to_string();
+    let cleaned = pipe_tag_cleaner().replace_all(&cleaned, "").to_string();
     cleaned.trim().to_string()
 }
 

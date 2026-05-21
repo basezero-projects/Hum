@@ -390,18 +390,6 @@ export default function Overlay() {
   // Backwards-compat name for the banner's onInstall prop.
   const installUpdate = installUpdateInternal;
 
-  // ─── TEMPORARY DEMO: force the update banner to appear so Wes can see
-  // what it looks like without an actual release endpoint configured.
-  // REMOVE BEFORE NEXT COMMIT.
-  useEffect(() => {
-    const t = window.setTimeout(() => {
-      setUpdateState({ phase: "available", version: "0.11.0-demo", update: null as unknown as Update });
-      invoke("set_update_indicator", { pendingVersion: "0.11.0-demo" }).catch(() => {});
-    }, 800);
-    return () => window.clearTimeout(t);
-  }, []);
-  // ─── END DEMO
-
   // Sync the album art's size to the lyrics column's measured height.
   // useLayoutEffect for the initial measure (before browser paint, so no
   // flash). ResizeObserver for live updates (font-size slider, line wrap,
