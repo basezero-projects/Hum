@@ -487,14 +487,27 @@ export default function Overlay() {
       ? lyrics.translation[displayIdx]?.text
       : undefined;
 
+  // Effective track for album-art matching. Web-bridge sources (Pandora)
+  // overwrite the SMTC title with the bridge-resolved real title at the
+  // lyrics-resolver layer, surfaced through `lyrics.track`. The SMTC
+  // `track` state still carries the garbage tab title ("Today's Hits
+  // Radio - Now Playing on Pandora") because that's what the OS gave us.
+  // Matching album-art against `track` alone would never display art for
+  // Pandora — we always prefer `lyrics.track` when its title is filled
+  // in, falling back to `track` for sources that don't go through a
+  // web-bridge override (YouTube / Spotify / iTunes / etc.).
+  const artMatchTrack =
+    lyrics?.track?.title?.trim()
+      ? lyrics.track
+      : track;
   // Album art only shows for the *currently playing* track — past art lingers
   // in state until the next album-art-loaded event arrives.
   const showArt =
     settings.show_album_art &&
     !!albumArt &&
-    !!track &&
-    albumArt.title === track.title &&
-    albumArt.artist === track.artist;
+    !!artMatchTrack &&
+    albumArt.title === artMatchTrack.title &&
+    albumArt.artist === artMatchTrack.artist;
 
   // Edit mode: drag-region active, dashed border on hover, move cursor.
   // Locked: no drag, no border. Ghost: same; the window is also click-through
@@ -548,10 +561,10 @@ export default function Overlay() {
   const tintActive =
     settings.tint_bg_from_album_art &&
     !!tintColor &&
-    !!track &&
+    !!artMatchTrack &&
     !!albumArt &&
-    albumArt.title === track.title &&
-    albumArt.artist === track.artist;
+    albumArt.title === artMatchTrack.title &&
+    albumArt.artist === artMatchTrack.artist;
   const effectiveBgColor = tintActive
     ? mixHexWithRgb(settings.bg_color, tintColor!, 0.5)
     : settings.bg_color;
@@ -566,9 +579,9 @@ export default function Overlay() {
   const showBlurBg =
     settings.blur_album_art_background &&
     !!albumArt &&
-    !!track &&
-    albumArt.title === track.title &&
-    albumArt.artist === track.artist;
+    !!artMatchTrack &&
+    albumArt.title === artMatchTrack.title &&
+    albumArt.artist === artMatchTrack.artist;
   // When the blur is active we drop the container's own bg paint and
   // render bgRgba as a layered absolute div above the blur instead.
   // Otherwise it'd cover the blur entirely (bg paints under flex

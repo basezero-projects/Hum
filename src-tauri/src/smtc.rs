@@ -495,30 +495,86 @@ fn build_itunes_http_client() -> Result<reqwest::Client> {
 /// style probes) to get a real album cover instead of whatever SMTC
 /// supplied (favicons, video thumbnails, etc.).
 ///
-/// Source preference:
-/// 1. iTunes Search API — Apple's catalog, 600×600 JPEG. Broad coverage
-///    of commercial releases, fast (~300ms typical).
-/// 2. Deezer Search API — fallback when iTunes misses. Different catalog
-///    (especially European / non-US-charting tracks). 1000×1000 JPEG.
-///    Public, no-auth, no quota at our usage levels.
+/// Source preference (each variant tried in turn until one returns):
+/// 1. iTunes Search API — Apple's catalog, 600×600 JPEG.
+/// 2. Deezer Search API — different catalog (especially European /
+///    non-US-charting tracks). 1000×1000 JPEG.
+///
+/// Query variants (tried in order until one of the sources returns
+/// a hit). The retry chain mostly exists for YouTube-style metadata
+/// where the SMTC artist field is a channel name (`"RockHype"`) and
+/// the actual artist is in the title (`"Kelly Clarkson - Since U
+/// Been Gone"`). Each variant is tried against iTunes first, then
+/// Deezer, before moving to the next variant.
+///   a. Original (artist, title) — works for clean SMTC metadata.
+///   b. (title_prefix, title_suffix) when title contains " - " —
+///      treats the title as `"Real Artist - Real Song"`, ignoring
+///      the channel-name artist field.
+///   c. ("", title) — title-only search, last resort when neither
+///      the SMTC artist nor any prefix in title looks like a real
+///      artist.
 ///
 /// Returns a `data:image/jpeg;base64,...` URL on success, `None` when
-/// both sources miss or all network steps fail.
+/// every variant misses or all network steps fail.
 pub async fn fetch_art_via_itunes(
     client: &reqwest::Client,
     artist: &str,
     title: &str,
 ) -> Option<String> {
+    // Variant a — try with the SMTC-supplied fields verbatim.
+    if let Some(url) = try_one_variant(client, artist, title, "as-is").await {
+        return Some(url);
+    }
+
+    // Variant b — if the title is shaped `"Real Artist - Real Song"`,
+    // try treating those halves as the real artist+title. Common for
+    // YouTube uploads where the channel name (the artist field) is not
+    // the performer.
+    if let Some((prefix, suffix)) = title.split_once(" - ") {
+        let real_artist = prefix.trim();
+        let real_title = suffix.trim();
+        // Avoid degenerate splits (empty halves, single-letter prefixes)
+        // and avoid redoing variant (a) when SMTC already supplied the
+        // same artist text via the title-prefix.
+        if !real_artist.is_empty()
+            && !real_title.is_empty()
+            && real_artist.len() >= 2
+            && !real_artist.eq_ignore_ascii_case(artist)
+        {
+            if let Some(url) =
+                try_one_variant(client, real_artist, real_title, "title-split").await
+            {
+                return Some(url);
+            }
+        }
+    }
+
+    // Variant c — title-only search. Some catalogs return useful matches
+    // when the artist filter is misleading or empty.
+    if let Some(url) = try_one_variant(client, "", title, "title-only").await {
+        return Some(url);
+    }
+
+    eprintln!("[smtc] art: all variants and sources missed for {artist:?} - {title:?}");
+    None
+}
+
+/// One query variant tried against both iTunes and Deezer in order.
+/// `label` is logged so we can see which variant ended up matching.
+async fn try_one_variant(
+    client: &reqwest::Client,
+    artist: &str,
+    title: &str,
+    label: &str,
+) -> Option<String> {
     if let Some(url) = fetch_art_itunes_only(client, artist, title).await {
-        eprintln!("[smtc] art: iTunes hit for {artist:?} - {title:?}");
+        eprintln!("[smtc] art: iTunes hit ({label}) for {artist:?} - {title:?}");
         return Some(url);
     }
-    eprintln!("[smtc] art: iTunes miss for {artist:?} - {title:?}, trying Deezer");
     if let Some(url) = fetch_art_deezer_only(client, artist, title).await {
-        eprintln!("[smtc] art: Deezer hit for {artist:?} - {title:?}");
+        eprintln!("[smtc] art: Deezer hit ({label}) for {artist:?} - {title:?}");
         return Some(url);
     }
-    eprintln!("[smtc] art: Deezer miss for {artist:?} - {title:?}");
     None
 }
 
