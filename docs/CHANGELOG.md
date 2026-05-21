@@ -1,8 +1,21 @@
-# Changelog — Lyric Overlay
+# Changelog — Hum
 
 All notable changes to this project. Updated on **every commit**, not at the end of a task.
 
+> The app shipped under the name **Lyric Overlay** through v0.10.1. Renamed to **Hum** in v0.10.2 (2026-05-21). Historical entries below still refer to the old name and the old `com.syvr.lyric-overlay` identifier — those references are accurate for the version they describe.
+
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
+
+## [0.10.2] - 2026-05-21
+
+### Changed
+- **App renamed from "Lyric Overlay" to "Hum".** Every user-visible string carrying the old name is updated: the system tray tooltip ("Hum — edit/locked/ghost mode"), the tray menu's "Quit" item ("Quit Hum"), the three Tauri window titles (overlay window: "Hum"; dev console: "Hum — Dev console"; settings: "Hum — Settings"), the dev console `<h1>` ("Hum — SMTC + iTunes + LRCLib dev console"), the OBS streamer browser-source page title ("Hum — OBS source"), and the Settings footer line showing where settings live ("Stored at %APPDATA%\com.syvr.hum\settings.json"). Underlying identifier `com.syvr.lyric-overlay` → `com.syvr.hum`. NSIS installer filename changes to `Hum_0.10.2_x64-setup.exe`. Updater endpoint moves to `https://github.com/syvrstudios/Hum/releases/latest/download/latest.json`. **Existing settings on disk do not migrate** — the new install reads from a fresh `%APPDATA%\com.syvr.hum` directory; the old `%APPDATA%\com.syvr.lyric-overlay` directory is left in place untouched (delete it manually if you don't want it lingering).
+
+### Architecture / files
+- **Identifier surface**: `package.json::name` (`lyric-overlay` → `hum`), `src-tauri/Cargo.toml` (`name`, `default-run` → `hum`; `lib.name` → `hum_lib`), `src-tauri/src/main.rs` (`lyric_overlay_lib::run()` → `hum_lib::run()`), `src-tauri/tauri.conf.json` (`productName`, `identifier`, 3 window titles, updater endpoint URL).
+- **User-facing strings**: `index.html` `<title>`, `src/DevConsole.tsx` `<h1>`, `src/Settings.tsx` settings-path display, `src-tauri/src/lib.rs` tray quit-item + tooltip format string, `src-tauri/src/mode.rs` tray tooltip format string, `src-tauri/src/streamer_overlay.html` `<title>`.
+- **Internal references**: `src-tauri/src/lyrics.rs` LRCLib User-Agent string (`lyric-overlay/0.1.0` → `hum/0.10.2`, repo URL updated), `src-tauri/src/itunes.rs` temp-file prefix (`lyric-overlay-itunes-` → `hum-itunes-`), `src-tauri/scripts/itunes_poll.ps1` comment.
+- **Repo move**: project pushed to `https://github.com/syvrstudios/Hum` for the first time (prior commits were local-only). Folder path on disk moves from `D:\Work\App_Projects\All_Projects\lyric-overlay\` to `D:\Work\App_Projects\All_Projects\Hum\`.
 
 ## [0.10.1] - 2026-05-21
 

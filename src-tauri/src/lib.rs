@@ -340,7 +340,7 @@ fn build_tray(app: &tauri::AppHandle, initial_mode: OverlayMode) -> tauri::Resul
         MenuItemBuilder::with_id("check-updates", "Check for updates").build(app)?;
     let toggle_console =
         MenuItemBuilder::with_id("toggle-console", "Show / Hide dev console").build(app)?;
-    let quit_item = MenuItemBuilder::with_id("quit", "Quit Lyric Overlay").build(app)?;
+    let quit_item = MenuItemBuilder::with_id("quit", "Quit Hum").build(app)?;
 
     let menu = MenuBuilder::new(app)
         .item(&toggle_overlay)
@@ -367,7 +367,7 @@ fn build_tray(app: &tauri::AppHandle, initial_mode: OverlayMode) -> tauri::Resul
         .icon(initial_icon)
         .icon_as_template(false)
         .tooltip(format!(
-            "Lyric Overlay — {} mode",
+            "Hum — {} mode",
             match initial_mode {
                 OverlayMode::Edit => "edit",
                 OverlayMode::Locked => "locked",

@@ -267,7 +267,7 @@ export default function SettingsView() {
         }}
       >
         <span style={{ opacity: 0.5, fontSize: 12 }}>
-          Stored at <code style={{ opacity: 0.7 }}>%APPDATA%\com.syvr.lyric-overlay\settings.json</code>
+          Stored at <code style={{ opacity: 0.7 }}>%APPDATA%\com.syvr.hum\settings.json</code>
         </span>
         <button onClick={reset} style={dangerButtonStyle}>
           Reset to defaults

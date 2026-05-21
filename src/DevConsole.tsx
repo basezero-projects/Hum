@@ -114,7 +114,7 @@ export default function DevConsole() {
           color: "#d4af37",
         }}
       >
-        Lyric Overlay — Phase 2: SMTC + iTunes + LRCLib dev console
+        Hum — SMTC + iTunes + LRCLib dev console
       </h1>
       <p style={{ fontSize: 12, color: "#888", margin: "4px 0 16px" }}>
         Play music in any Windows app. Lyrics fetch automatically on track change.

@@ -63,7 +63,7 @@ async fn run(
     smtc_playing: Arc<AtomicBool>,
 ) -> Result<()> {
     // Stage the script to a UNIQUE temp file per process. The previous fixed
-    // path (%TEMP%\lyric-overlay-itunes-poll.ps1) was writable by any process
+    // path (%TEMP%\hum-itunes-poll.ps1) was writable by any process
     // running as the same user, opening a TOCTOU window between fs::write and
     // PowerShell's -File read. NamedTempFile's random suffix closes that.
     //
@@ -74,7 +74,7 @@ async fn run(
     // auto-deletes the file when it drops at end of run().
     use std::io::Write;
     let mut tmp = tempfile::Builder::new()
-        .prefix("lyric-overlay-itunes-")
+        .prefix("hum-itunes-")
         .suffix(".ps1")
         .tempfile()
         .context("create temp script file")?;

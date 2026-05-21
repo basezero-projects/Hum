@@ -1,8 +1,8 @@
-# itunes_poll.ps1 — invoked by lyric-overlay's Rust backend.
+# itunes_poll.ps1 — invoked by Hum's Rust backend.
 #
 # Polls iTunes via its COM automation interface and writes one JSON line per
 # second to stdout. Each line contains the current track + state + position.
-# Lyric Overlay reads stdout and emits Tauri events.
+# Hum reads stdout and emits Tauri events.
 #
 # Notes:
 # - We never *launch* iTunes. We only attach when the iTunes process already

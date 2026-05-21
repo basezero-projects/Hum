@@ -30,7 +30,7 @@ use crate::smtc::SharedSnapshot;
 
 const STORE_FILE: &str = "lyrics-cache.json";
 const USER_AGENT: &str =
-    "lyric-overlay/0.1.0 (Windows desktop overlay; https://github.com/syvrstudios/lyric-overlay)";
+    "hum/0.10.2 (Windows desktop overlay; https://github.com/syvrstudios/Hum)";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WordSpan {

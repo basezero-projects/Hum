@@ -1,6 +1,8 @@
 @../CLAUDE.md
 
-# Lyric Overlay
+# Hum
+
+> Originally scaffolded as **Lyric Overlay**; renamed to **Hum** in v0.10.2 (2026-05-21). Identifier is `com.syvr.hum`; settings live at `%APPDATA%\com.syvr.hum\settings.json`.
 
 Windows desktop overlay that displays real-time synced lyrics for whatever music is currently playing on the system. Reads track metadata from Windows SMTC, fetches lyrics from LRCLib, renders as an always-on-top window. Player-agnostic — works with Spotify, Chrome-YouTube, iTunes, anything that exposes itself to SMTC.
 
@@ -71,4 +73,4 @@ Tauri desktop app — `git push` only when Wes asks. Auto-push is **off**.
 
 ## Icons
 
-Currently using Wren's icon set as a stand-in (SYVR Studios branded). Replace with a Lyric Overlay icon via `pnpm tauri icon path/to/source.png` before any release.
+Currently using Wren's icon set as a stand-in (SYVR Studios branded). Replace with a Hum icon via `pnpm tauri icon path/to/source.png` before any release.

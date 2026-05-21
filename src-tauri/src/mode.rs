@@ -92,7 +92,7 @@ pub fn apply_mode(app: &AppHandle, mode: OverlayMode) {
         if let Ok(img) = Image::from_bytes(icon_for(mode)) {
             let _ = tray.set_icon(Some(img));
         }
-        let _ = tray.set_tooltip(Some(format!("Lyric Overlay — {} mode", mode.as_str())));
+        let _ = tray.set_tooltip(Some(format!("Hum — {} mode", mode.as_str())));
     }
 
     if let Some(items) = app.try_state::<ModeMenuItems>() {

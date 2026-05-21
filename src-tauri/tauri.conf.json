@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Lyric Overlay",
-  "version": "0.10.1",
-  "identifier": "com.syvr.lyric-overlay",
+  "productName": "Hum",
+  "version": "0.10.2",
+  "identifier": "com.syvr.hum",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Lyric Overlay — Dev console",
+        "title": "Hum — Dev console",
         "width": 720,
         "height": 480,
         "center": true,
@@ -24,7 +24,7 @@
       },
       {
         "label": "overlay",
-        "title": "Lyric Overlay",
+        "title": "Hum",
         "width": 1100,
         "height": 130,
         "x": 200,
@@ -38,7 +38,7 @@
       },
       {
         "label": "settings",
-        "title": "Lyric Overlay — Settings",
+        "title": "Hum — Settings",
         "width": 560,
         "height": 680,
         "minWidth": 480,
@@ -74,7 +74,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/syvrstudios/lyric-overlay/releases/latest/download/latest.json"
+        "https://github.com/syvrstudios/Hum/releases/latest/download/latest.json"
       ],
       "pubkey": "",
       "windows": {
