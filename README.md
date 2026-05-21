@@ -24,7 +24,7 @@ Real-time synced lyrics overlay for Windows streamers and music listeners. It re
 
 ## Install
 
-Download the latest `.exe` installer from [GitHub Releases](https://github.com/syvrstudios/Hum/releases/latest). Installs per-user (no admin required). The app auto-updates on subsequent launches.
+Download the latest `.exe` installer from [GitHub Releases](https://github.com/basezero-projects/Hum/releases/latest). Installs per-user (no admin required). The app auto-updates on subsequent launches.
 
 ---
 

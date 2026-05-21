@@ -74,7 +74,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/syvrstudios/Hum/releases/latest/download/latest.json"
+        "https://github.com/basezero-projects/Hum/releases/latest/download/latest.json"
       ],
       "pubkey": "",
       "windows": {
