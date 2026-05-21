@@ -6,6 +6,19 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.10.13] - 2026-05-21
+
+### Added
+- **Line-swap motion when the song advances.** Each time a lyric line transitions (prev → cur → next slot, or the very first line of a freshly-fetched track), the new text now animates in with a brief lift-from-below + fade rather than instantly replacing the previous content. Animation is 340ms with a slight spring-overshoot easing (`cubic-bezier(0.34, 1.56, 0.64, 1)`) — fast enough to keep up with rapid lyric advances, springy enough to feel alive. Fires on all three rows simultaneously (prev / cur / next), so the entire row group moves as a unit when the song advances by one line. Pairs naturally with the v0.10.8 karaoke per-word gradient sweep: line-in motion handles between-line transitions, karaoke handles within-line word timing.
+
+### Architecture / files
+- **`src/index.css`** — new `@keyframes hum-line-in` (translateY 10px → 0, opacity 0 → 1, 60% keyframe holds opacity at 1 so the fade-in finishes before the spring-overshoot settle) and `.hum-line-in` class binding the animation with the easing curve. Lives in index.css instead of inline because `@keyframes` can't be expressed in React inline styles.
+- **`src/Overlay.tsx`** — `LineRow`'s render content (both karaoke per-word spans and plain-text branches) is now wrapped in a `<span key={text}>` with `className="hum-line-in"` and `display: inline-block`. The key change on text update remounts the wrapper, which triggers the CSS animation. `inline-block` is required because the animation uses `transform`, which doesn't apply to inline-level boxes. The karaoke per-word gradient animation (background-position transition on the inner spans) is independent of the line-in transform animation — they layer cleanly.
+
+### Diagnostic notes
+- The animation fires on EVERY render where the wrapper's text changes — including the initial mount (`♪` → first line) and the prev/next rows (whose text also rotates on each line advance). This is intentional: animating all three rows in sync looks like the row group moved up by one slot, even though structurally the rows just re-keyed their text.
+- The "lift-from-below" displacement is 10px regardless of font size. At very small font sizes (slider dragged way down) the lift is proportionally larger; at very large sizes it's proportionally smaller. Acceptable trade-off since the user's typical font range is 18-32px where 10px reads as a subtle hop. If this becomes a real issue, the keyframe could be ported to use `em` units.
+
 ## [0.10.12] - 2026-05-21
 
 ### Fixed

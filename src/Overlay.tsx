@@ -1122,40 +1122,51 @@ function LineRow({
         ...wrapStyle,
       }}
     >
-      {useKaraoke
-        ? karaoke!.words.map((w, i) => {
-            const idx = karaoke!.currentWordIdx;
-            const isPast = idx > i;
-            const isCurrent = idx === i;
-            const dur = wordDurationMs(karaoke!.words, i, karaoke!.nextTimeMs);
-            // Karaoke wipe: each word is filled with a two-stop gradient
-            // (lit on the left half, dim on the right half) clipped to the
-            // text glyphs via background-clip: text. background-position
-            // slides the gradient under the glyphs:
-            //   past    → 0% 0%   (lit half covers the word)
-            //   current → animates 100% → 0% (left-to-right sweep)
-            //   future  → 100% 0% (dim half covers the word)
-            // Smooth fill instead of the old abrupt dim→lit step.
-            const bgPos = isPast || isCurrent ? "0% 0%" : "100% 0%";
-            return (
-              <span
-                key={i}
-                style={{
-                  background: `linear-gradient(to right, ${settings.text_color} 0%, ${settings.text_color} 50%, ${settings.text_color_dim} 50%, ${settings.text_color_dim} 100%)`,
-                  backgroundSize: "200% 100%",
-                  backgroundPosition: bgPos,
-                  backgroundClip: "text",
-                  WebkitBackgroundClip: "text",
-                  color: "transparent",
-                  WebkitTextFillColor: "transparent",
-                  transition: isCurrent ? `background-position ${dur}ms linear` : "none",
-                }}
-              >
-                {w.text}
-              </span>
-            );
-          })
-        : text || "♪"}
+      {/* Wrapper span is keyed by the rendered line text so that whenever a
+          line advances (prev/cur/next all update), the wrapper remounts
+          and the `hum-line-in` CSS animation fires — a brief lift-from-
+          below + fade-in. inline-block is required because the animation
+          uses `transform`, which doesn't apply to plain inline boxes. */}
+      <span
+        key={text ?? ""}
+        className="hum-line-in"
+        style={{ display: "inline-block" }}
+      >
+        {useKaraoke
+          ? karaoke!.words.map((w, i) => {
+              const idx = karaoke!.currentWordIdx;
+              const isPast = idx > i;
+              const isCurrent = idx === i;
+              const dur = wordDurationMs(karaoke!.words, i, karaoke!.nextTimeMs);
+              // Karaoke wipe: each word is filled with a two-stop gradient
+              // (lit on the left half, dim on the right half) clipped to
+              // the text glyphs via background-clip: text. background-
+              // position slides the gradient under the glyphs:
+              //   past    → 0% 0%   (lit half covers the word)
+              //   current → animates 100% → 0% (left-to-right sweep)
+              //   future  → 100% 0% (dim half covers the word)
+              // Smooth fill instead of the old abrupt dim→lit step.
+              const bgPos = isPast || isCurrent ? "0% 0%" : "100% 0%";
+              return (
+                <span
+                  key={i}
+                  style={{
+                    background: `linear-gradient(to right, ${settings.text_color} 0%, ${settings.text_color} 50%, ${settings.text_color_dim} 50%, ${settings.text_color_dim} 100%)`,
+                    backgroundSize: "200% 100%",
+                    backgroundPosition: bgPos,
+                    backgroundClip: "text",
+                    WebkitBackgroundClip: "text",
+                    color: "transparent",
+                    WebkitTextFillColor: "transparent",
+                    transition: isCurrent ? `background-position ${dur}ms linear` : "none",
+                  }}
+                >
+                  {w.text}
+                </span>
+              );
+            })
+          : text || "♪"}
+      </span>
     </div>
   );
 }
