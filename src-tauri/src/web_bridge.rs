@@ -23,8 +23,10 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::RwLock;
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
-use windows::Win32::System::ProcessStatus::GetModuleBaseNameW;
-use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+use windows::Win32::System::Threading::{
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
+    PROCESS_QUERY_LIMITED_INFORMATION,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
 };
@@ -163,15 +165,31 @@ fn read_process_name_for_window(hwnd: HWND) -> String {
         Ok(h) => h,
         Err(_) => return String::new(),
     };
-    let mut name_buf = [0u16; 260];
-    let n = unsafe { GetModuleBaseNameW(handle, None, &mut name_buf) };
-    // Close the handle explicitly to avoid leaking on every window we enumerate.
+    // QueryFullProcessImageNameW works with PROCESS_QUERY_LIMITED_INFORMATION,
+    // whereas GetModuleBaseNameW requires PROCESS_VM_READ (which we don't
+    // have for most processes on a non-elevated session). Returns the full
+    // path; we extract the file name basename below.
+    let mut path_buf = [0u16; 1024];
+    let mut size: u32 = path_buf.len() as u32;
+    let result = unsafe {
+        QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_FORMAT(0),
+            windows::core::PWSTR(path_buf.as_mut_ptr()),
+            &mut size,
+        )
+    };
     let _ = unsafe { windows::Win32::Foundation::CloseHandle(handle) };
-    if n == 0 {
-        String::new()
-    } else {
-        String::from_utf16_lossy(&name_buf[..n as usize])
+    if result.is_err() || size == 0 {
+        return String::new();
     }
+    let full_path = String::from_utf16_lossy(&path_buf[..size as usize]);
+    // Extract basename — last path component after \ or /.
+    full_path
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or("")
+        .to_string()
 }
 
 // ─── Pandora UIA selector reference ────────────────────────────────────────
@@ -322,8 +340,17 @@ impl WebPlayerProbe for PandoraProbe {
         let automation = UIAutomation::new()
             .map_err(|e| anyhow::anyhow!("UIAutomation::new failed: {e:?}"))?;
 
-        // Find Chromium windows whose title ends with the Pandora suffix.
-        let hwnds = find_chrome_windows(|t| t.ends_with("Now Playing on Pandora"));
+        // Chrome only exposes the ACTIVE tab's title via the OS window
+        // text (GetWindowTextW). If Pandora is in a background tab, the
+        // window's title is whatever tab the user is currently looking at
+        // — Pandora is invisible to the title-filter approach. Enumerate
+        // ALL Chromium windows and let the UIA read step decide which one
+        // contains Pandora content. NOTE: Chrome's accessibility tree only
+        // includes the ACTIVE tab's DOM — backgrounded tabs are absent.
+        // So this still requires Pandora to be the active tab in some
+        // Chromium window. Documented limitation; the only known workaround
+        // is a browser extension, which Wes explicitly ruled out.
+        let hwnds = find_chrome_windows(|_| true);
         if hwnds.is_empty() {
             return Ok(None);
         }
