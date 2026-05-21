@@ -30,7 +30,7 @@ use crate::smtc::SharedSnapshot;
 
 const STORE_FILE: &str = "lyrics-cache.json";
 const USER_AGENT: &str =
-    "hum/0.10.16 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
+    "hum/0.10.17 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WordSpan {
@@ -290,17 +290,19 @@ async fn resolve_lyrics(
         // surface the peer timeout for debugging, but the user-facing status
         // is the clean miss, not a generic "error fetching lyrics."
         //
-        // Cache only when fully clean (no peer errors) — if a peer timed out
-        // we want the next track-change to retry from scratch in case the
-        // peer had the lyric and the authoritative-source response was a
-        // false NotFound (unlikely with LRCLib, but defensive).
-        if errors.is_empty() {
-            mem.write().await.insert(key.to_string(), CachedLyrics::NotFound);
-        }
+        // Don't cache NotFound in memory either. Combined with the symmetric
+        // disk-cache change in v0.10.15 (read_store discards NotFound,
+        // write_store skips NotFound), this means every track change re-runs
+        // the resolver against an unfindable track. The algorithm is still
+        // evolving — every recent release added new YouTube-noise patterns,
+        // punctuation normalization, or duration tweaks — and caching
+        // NotFound was masking those improvements within a session. Cost:
+        // ~1-2s of parallel API calls per replay of an unfindable track,
+        // which runs in the background and doesn't block the overlay UI.
         Outcome {
             cached: CachedLyrics::NotFound,
             source: "all-sources".into(),
-            persist: errors.is_empty(),
+            persist: false,
             errors,
         }
     } else {
@@ -652,13 +654,18 @@ fn pick_best(
     //      that differ only in Unicode punctuation flavor (which LRCLib
     //      uploads do — e.g. "The Man Who Can't Be Moved" vs "The Man
     //      Who Can't Be Moved" in the same search response).
-    //   2. Duration within ±5s of the requested track — covers/remixes of
-    //      the same name usually have very different lengths. This was
-    //      the Duka/Toxic risk: Ashnikko's 163s Toxic shouldn't get
-    //      picked when a 203s Toxic was requested.
+    //   2. Duration within ±10s of the requested track — covers/remixes
+    //      of the same name usually have very different lengths (Ashnikko's
+    //      163s Toxic vs Britney's 203s Toxic = 40s diff, comfortably
+    //      filtered out). Widened from ±5s in v0.10.17 because YouTube
+    //      lyric-video uploads routinely add 5-10s intro/outro screens —
+    //      "The Script - The Man Who Can't Be Moved (Lyrics)" plays at
+    //      ~249s on YouTube while every LRCLib record is 240-244s. ±5s
+    //      was rejecting the entire match set. ±10s catches the padding
+    //      without becoming permissive enough to confuse unrelated covers.
     let requested_secs = requested_duration_ms as i64 / 1000;
     let title_l = normalize_for_match(title);
-    let tolerance_secs: i64 = 5;
+    let tolerance_secs: i64 = 10;
 
     let mut candidates: Vec<_> = records
         .into_iter()

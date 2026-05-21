@@ -6,6 +6,19 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.10.17] - 2026-05-21
+
+### Fixed
+- **LRCLib now finds "The Script - The Man Who Can't Be Moved (Lyrics)" and similar YouTube lyric videos with intro/outro padding.** Duration filter widened from ±5s to ±10s. The previous filter assumed the playing track's duration would land within 5s of the canonical recording — true for Spotify (which reports the exact studio length) but wrong for YouTube uploads, where lyric-video creators routinely add 5-10s of black screens, title cards, or fadeouts. Live LRCLib data for "The Man Who Can't Be Moved" shows records at 240-244s; the typical YouTube lyric video plays at ~249s, leaving every match strictly outside the ±5s window. ±10s catches the padding while still comfortably rejecting unrelated covers (the canonical Toxic disambiguation example — Ashnikko 163s vs Britney 203s — is a 40s diff and still gets filtered out cleanly).
+- **In-memory NotFound cache no longer survives the session.** v0.10.15 stopped persisting NotFound to disk, but the in-memory cache (used to avoid redundant API calls within a single session) was still writing NotFound entries, so a track that failed under an older resolver version stayed failed for the rest of the running session even after a Hum upgrade — the user had to fully restart the app to get a fresh resolution attempt. Mem cache write is now skipped for NotFound results to match the disk-cache behavior. Cost: each replay of an unfindable track within a session now re-hits the 3 lyric sources in parallel (~1-2s of background work, doesn't block the overlay UI). Acceptable while the resolver heuristics are still being tuned.
+
+### Architecture / files
+- **`src-tauri/src/lyrics.rs`** — `pick_best`'s `tolerance_secs` constant changed from 5 to 10, with an updated comment explaining the YouTube lyric-video padding rationale and reconfirming the Toxic example is still safely disambiguated at the wider tolerance. The `if any_clean_notfound { ... }` branch in `resolve_lyrics` no longer writes `CachedLyrics::NotFound` to the `mem` RwLock, and `persist: errors.is_empty()` becomes the unconditional `persist: false` (the disk write was already a no-op for NotFound since v0.10.15, but the field is now correctly set to false on the data path so the value matches the behavior). User-Agent bumped to `hum/0.10.17`.
+
+### Diagnostic notes
+- The combination of all the lyric-finding fixes since v0.10.10 — pipe-tag cleaner (v0.10.9), `(Official Audio)` parens (v0.10.11), `pick_best` retry on filter-fail (v0.10.12), Unicode punctuation normalization (v0.10.14), disk-cache NotFound discard (v0.10.15), mem-cache NotFound skip + ±10s duration tolerance (this release) — should leave very few real-world tracks unresolved. If a NotFound report surfaces after v0.10.17, the next layers to investigate are: artist-cleaner gaps for less-common YouTube channel suffixes, SimpMusic / NetEase per-source filters, and LRCLib upload coverage (some niche tracks genuinely aren't on LRCLib).
+- Wider duration tolerance does mean ambiguous-name tracks with similar runtimes ("Closer" by Chainsmokers vs NIN — 4:04 vs 4:38, comfortably outside ±10s) stay safe, but two same-name songs within 10s of each other could now resolve to the wrong record. Mitigations already in place: title substring match is bidirectional + Unicode-normalized; sort prefers synced. If this becomes a real-world issue, the next step is adding an artist-substring tiebreaker in `pick_best` (the `_artist` param is currently ignored).
+
 ## [0.10.16] - 2026-05-21
 
 ### Added
