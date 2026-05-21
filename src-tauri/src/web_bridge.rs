@@ -1,4 +1,3 @@
-#![allow(dead_code)] // Removed in Task 8 when lyrics.rs starts consulting the bridge.
 //! Web-player bridge — fills in track metadata for browser-based players
 //! that don't expose `navigator.mediaSession.metadata` correctly to Windows
 //! SMTC. Pandora.com is the motivating case: SMTC gets the browser tab
@@ -103,6 +102,10 @@ fn is_chromium_process(name: &str) -> bool {
 /// Multi-process Chrome: UIA queries against the top-level window handle
 /// reach into whichever renderer process is hosting that window's content,
 /// so we don't need to chase the per-tab child processes ourselves.
+///
+/// NOTE: called by PandoraProbe::read() in Task 5 (UIA tree walk, blocked
+/// on inspect.exe verification). The allow is item-scoped, not file-wide.
+#[allow(dead_code)]
 fn find_chrome_windows<F: Fn(&str) -> bool>(predicate: F) -> Vec<HWND> {
     struct Ctx<'a> {
         predicate: &'a dyn Fn(&str) -> bool,
@@ -141,6 +144,8 @@ fn find_chrome_windows<F: Fn(&str) -> bool>(predicate: F) -> Vec<HWND> {
     ctx.hits
 }
 
+// Called by find_chrome_windows (Task 5).
+#[allow(dead_code)]
 fn read_window_title(hwnd: HWND) -> String {
     let mut buf = [0u16; 512];
     // GetWindowTextW returns the number of characters copied, NOT
@@ -153,6 +158,8 @@ fn read_window_title(hwnd: HWND) -> String {
     String::from_utf16_lossy(&buf[..n as usize])
 }
 
+// Called by find_chrome_windows (Task 5).
+#[allow(dead_code)]
 fn read_process_name_for_window(hwnd: HWND) -> String {
     let mut pid: u32 = 0;
     let _ = unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };

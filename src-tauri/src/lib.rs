@@ -208,15 +208,15 @@ pub fn run() {
                 let shared_bridge: web_bridge::SharedWebBridge =
                     std::sync::Arc::new(tokio::sync::RwLock::new(None));
                 app.manage(shared_bridge.clone());
-                web_bridge::start(app.handle().clone(), snap.clone(), shared_bridge);
+                web_bridge::start(app.handle().clone(), snap.clone(), shared_bridge.clone());
+                lyrics::start(app.handle().clone(), lyrics_shared, snap, shared_bridge);
             }
             #[cfg(not(windows))]
             {
                 let _ = &smtc_active;
                 let _ = &art_state;
+                lyrics::start(app.handle().clone(), lyrics_shared, snap);
             }
-
-            lyrics::start(app.handle().clone(), lyrics_shared, snap);
             contrast::start(app.handle().clone());
 
             // Streamer / OBS browser-source HTTP server. Managed via the

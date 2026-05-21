@@ -115,7 +115,12 @@ pub enum Status {
 
 pub type SharedLyrics = Arc<RwLock<CurrentLyrics>>;
 
-pub fn start(app: AppHandle, shared: SharedLyrics, snapshot: SharedSnapshot) {
+pub fn start(
+    app: AppHandle,
+    shared: SharedLyrics,
+    snapshot: SharedSnapshot,
+    #[cfg(windows)] web_bridge: crate::web_bridge::SharedWebBridge,
+) {
     let (tx, mut rx) = mpsc::unbounded_channel::<()>();
 
     // Subscribe to track-changed via Tauri's event bus. We only need a wakeup
@@ -124,6 +129,18 @@ pub fn start(app: AppHandle, shared: SharedLyrics, snapshot: SharedSnapshot) {
     app.listen_any("track-changed", move |_event| {
         let _ = tx_track.send(());
     });
+
+    // Bridge probes (web_bridge.rs) emit web-bridge-updated when they
+    // read a new track from Chrome's UIA tree. Wake the resolver loop
+    // through the same channel — the bridge-cache consultation below
+    // picks up the fresh values.
+    #[cfg(windows)]
+    {
+        let tx_bridge = tx.clone();
+        app.listen_any("web-bridge-updated", move |_event| {
+            let _ = tx_bridge.send(());
+        });
+    }
 
     tauri::async_runtime::spawn(async move {
         let client = match build_client() {
@@ -142,32 +159,101 @@ pub fn start(app: AppHandle, shared: SharedLyrics, snapshot: SharedSnapshot) {
 
         while rx.recv().await.is_some() {
             let snap = { snapshot.read().await.clone() };
-            if snap.title.trim().is_empty() {
+
+            // Consult the web-player bridge. If a probe wrote real track info
+            // within the staleness window (5s), use that. Otherwise fall back
+            // to SMTC's snapshot. Pandora.com is the motivating case — SMTC
+            // sees only the browser tab title; the bridge fills in the real
+            // song via UIA.
+            #[cfg(windows)]
+            let (effective_title, effective_artist, effective_album, bridge_fresh, unreliable_no_bridge) = {
+                let bridge_track = {
+                    let b = web_bridge.read().await;
+                    b.clone()
+                };
+                let now_unix_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0);
+                let fresh = bridge_track
+                    .as_ref()
+                    .is_some_and(|t| now_unix_ms - t.last_seen_unix_ms < 5_000 && !t.title.trim().is_empty());
+
+                let (title, artist, album) = if fresh {
+                    let t = bridge_track.as_ref().unwrap();
+                    (t.title.clone(), t.artist.clone(), t.album.clone())
+                } else {
+                    (snap.title.clone(), snap.artist.clone(), snap.album.clone())
+                };
+
+                // If SMTC's title matches a known-unreliable-source probe AND
+                // we don't have fresh bridge data, surface Unsupported instead
+                // of running the resolver against the garbage SMTC title.
+                // Pandora web with the UIA probe broken / not-yet-read is the
+                // motivating case — we'd otherwise look up the browser tab
+                // title as if it were a song and get noise back.
+                let unreliable = !fresh
+                    && crate::web_bridge::any_probe_detects(
+                        &snap.title,
+                        snap.source_app_id.as_deref().unwrap_or(""),
+                    );
+
+                (title, artist, album, fresh, unreliable)
+            };
+
+            #[cfg(not(windows))]
+            let (effective_title, effective_artist, effective_album, bridge_fresh, unreliable_no_bridge) = (
+                snap.title.clone(),
+                snap.artist.clone(),
+                snap.album.clone(),
+                false,
+                false,
+            );
+
+            let _ = bridge_fresh; // consumed via unreliable_no_bridge path only
+
+            if effective_title.trim().is_empty() {
                 continue;
             }
-            // Empty artist is no longer a skip — common on YouTube auto-
-            // generated Topic videos where the song name is the title and
-            // there's no separate artist field. `resolve_lyrics` now runs a
-            // title-only LRCLib search in that case via the artist-empty
-            // branch in `try_search_lrclib`, plus the simpmusic / netease
-            // fallbacks which already tolerate empty artist in their pick-
-            // best filters.
-            let key = cache_key(&snap.artist, &snap.title, snap.duration_ms);
+
+            let key = cache_key(&effective_artist, &effective_title, snap.duration_ms);
             if key == last_key {
                 continue;
             }
             last_key = key.clone();
 
             let track = TrackEcho {
-                title: snap.title.clone(),
-                artist: snap.artist.clone(),
-                album: snap.album.clone(),
+                title: effective_title.clone(),
+                artist: effective_artist.clone(),
+                album: effective_album.clone(),
                 duration_ms: snap.duration_ms,
             };
 
-            // Mark fetching. Note the `errors: vec![]` reset — we don't want
-            // stale errors from a previous track's resolution to leak into the
-            // dev console while this one is still in flight.
+            if unreliable_no_bridge {
+                // Short-circuit: emit Unsupported, do NOT hit any network source.
+                // The resolver's normal LRCLib / SimpMusic / NetEase chain would
+                // burn an HTTP round trip on a non-song query and return NotFound
+                // anyway. Skipping it saves the round trip and renders the
+                // honest "Pandora web — track info unavailable" message.
+                apply_outcome(
+                    &app,
+                    &shared,
+                    &key,
+                    &track,
+                    Outcome {
+                        cached: CachedLyrics::Unsupported,
+                        source: "unsupported-source".into(),
+                        persist: false,
+                        errors: Vec::new(),
+                    },
+                )
+                .await;
+                continue;
+            }
+
+            // Mark fetching. The `errors: vec![]` reset prevents stale errors
+            // from a previous track's resolution from leaking into the dev
+            // console while this one is still in flight.
             {
                 let mut s = shared.write().await;
                 *s = CurrentLyrics {
