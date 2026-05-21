@@ -6,6 +6,19 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.10.18] - 2026-05-21
+
+### Fixed
+- **Auto-contrast now respects the overlay's own background.** When the blurred album-art background (v0.10.8) was on and the desktop behind happened to be light — e.g. a white-themed YouTube tab, a Word doc — the previous auto-contrast logic sampled the screen-behind-the-window luminance, decided "background is light → use dark text," and rendered black text directly on top of the dark blurred album art. Result: nearly invisible dark-on-dark lyrics for the entire song. Auto-contrast now composites the actual surface the user sees through the lyric text: blurred album art (dimmed at brightness 0.62) → user `bg_color` alpha-blended on top at `bg_opacity` → only falls back to the screen sample when neither has any signal. Hysteresis (light → dark crosses 0.45, dark → light crosses 0.55) is unchanged but now applied to the composited luminance so it correctly debounces transitions caused by track changes (album-art swaps producing new tint colors) instead of just transitions from a video playing on the desktop behind.
+
+### Architecture / files
+- **`src/Overlay.tsx`** — state shape changed: `bgIsLight: boolean | null` is now `surfaceIsLight: boolean | null`, sourced from a derived `surfaceLuminance: number | null` computed each render via the new `computeSurfaceLuminance` helper. New `screenLuminance: number | null` state holds the raw value from `contrast.rs`'s `bg-luminance` event (the listener no longer applies hysteresis there — it just stores the value). A `useEffect` keyed on `surfaceLuminance` applies the hysteresis pass and updates `surfaceIsLight`. `autoColorActive` / `effectiveTextColor` / `effectiveTextColorDim` / `effectiveTextShadow` all use `surfaceIsLight` instead of the old `bgIsLight`. Two new pure helpers near the existing color utilities: `computeSurfaceLuminance` (composites screen + blur+tint + user-bg layers back-to-front, returns 0..1 or null), and `hexLuminance` (luminance of a `#rrggbb` color, returns 0..1 or null).
+
+### Diagnostic notes
+- Composite math: screen layer is the raw `screenLum` from `contrast.rs`. Blur layer is `(0.299·r + 0.587·g + 0.114·b) / 255 · 0.62` from the extracted dominant `tintColor`, where the 0.62 multiplier mirrors the CSS `filter: brightness(0.62)` on the blur element. User layer is `hexLuminance(bg_color) * (bg_opacity/100) + previous * (1 - bg_opacity/100)`. When `showBlurBg` is true the blur layer replaces the screen layer (the blur opaquely covers it). When `bgOpacityPct = 0` the user layer is a no-op.
+- For the typical case Wes hit (blurred bg ON, light desktop behind): screen layer is now ignored entirely because the blur covers it; blur layer's luminance comes from the dimmed album art (usually 0.1-0.3 — solidly dark); user layer at default `bg_opacity=0` is also a no-op; final composited luminance ~= 0.15-0.25 → `surfaceIsLight=false` → white text. Correct.
+- If a user wants to force a specific text color regardless of background detection, the "Auto contrast" toggle in Settings → Extras (still defaults ON because most setups benefit) remains the master switch — turning it off uses the user's explicit `text_color` / `text_color_dim` everywhere.
+
 ## [0.10.17] - 2026-05-21
 
 ### Fixed

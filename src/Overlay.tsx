@@ -63,10 +63,20 @@ export default function Overlay() {
   // Inner row element ref — drives the auto-resize of the window's
   // height to match content. No empty space inside the window.
   const [innerRowEl, setInnerRowEl] = useState<HTMLDivElement | null>(null);
-  // Background luminance from contrast.rs's screen-capture worker. Null
-  // until the first sample arrives. Frontend uses hysteresis around the
-  // threshold to avoid color-flicker on dynamic backgrounds (videos).
-  const [bgIsLight, setBgIsLight] = useState<boolean | null>(null);
+  // Raw screen-behind-the-window luminance from contrast.rs's screen-
+  // capture worker (0..1, null until the first sample arrives). Used as
+  // ONE input to the composited overlay-surface luminance below — when
+  // the overlay has its own blurred-bg or opaque user-bg painted on top,
+  // the screen luminance is mostly irrelevant for what the user actually
+  // sees through the overlay's surface.
+  const [screenLuminance, setScreenLuminance] = useState<number | null>(null);
+  // Final boolean: is the surface UNDER the lyric text visually light?
+  // Drives the auto-contrast text-color flip. Computed each render from
+  // (screenLuminance, blur-bg, tint color, user bg color, bg opacity),
+  // then debounced through hysteresis to avoid flickering when the
+  // surface luminance hovers near the 0.5 threshold (dynamic videos
+  // behind a transparent overlay are the classic culprit).
+  const [surfaceIsLight, setSurfaceIsLight] = useState<boolean | null>(null);
   // Window inner dimensions — drives the scale factor for text + gap +
   // album art sizing. Updates on resize via the listener below.
   const [winSize, setWinSize] = useState<{ w: number; h: number }>({
@@ -260,16 +270,11 @@ export default function Overlay() {
       listen<{ luminance: number; r: number; g: number; b: number }>(
         "bg-luminance",
         (e) => {
-          // Hysteresis around 0.5: light → dark requires drop below 0.45,
-          // dark → light requires rise above 0.55. Stops flickering when
-          // bg sits near the threshold (e.g. mid-gray desktop).
-          setBgIsLight((prev) => {
-            const lum = e.payload.luminance;
-            if (prev === null) return lum > 0.5;
-            if (prev && lum < 0.45) return false;
-            if (!prev && lum > 0.55) return true;
-            return prev;
-          });
+          // Just stash the raw value. Compositing with blur/tint/user-bg
+          // and the hysteresis pass run downstream in a useEffect so the
+          // final decision reflects what the user actually sees on the
+          // overlay's own surface, not just the screen behind.
+          setScreenLuminance(e.payload.luminance);
         },
       ),
     ];
@@ -502,13 +507,15 @@ export default function Overlay() {
 
   const layoutMode: LayoutMode = settings.layout_mode;
   // Auto-contrast override: when the toggle is on AND we have a luminance
-  // read, replace the user's text colors with high-contrast values.
-  const autoColorActive = settings.auto_contrast && bgIsLight !== null;
+  // read for the OVERLAY SURFACE (not the screen behind — see the
+  // composited-luminance useEffect below), replace the user's text colors
+  // with high-contrast values.
+  const autoColorActive = settings.auto_contrast && surfaceIsLight !== null;
   const effectiveTextColor = autoColorActive
-    ? (bgIsLight ? "#0a0a0a" : "#ffffff")
+    ? (surfaceIsLight ? "#0a0a0a" : "#ffffff")
     : settings.text_color;
   const effectiveTextColorDim = autoColorActive
-    ? (bgIsLight ? "rgba(0,0,0,0.45)" : "rgba(255,255,255,0.45)")
+    ? (surfaceIsLight ? "rgba(0,0,0,0.45)" : "rgba(255,255,255,0.45)")
     : settings.text_color_dim;
   // Scale factor: driven by WIDTH only since height auto-follows content
   // (see the innerRow ResizeObserver above). Drag the window wider →
@@ -525,11 +532,11 @@ export default function Overlay() {
     line_padding_px: Math.max(0, Math.round(baseSettings.line_padding_px * scale)),
   };
   // Text shadow is the opposite color of the text — black halo over light
-  // bg made the dark text invisible. When auto-contrast says the bg is
-  // light, we render dark text + WHITE halo. Otherwise default = light
+  // bg made the dark text invisible. When auto-contrast says the surface
+  // is light, we render dark text + WHITE halo. Otherwise default = light
   // text + BLACK halo (works against any dark / mid-tone background).
   const effectiveTextShadow =
-    autoColorActive && bgIsLight
+    autoColorActive && surfaceIsLight
       ? "0 2px 6px rgba(255,255,255,0.95), 0 0 14px rgba(255,255,255,0.7)"
       : "0 2px 6px rgba(0,0,0,0.95), 0 0 14px rgba(0,0,0,0.65)";
   // When tint is on AND we have a color extracted from the current art, blend
@@ -567,6 +574,37 @@ export default function Overlay() {
   // content but ABOVE absolute children with z-auto in the same
   // stacking context).
   const containerBg = showBlurBg ? "transparent" : bgRgba;
+
+  // Composite luminance of what the user actually sees through the lyric
+  // text. Back-to-front: screen-behind → blurred album art (if active) →
+  // user bg_color (alpha-blended at effectiveOpacity). Without this
+  // composition, auto-contrast was sampling only the screen behind and
+  // flipping the lyrics to dark text whenever the desktop happened to
+  // be light — a regression for the v0.10.8 blurred-bg case where the
+  // user actually sees a DARK surface (blur+brightness(0.62) is dark
+  // for >95% of album arts) but the screen sample said "light, use
+  // dark text" → unreadable dark-on-dark.
+  const surfaceLuminance = computeSurfaceLuminance({
+    screenLum: screenLuminance,
+    showBlurBg,
+    tintColor,
+    bgColor: effectiveBgColor,
+    bgOpacityPct: effectiveOpacity,
+  });
+
+  // Hysteresis around 0.5: light → dark requires drop below 0.45, dark
+  // → light requires rise above 0.55. Stops flickering when the
+  // composited luminance hovers near the threshold (e.g. mid-tone
+  // album art on a transparent overlay over a mid-gray desktop).
+  useEffect(() => {
+    if (surfaceLuminance === null) return;
+    setSurfaceIsLight((prev) => {
+      if (prev === null) return surfaceLuminance > 0.5;
+      if (prev && surfaceLuminance < 0.45) return false;
+      if (!prev && surfaceLuminance > 0.55) return true;
+      return prev;
+    });
+  }, [surfaceLuminance]);
 
   // Outer frame for all layouts: full window, visual chrome, vertical centering
   // of the inner content. The inner row (3-line / single-line) OR the inner
@@ -1267,6 +1305,62 @@ function colorWithOpacity(color: string, opacityPct: number): string {
 // Linear-interpolate a hex color (#rrggbb) toward an RGB color. t=0 → all hex,
 // t=1 → all rgb. Returns rgb(r,g,b). Used for tinting the user's bg_color
 // toward the album-art dominant color.
+// Perceived luminance (0..1) of the surface the user sees through the
+// lyric text, composited back-to-front from:
+//   1. Screen behind the overlay window (when no own bg is present).
+//   2. Blurred album-art layer — dimmed by brightness(0.62) in CSS, so we
+//      derive its luminance from the extracted dominant tint scaled by
+//      the same multiplier.
+//   3. User bg_color alpha-blended over the above at bg_opacity/100.
+//
+// Returns null when there's NO signal at all (no screen sample yet, no
+// blur, no opacity) — auto-contrast then stays neutral.
+function computeSurfaceLuminance(args: {
+  screenLum: number | null;
+  showBlurBg: boolean;
+  tintColor: { r: number; g: number; b: number } | null;
+  bgColor: string;
+  bgOpacityPct: number;
+}): number | null {
+  const { screenLum, showBlurBg, tintColor, bgColor, bgOpacityPct } = args;
+
+  // Layer 1: what's BEHIND the overlay (or what the blurred art replaces).
+  let bg: number | null = null;
+  if (showBlurBg && tintColor) {
+    // Blurred bg layer. Filter brightness(0.62) is applied in CSS, so
+    // multiply the dominant color's luminance by 0.62 to mirror it.
+    const rawTintLum =
+      (0.299 * tintColor.r + 0.587 * tintColor.g + 0.114 * tintColor.b) / 255;
+    bg = rawTintLum * 0.62;
+  } else if (screenLum !== null) {
+    bg = screenLum;
+  }
+
+  // Layer 2: user bg_color painted on top at bg_opacity. Alpha-blends
+  // toward the user color and away from whatever was behind.
+  if (bgOpacityPct > 0) {
+    const userLum = hexLuminance(bgColor);
+    if (userLum !== null) {
+      const alpha = Math.min(1, Math.max(0, bgOpacityPct / 100));
+      bg = bg !== null ? userLum * alpha + bg * (1 - alpha) : userLum;
+    }
+  }
+
+  return bg;
+}
+
+// Perceived luminance of a #rrggbb hex color (0..1). Returns null for
+// invalid input rather than guessing a value.
+function hexLuminance(hex: string): number | null {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex);
+  if (!m) return null;
+  const n = parseInt(m[1], 16);
+  const r = (n >> 16) & 0xff;
+  const g = (n >> 8) & 0xff;
+  const b = n & 0xff;
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+}
+
 function mixHexWithRgb(
   hex: string,
   rgb: { r: number; g: number; b: number },
