@@ -185,7 +185,8 @@ export default function SettingsView() {
           Paints a heavily blurred, dimmed copy of the current track's album
           art behind the lyrics — Apple Music "Now Playing" style. Your
           background color renders on top so the opacity slider still tints
-          the result. No effect on tracks without art.
+          the result. No effect on tracks without art. Toggle on the fly
+          with <code>Ctrl+Alt+B</code>.
         </Hint>
       </Section>
 

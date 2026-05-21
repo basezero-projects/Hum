@@ -466,6 +466,7 @@ fn build_global_shortcut_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     let cycle_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyL);
     let nudge_back = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::BracketLeft);
     let nudge_fwd = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::BracketRight);
+    let toggle_blur = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyB);
 
     Builder::new()
         .with_handler(move |app, shortcut, event| {
@@ -483,6 +484,23 @@ fn build_global_shortcut_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
             } else if shortcut == &nudge_fwd {
                 // Push lyrics later (lyrics are running ahead of audio).
                 let _ = app.emit("lyric-offset-nudge", 250i32);
+            } else if shortcut == &toggle_blur {
+                // Toggle the blurred album-art background. Handler is sync;
+                // settings.write() is async, so the flip + persist + emit
+                // chain runs on the async runtime. Mirrors the pattern in
+                // settings::persist_last_mode.
+                if let Some(state) = app.try_state::<SharedSettings>() {
+                    let state = state.inner().clone();
+                    let app2 = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let mut s = state.write().await;
+                        s.blur_album_art_background = !s.blur_album_art_background;
+                        let snapshot = s.clone();
+                        drop(s);
+                        settings::save_to_store(&app2, &snapshot);
+                        let _ = app2.emit("settings-changed", &snapshot);
+                    });
+                }
             }
         })
         .build()
@@ -493,10 +511,12 @@ fn register_hotkey(app: &tauri::AppHandle) -> tauri::Result<()> {
     let cycle_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyL);
     let nudge_back = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::BracketLeft);
     let nudge_fwd = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::BracketRight);
+    let toggle_blur = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyB);
     for (name, sc) in [
         ("Ctrl+Alt+L", cycle_shortcut),
         ("Ctrl+Alt+[", nudge_back),
         ("Ctrl+Alt+]", nudge_fwd),
+        ("Ctrl+Alt+B", toggle_blur),
     ] {
         if let Err(e) = app.global_shortcut().register(sc) {
             eprintln!("[hotkey] failed to register {name}: {e}");

@@ -6,6 +6,20 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.10.10] - 2026-05-21
+
+### Added
+- **`Ctrl+Alt+B` global hotkey toggles the blurred album-art background.** Works from anywhere — the lyrics overlay, the desktop, a fullscreen game, a different app on top. Each press flips the `blur_album_art_background` setting, persists it to `settings.json`, and emits `settings-changed` so the overlay re-renders instantly. The on/off state survives app restarts since it's the same setting the Settings window exposes. No on-screen indicator fires — the visual change (background appearing or disappearing) IS the feedback. Joins the existing global hotkeys: **Ctrl+Alt+L** (cycle overlay mode), **Ctrl+Alt+[** (nudge lyrics earlier 250ms), **Ctrl+Alt+]** (nudge lyrics later 250ms).
+- **Settings hint mentions the new shortcut.** Under "Blurred album art background" in Settings → Background, the description now ends with `Toggle on the fly with Ctrl+Alt+B`, rendered with a `<code>` tag for the keycap.
+
+### Architecture / files
+- **`src-tauri/src/lib.rs`** — new `toggle_blur` `Shortcut` (`Ctrl+Alt+B`, `Code::KeyB`) constructed alongside the existing cycle/nudge shortcuts. New branch in the global-shortcut handler: on `Pressed`, fetches the `SharedSettings` arc, spawns a Tokio task (the handler closure is sync but the settings RwLock is async), flips the bool, calls `settings::save_to_store`, and emits `settings-changed` with the new snapshot. Registered alongside the existing three in `register_hotkey` — adding `("Ctrl+Alt+B", toggle_blur)` to the per-shortcut registration loop so failures log per-key like the others.
+- **`src/Settings.tsx`** — Hint paragraph updated with the keycap.
+
+### Diagnostic notes
+- The handler uses `tauri::async_runtime::spawn` to do the flip-and-persist work off the synchronous handler thread. Mirrors the pattern in `settings::persist_last_mode` for the mode-change persist. The `state.inner().clone()` returns an `Arc<RwLock<Settings>>` clone — cheap (refcount bump), not a deep copy of the settings.
+- The frontend `listen("settings-changed")` subscription already exists and pipes into `applySettings(s)` in `Overlay.tsx`. No frontend changes needed — the new hotkey reuses the same channel that the Settings window's toggle uses.
+
 ## [0.10.9] - 2026-05-21
 
 ### Fixed
