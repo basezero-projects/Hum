@@ -30,7 +30,7 @@ use crate::smtc::SharedSnapshot;
 
 const STORE_FILE: &str = "lyrics-cache.json";
 const USER_AGENT: &str =
-    "hum/0.10.10 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
+    "hum/0.10.11 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WordSpan {
@@ -1023,16 +1023,24 @@ fn cleaner() -> &'static Regex {
     static C: OnceLock<Regex> = OnceLock::new();
     C.get_or_init(|| {
         // (?ix) = case-insensitive + ignore whitespace inside the pattern.
+        //
+        // Video / audio / visualizer alternatives accept an optional `official`
+        // prefix so that uploads like "(Official Audio)", "(Official
+        // Visualizer)", "(Official Animated Video)" — not just the
+        // "(Official Music Video)" / "(Official Lyric Video)" / "(Official
+        // HD Video)" set the old regex hardcoded — get stripped. Without
+        // this, "Fleetwood Mac - Dreams (Official Audio)" left the parens
+        // intact and LRCLib search failed on the noisy query.
         Regex::new(
             r"(?ix)
               \s*[\[\(]\s*
               (?:
-                  official\s+(?:music\s+|lyric\s+|hd\s+)?video |
+                  (?:official\s+)?(?:music\s+|lyric\s+|hd\s+|animated\s+)?video |
+                  (?:official\s+)?(?:music\s+)?audio |
+                  (?:official\s+)?visualizer |
                   music\s+video |
                   lyric\s+video |
                   lyrics? |
-                  audio |
-                  visualizer |
                   feat\.?\s.* |
                   ft\.?\s.* |
                   featuring\s.* |
@@ -1074,12 +1082,12 @@ fn pipe_tag_cleaner() -> &'static Regex {
             r"(?ix)
               \s*\|\s*
               (?:
-                  official\s+(?:music\s+|lyric\s+|hd\s+)?video |
+                  (?:official\s+)?(?:music\s+|lyric\s+|hd\s+|animated\s+)?video |
+                  (?:official\s+)?(?:music\s+)?audio |
+                  (?:official\s+)?visualizer |
                   music\s+video |
                   lyric\s+video |
                   lyrics? |
-                  audio |
-                  visualizer |
                   hd | uhd | mv | 4k | 8k
               )
               \s*$

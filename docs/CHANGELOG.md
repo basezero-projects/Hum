@@ -6,6 +6,17 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.10.11] - 2026-05-21
+
+### Fixed
+- **LRCLib now finds "Fleetwood Mac - Dreams (Official Audio)" and similar.** The bracketed `cleaner()` regex hardcoded "Official" as a required prefix for `Video` variants (`Official Video`, `Official Music Video`, `Official Lyric Video`, `Official HD Video`) but treated `audio` and `visualizer` as standalone-only tokens. So `(Official Audio)` and `(Official Visualizer)` survived `clean_title` unchanged, leaving query strings like `"Fleetwood Mac - Dreams (Official Audio)"` to hit LRCLib's fulltext index — which returned zero rows because of the noise. Even the `strip_youtube_noise` retry (v0.10.5) couldn't save it because that fallback only handles `" - "` prefixes and `" feat. X"` suffixes, not parens content. The regex now accepts an optional `official\s+` prefix on `video`, `audio`, and `visualizer` alternatives — symmetric across all three. Same change to `pipe_tag_cleaner` (v0.10.9) so `Song | Official Audio` strips too. New variants caught: `(Official Audio)`, `(Official Music Audio)`, `(Official Visualizer)`, `(Official Animated Video)`, `| Official Audio`, `| Official Visualizer`. Resolution chain for the Fleetwood Mac case is now: `clean_title` strips `(Official Audio)` → search `"Fleetwood Mac - Dreams"` → likely zero hits → `strip_youtube_noise` drops `"Fleetwood Mac - "` → retry search `"Dreams"` → match.
+
+### Architecture / files
+- **`src-tauri/src/lyrics.rs`** — `cleaner()` and `pipe_tag_cleaner()` regexes both restructured. Each now has three normalized alternatives for video / audio / visualizer that accept optional `official\s+` and optional sub-modifier (`music\s+`, `lyric\s+`, `hd\s+`, `animated\s+`) before the base token. The `audio` and `visualizer` bare-token entries from before are now redundant under the new patterns (the optional `(?:official\s+)?` makes them match standalone too) — kept only the `lyrics?` standalone since "lyrics" without parentheses is its own special case. User-Agent bumped to `hum/0.10.11`.
+
+### Known limitations
+- LRCLib `/api/search` still doesn't get a retry with the stripped form when the FIRST pass returned records but `pick_best` filtered them all out (e.g. duration mismatch across cover versions). Out of scope for this fix; the cleaner change alone solves the Fleetwood case because the first search now returns zero, which triggers the existing retry.
+
 ## [0.10.10] - 2026-05-21
 
 ### Added
