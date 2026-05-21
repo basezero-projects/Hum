@@ -176,6 +176,8 @@ pub async fn update_settings(
     state: tauri::State<'_, SharedSettings>,
     patch: Value,
 ) -> Result<Settings, String> {
+    #[cfg(windows)]
+    let backdrop_changed = patch.get("window_backdrop").is_some();
     let merged = {
         let current = state.read().await.clone();
         let mut current_value = serde_json::to_value(&current).map_err(|e| e.to_string())?;
@@ -198,6 +200,22 @@ pub async fn update_settings(
     // React to streamer-enabled / port changes by starting or stopping the
     // local HTTP server. Idempotent if no streamer fields changed.
     crate::streamer::apply_settings(&app, merged.streamer_enabled, merged.streamer_port);
+    #[cfg(windows)]
+    if backdrop_changed {
+        if let Some(overlay) = app.get_webview_window("overlay") {
+            match overlay.hwnd() {
+                Ok(raw_hwnd) => {
+                    let hwnd = windows::Win32::Foundation::HWND(raw_hwnd.0);
+                    if let Err(e) = crate::backdrop::apply_backdrop(hwnd, merged.window_backdrop) {
+                        eprintln!("backdrop: re-apply on settings change failed: {e:?}");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("backdrop: overlay.hwnd() failed on settings change: {e:?}");
+                }
+            }
+        }
+    }
     let _ = app.emit("settings-changed", &merged);
     Ok(merged)
 }

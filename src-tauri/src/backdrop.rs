@@ -3,10 +3,6 @@
 //! Calls `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE, …)`. On Win10 / pre-22H2 Win11
 //! the call returns `E_INVALIDARG` and the window stays as-is (transparent).
 
-// `#[cfg(windows)]` is set by the `mod backdrop;` declaration in lib.rs.
-// Items are unused until later tasks wire them in — suppress dead_code for now.
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
