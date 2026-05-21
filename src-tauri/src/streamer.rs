@@ -2,15 +2,14 @@
 //!
 //! Spawns an axum server bound to 127.0.0.1:<port> that exposes:
 //!
-//! - `GET  /state`    — JSON snapshot of current track + lyrics + cursor.
-//!                      Polled by the /overlay page; can also be hit by
-//!                      external tools that want to display lyrics elsewhere.
-//! - `GET  /overlay`  — Self-contained HTML page (inline CSS + JS) that
-//!                      polls /state every 250ms and renders the same 3-line
-//!                      look the desktop overlay does. Background is fully
-//!                      transparent so OBS browser-source layering Just
-//!                      Works without chroma-key tricks.
-//! - `GET  /healthz`  — Minimal liveness probe ("ok").
+//! - `GET  /state` — JSON snapshot of current track + lyrics + cursor.
+//!   Polled by the /overlay page; can also be hit by external tools that
+//!   want to display lyrics elsewhere.
+//! - `GET  /overlay` — Self-contained HTML page (inline CSS + JS) that
+//!   polls /state every 250ms and renders the same 3-line look the desktop
+//!   overlay does. Background is fully transparent so OBS browser-source
+//!   layering Just Works without chroma-key tricks.
+//! - `GET  /healthz` — Minimal liveness probe ("ok").
 //!
 //! The server is gated by `settings.streamer_enabled` — when off, no
 //! port is bound. When toggled on at runtime via `update_settings`, a

@@ -6,19 +6,14 @@ use tauri::image::Image;
 use tauri::menu::CheckMenuItem;
 use tauri::{AppHandle, Emitter, Manager, Wry};
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 #[repr(u8)]
 pub enum OverlayMode {
+    #[default]
     Edit = 0,
     Locked = 1,
     Ghost = 2,
-}
-
-impl Default for OverlayMode {
-    fn default() -> Self {
-        Self::Edit
-    }
 }
 
 impl OverlayMode {

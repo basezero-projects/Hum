@@ -181,7 +181,7 @@ pub fn run() {
             // Load persisted settings (if any) from the store BEFORE building
             // the tray, so the initial mode + tooltip + check items reflect
             // the user's last choice rather than always Edit.
-            let loaded_settings = settings::load_from_store(&app.handle());
+            let loaded_settings = settings::load_from_store(app.handle());
             let initial_mode = loaded_settings.last_mode;
             // Capture streamer fields before move so we can apply after manage.
             let streamer_enabled_at_start = loaded_settings.streamer_enabled;

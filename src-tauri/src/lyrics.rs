@@ -714,7 +714,7 @@ fn normalize_for_match(s: &str) -> String {
 ///     the strip-and-retry path try a cleaner query.)
 ///   - Partial title match (rec has the user title as substring) + 5s diff
 ///     + synced = 80 + 30 + 20 = 130 → picked. (Carbon-copy LRCLib uploads
-///     of the YouTube video title.)
+///       of the YouTube video title.)
 ///
 /// Substring/contains check uses `normalize_for_match` (lowercase + collapse
 /// Unicode punctuation flavors) so curly-vs-ASCII apostrophe mismatches
@@ -1216,9 +1216,11 @@ fn pick_best_netease(
         .into_iter()
         .filter(|s| {
             let s_title = s.name.trim().to_lowercase();
-            if !s_title.is_empty()
-                && !(s_title.contains(&title_l) || title_l.contains(&s_title))
-            {
+            // Equivalent to `!empty && !(contains_a || contains_b)` —
+            // De Morgan's: skip when title is present AND doesn't bidirectional-
+            // substring-match. Empty titles pass through this gate and get
+            // filtered by the artist/duration gates further down.
+            if !(s_title.is_empty() || s_title.contains(&title_l) || title_l.contains(&s_title)) {
                 return false;
             }
             if !artist_l.is_empty() {
