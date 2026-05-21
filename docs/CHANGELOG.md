@@ -6,6 +6,20 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.10.15] - 2026-05-21
+
+### Fixed
+- **Edit mode now lets you drag the window from anywhere inside it.** Previously, only the lyric text rows and the outermost container's tiny padding band were Tauri drag regions — clicking on the album art square, the gap between art and lyrics, or any blurred-background area did nothing. Now every visible chrome element in edit mode (the outer stack wrapper, the inner art+lyrics row, the lyrics column, and the album-art square) gets the `data-tauri-drag-region` attribute so the user can grab any pixel of the window and move it. The blurred album-art background layer keeps `pointer-events: none` so clicks pass through to the drag-region children underneath. Locked / ghost modes still have no drag regions anywhere — exactly as before, the window stays put unless you cycle back to edit mode.
+- **"No lyrics for X" no longer persists across app restarts.** The lyric-finding algorithm is still evolving — every recent version (v0.10.11 stripped `(Official Audio)`, v0.10.12 added pick_best retry, v0.10.14 normalized Unicode punctuation) opened up new tracks that used to fail. But once a track returned NotFound under an older version, the result was cached to disk and the new algorithm never got a chance to re-run for that key. Now `write_store` skips any NotFound entry (only Synced / Plain / Instrumental results hit disk), and `read_store` discards any pre-existing NotFound entry it loads — so on the next restart, every previously-unfindable track gets a fresh resolution attempt with the latest logic. Within a single session, the in-memory NotFound cache still suppresses redundant API calls if the same unfindable track plays multiple times.
+
+### Architecture / files
+- **`src/Overlay.tsx`** — `{...dragProps}` (which spreads `{ "data-tauri-drag-region": true }` when `isEdit`) added to `outerStackStyle`, `innerRowStyle`, and `lyricsColStyle` wrapper divs in both the 3-line and single-line layout branches. `AlbumArtSide` gains a `dragRegion: boolean` prop and applies the attribute to its outer wrapper div (the inner `<img>` stays `pointer-events: none` so the drag region is the square's full area).
+- **`src-tauri/src/lyrics.rs`** — `read_store` now parses the value, checks for `CachedLyrics::NotFound`, and returns `None` if so (treating the entry as if it wasn't there). `write_store` early-returns when the value is `NotFound` before opening the store. Documented why successful matches (Synced / Plain / Instrumental) still persist forever — their content doesn't depend on resolver heuristics. User-Agent bumped to `hum/0.10.15`.
+
+### Diagnostic notes
+- The drag-region regression was technically present pre-v0.10.8 — the album-art square and the gap to its right never had drag-region — but became more noticeable with v0.10.8's blurred background, which made the previously-invisible "empty" areas visually full and tempting to click. Adding drag-region to the wrapper elements is the right fix regardless of the background.
+- The NotFound disk-cache change does mean a clean-NotFound track now costs 3 parallel HTTP calls on every app restart instead of 0. In practice these calls are bounded by the 30s SMTC + reqwest timeouts and run in the background — the user-visible "fetching" state lasts ~1-2s and doesn't block the overlay rendering. The trade-off favors algorithm freshness over network frugality, which is the right call while the resolver is still being tuned.
+
 ## [0.10.14] - 2026-05-21
 
 ### Fixed

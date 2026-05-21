@@ -650,9 +650,11 @@ export default function Overlay() {
         {showBlurBg ? (
           <BlurredAlbumBg dataUrl={albumArt!.data_url} tintColor={bgRgba} />
         ) : null}
-        <div style={innerRowStyle}>
-          {showArt && albumArt ? <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} /> : null}
-          <div ref={setLyricsColEl} style={lyricsColStyle}>
+        <div {...dragProps} style={innerRowStyle}>
+          {showArt && albumArt ? (
+            <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} dragRegion={isEdit} />
+          ) : null}
+          <div {...dragProps} ref={setLyricsColEl} style={lyricsColStyle}>
             <LineRow
               text={middleText}
               kind="cur"
@@ -721,11 +723,13 @@ export default function Overlay() {
         <BlurredAlbumBg dataUrl={albumArt!.data_url} tintColor={bgRgba} />
       ) : null}
       <NudgeBanner banner={nudgeBanner} />
-      <div ref={setInnerRowEl} style={outerStackStyle}>
+      <div {...dragProps} ref={setInnerRowEl} style={outerStackStyle}>
         <UpdateBanner state={updateState} onInstall={installUpdate} />
-        <div style={innerRowStyle}>
-          {showArt && albumArt ? <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} /> : null}
-          <div ref={setLyricsColEl} style={lyricsColStyle}>
+        <div {...dragProps} style={innerRowStyle}>
+          {showArt && albumArt ? (
+            <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} dragRegion={isEdit} />
+          ) : null}
+          <div {...dragProps} ref={setLyricsColEl} style={lyricsColStyle}>
           <LineRow text={prev?.text} kind="prev" dragRegion={isEdit} settings={settingsForRender} textShadow={effectiveTextShadow} />
           <LineRow
             text={middleText}
@@ -993,11 +997,26 @@ function AlbumArtBadge({ dataUrl }: { dataUrl: string }) {
 // is exact, not approximate, because pure CSS (align-self:stretch +
 // aspect-ratio:1) was off by a handful of px when the image's intrinsic
 // dimensions interacted with flex's hypothetical-size pass.
-function AlbumArtSide({ dataUrl, size }: { dataUrl: string; size: number }) {
+//
+// `dragRegion` makes the album-art square a Tauri window drag handle when
+// edit mode is on, matching the rest of the overlay's chrome — the user
+// should be able to grab the window from anywhere inside it, not only
+// the lyric text.
+function AlbumArtSide({
+  dataUrl,
+  size,
+  dragRegion,
+}: {
+  dataUrl: string;
+  size: number;
+  dragRegion: boolean;
+}) {
   // Floor at 40 so a tiny font doesn't shrink the art to a sliver.
   const px = Math.max(40, size);
+  const drag = dragRegion ? { "data-tauri-drag-region": true } : {};
   return (
     <div
+      {...drag}
       style={{
         width: px,
         height: px,

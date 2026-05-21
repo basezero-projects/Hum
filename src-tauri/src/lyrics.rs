@@ -30,7 +30,7 @@ use crate::smtc::SharedSnapshot;
 
 const STORE_FILE: &str = "lyrics-cache.json";
 const USER_AGENT: &str =
-    "hum/0.10.14 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
+    "hum/0.10.15 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WordSpan {
@@ -1332,10 +1332,27 @@ fn normalize(s: &str) -> String {
 fn read_store(app: &AppHandle, key: &str) -> Option<CachedLyrics> {
     let store = app.store(STORE_FILE).ok()?;
     let v = store.get(key)?;
-    serde_json::from_value(v).ok()
+    let cached: CachedLyrics = serde_json::from_value(v).ok()?;
+    // Discard any persisted NotFound entries — the lyric-finding algorithm
+    // keeps evolving (new YouTube-noise patterns, punctuation normalization,
+    // pick_best refinements), so a NotFound cached under a previous version
+    // shouldn't lock the user out of a fresh fetch under the new logic.
+    // Successful matches (Synced / Plain / Instrumental) stay cached forever
+    // because their content doesn't depend on resolver heuristics.
+    if matches!(cached, CachedLyrics::NotFound) {
+        return None;
+    }
+    Some(cached)
 }
 
 fn write_store(app: &AppHandle, key: &str, cached: &CachedLyrics) {
+    // Symmetric with read_store — don't write NotFound to disk at all, so
+    // restarts always get a fresh resolution attempt with the current
+    // algorithm. In-memory NotFound cache (set above this call) still
+    // suppresses redundant API calls within a single session.
+    if matches!(cached, CachedLyrics::NotFound) {
+        return;
+    }
     let Ok(store) = app.store(STORE_FILE) else { return };
     let Ok(v) = serde_json::to_value(cached) else { return };
     store.set(key, v);
