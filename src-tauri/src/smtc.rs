@@ -521,15 +521,22 @@ pub async fn fetch_art_via_itunes(
     artist: &str,
     title: &str,
 ) -> Option<String> {
-    // Variant a — try with the SMTC-supplied fields verbatim.
-    if let Some(url) = try_one_variant(client, artist, title, "as-is").await {
+    // Variant a — try with the SMTC-supplied fields verbatim. Validate
+    // returned records against the SMTC artist so iTunes/Deezer's free-
+    // text-relevance ranking can't surface a wrong-artist track that
+    // textually overlaps with the query (real failure: Lil Wayne's "Let It
+    // All Work Out" was returning a T-Pain cover because iTunes ranked a
+    // T-Pain track higher on the free-text query "Lil Wayne Let It All
+    // Work Out", and v0.10.22's `limit=1` accepted whatever came back).
+    if let Some(url) = try_one_variant(client, artist, title, artist, "as-is").await {
         return Some(url);
     }
 
     // Variant b — if the title is shaped `"Real Artist - Real Song"`,
     // try treating those halves as the real artist+title. Common for
     // YouTube uploads where the channel name (the artist field) is not
-    // the performer.
+    // the performer. Validation uses the title-prefix as the expected
+    // artist since the SMTC artist is presumed junk in this variant.
     if let Some((prefix, suffix)) = title.split_once(" - ") {
         let real_artist = prefix.trim();
         let real_title = suffix.trim();
@@ -542,16 +549,18 @@ pub async fn fetch_art_via_itunes(
             && !real_artist.eq_ignore_ascii_case(artist)
         {
             if let Some(url) =
-                try_one_variant(client, real_artist, real_title, "title-split").await
+                try_one_variant(client, real_artist, real_title, real_artist, "title-split").await
             {
                 return Some(url);
             }
         }
     }
 
-    // Variant c — title-only search. Some catalogs return useful matches
-    // when the artist filter is misleading or empty.
-    if let Some(url) = try_one_variant(client, "", title, "title-only").await {
+    // Variant c — title-only search. The QUERY has no artist filter (so
+    // catalogs return broader matches), but the VALIDATION still pins
+    // against the SMTC artist so we don't accept a wrong-artist track
+    // just because the title is generic.
+    if let Some(url) = try_one_variant(client, "", title, artist, "title-only").await {
         return Some(url);
     }
 
@@ -560,19 +569,33 @@ pub async fn fetch_art_via_itunes(
 }
 
 /// One query variant tried against both iTunes and Deezer in order.
+/// `query_artist` is what gets sent to the API (may be empty for title-only
+/// queries); `validation_artist` is what the returned record's artistName
+/// must match (case-insensitive, primary-artist-only — see
+/// `primary_artist_matches`). An empty `validation_artist` disables the
+/// artist filter (accept whatever ranks first).
 /// `label` is logged so we can see which variant ended up matching.
 async fn try_one_variant(
     client: &reqwest::Client,
-    artist: &str,
-    title: &str,
+    query_artist: &str,
+    query_title: &str,
+    validation_artist: &str,
     label: &str,
 ) -> Option<String> {
-    if let Some(url) = fetch_art_itunes_only(client, artist, title).await {
-        eprintln!("[smtc] art: iTunes hit ({label}) for {artist:?} - {title:?}");
+    if let Some(url) =
+        fetch_art_itunes_only(client, query_artist, query_title, validation_artist).await
+    {
+        eprintln!(
+            "[smtc] art: iTunes hit ({label}) for {validation_artist:?} - {query_title:?}"
+        );
         return Some(url);
     }
-    if let Some(url) = fetch_art_deezer_only(client, artist, title).await {
-        eprintln!("[smtc] art: Deezer hit ({label}) for {artist:?} - {title:?}");
+    if let Some(url) =
+        fetch_art_deezer_only(client, query_artist, query_title, validation_artist).await
+    {
+        eprintln!(
+            "[smtc] art: Deezer hit ({label}) for {validation_artist:?} - {query_title:?}"
+        );
         return Some(url);
     }
     None
@@ -580,18 +603,23 @@ async fn try_one_variant(
 
 async fn fetch_art_itunes_only(
     client: &reqwest::Client,
-    artist: &str,
-    title: &str,
+    query_artist: &str,
+    query_title: &str,
+    validation_artist: &str,
 ) -> Option<String> {
     use base64::Engine;
 
-    let query = format!("{artist} {title}");
+    let query = if query_artist.trim().is_empty() {
+        query_title.to_string()
+    } else {
+        format!("{query_artist} {query_title}")
+    };
     let search_url = reqwest::Url::parse_with_params(
         "https://itunes.apple.com/search",
         &[
             ("term", query.as_str()),
             ("entity", "song"),
-            ("limit", "1"),
+            ("limit", "10"),
         ],
     )
     .ok()?;
@@ -610,8 +638,17 @@ async fn fetch_art_itunes_only(
             return None;
         }
     };
-    let first = body.get("results")?.as_array()?.first()?;
-    let art_url_100 = first.get("artworkUrl100")?.as_str()?;
+    let results = body.get("results")?.as_array()?;
+    let chosen = pick_artist_matched(
+        results.iter(),
+        |r| {
+            r.get("artistName")
+                .and_then(|a| a.as_str())
+                .map(|s| s.to_string())
+        },
+        validation_artist,
+    )?;
+    let art_url_100 = chosen.get("artworkUrl100")?.as_str()?;
 
     let art_url = art_url_100.replace("100x100bb", "600x600bb");
     let bytes = match client.get(&art_url).send().await {
@@ -636,18 +673,23 @@ async fn fetch_art_itunes_only(
 
 async fn fetch_art_deezer_only(
     client: &reqwest::Client,
-    artist: &str,
-    title: &str,
+    query_artist: &str,
+    query_title: &str,
+    validation_artist: &str,
 ) -> Option<String> {
     use base64::Engine;
 
     // Deezer accepts a single `q` term with quoted artist/track filters,
     // but a plain free-text query works just as well for our use case and
     // is more forgiving on minor metadata mismatches.
-    let query = format!("{artist} {title}");
+    let query = if query_artist.trim().is_empty() {
+        query_title.to_string()
+    } else {
+        format!("{query_artist} {query_title}")
+    };
     let search_url = reqwest::Url::parse_with_params(
         "https://api.deezer.com/search",
-        &[("q", query.as_str()), ("limit", "1")],
+        &[("q", query.as_str()), ("limit", "10")],
     )
     .ok()?;
 
@@ -665,13 +707,23 @@ async fn fetch_art_deezer_only(
             return None;
         }
     };
-    let first = body.get("data")?.as_array()?.first()?;
+    let results = body.get("data")?.as_array()?;
+    let chosen = pick_artist_matched(
+        results.iter(),
+        |r| {
+            r.get("artist")
+                .and_then(|a| a.get("name"))
+                .and_then(|n| n.as_str())
+                .map(|s| s.to_string())
+        },
+        validation_artist,
+    )?;
     // Deezer track payload exposes album.cover_xl (1000×1000),
     // cover_big (500), cover_medium (250), cover_small (56). Take XL.
-    let art_url = first
+    let art_url = chosen
         .get("album")?
         .get("cover_xl")
-        .or_else(|| first.get("album")?.get("cover_big"))?
+        .or_else(|| chosen.get("album")?.get("cover_big"))?
         .as_str()?;
 
     let bytes = match client.get(art_url).send().await {
@@ -692,6 +744,96 @@ async fn fetch_art_deezer_only(
     }
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
     Some(format!("data:image/jpeg;base64,{b64}"))
+}
+
+/// Iterate over search results and pick the first one whose extracted
+/// artist name fuzzy-matches `validation_artist`. Empty `validation_artist`
+/// disables filtering (returns the first record). Returns the chosen
+/// `&serde_json::Value` or `None` if no record passes validation.
+fn pick_artist_matched<'a, I, F>(
+    results: I,
+    extract_artist: F,
+    validation_artist: &str,
+) -> Option<&'a serde_json::Value>
+where
+    I: IntoIterator<Item = &'a serde_json::Value>,
+    F: Fn(&serde_json::Value) -> Option<String>,
+{
+    if validation_artist.trim().is_empty() {
+        return results.into_iter().next();
+    }
+    for r in results {
+        if let Some(rec_artist) = extract_artist(r) {
+            if primary_artist_matches(&rec_artist, validation_artist) {
+                return Some(r);
+            }
+        }
+    }
+    None
+}
+
+/// Does `rec_artist`'s primary artist (the part before `feat.`/`ft.`/`&`/
+/// `,` separators) fuzzy-match `expected`?
+///
+/// The match is bidirectional substring containment after normalization
+/// (lowercase + collapse common Unicode punctuation variants). Bidirectional
+/// because legitimate artist-name variation goes both ways: SMTC reports
+/// `"Beatles"`, iTunes returns `"The Beatles"` → "the beatles" contains
+/// "beatles" → match. SMTC reports `"Lil Wayne"`, iTunes returns `"Lil
+/// Wayne feat. T-Pain"` → primary is "Lil Wayne" → "lil wayne" contains
+/// "lil wayne" → match. Wrong case: SMTC reports `"Lil Wayne"`, iTunes
+/// returns `"T-Pain feat. Lil Wayne"` → primary is "T-Pain" → neither
+/// contains the other → reject (correctly).
+pub(crate) fn primary_artist_matches(rec_artist: &str, expected: &str) -> bool {
+    let primary = primary_artist_token(rec_artist);
+    let primary_norm = art_normalize(&primary);
+    let expected_norm = art_normalize(expected);
+    if primary_norm.is_empty() || expected_norm.is_empty() {
+        return false;
+    }
+    primary_norm.contains(&expected_norm) || expected_norm.contains(&primary_norm)
+}
+
+/// Split an artist string at the first feat./ft./&/, separator and return
+/// the head (the primary credited artist). Returns the trimmed input
+/// unchanged if no separator is found.
+pub(crate) fn primary_artist_token(rec_artist: &str) -> String {
+    let lower = rec_artist.to_lowercase();
+    // Order matters less than coverage. The leading space requirement
+    // prevents `Sufjan Stevens` from being split on a non-existent `ft`
+    // substring inside a real artist name.
+    let separators = [
+        " feat.", " feat ", " ft.", " ft ", " featuring ", " & ", " + ", ", ", "; ", " / ",
+        " vs.", " vs ",
+    ];
+    let mut cut = rec_artist.len();
+    for sep in separators {
+        if let Some(idx) = lower.find(sep) {
+            if idx < cut {
+                cut = idx;
+            }
+        }
+    }
+    rec_artist[..cut].trim().to_string()
+}
+
+/// Lowercase + collapse common Unicode punctuation flavors into ASCII
+/// equivalents. Smaller-scope sibling of `lyrics::normalize_for_match`
+/// kept local to avoid pulling lyrics's full normalizer surface across
+/// the module boundary.
+fn art_normalize(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '\u{2019}' | '\u{2018}' | '\u{2032}' | '\u{2035}' => '\'',
+            '\u{201C}' | '\u{201D}' | '\u{2033}' => '"',
+            '\u{2013}' | '\u{2014}' | '\u{2012}' | '\u{2015}' => '-',
+            '\u{00A0}' => ' ',
+            _ => c,
+        })
+        .collect::<String>()
+        .to_lowercase()
+        .trim()
+        .to_string()
 }
 
 /// Hard cap on thumbnail size we'll accept from SMTC. Real-world album art
@@ -796,4 +938,120 @@ fn read_timeline(session: &GlobalSystemMediaTransportControlsSession) -> Result<
 fn read_state(session: &GlobalSystemMediaTransportControlsSession) -> Result<PlaybackState> {
     let info = session.GetPlaybackInfo()?;
     Ok(info.PlaybackStatus()?.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn primary_artist_token_strips_feat_variants() {
+        // Plain artist — unchanged.
+        assert_eq!(primary_artist_token("Lil Wayne"), "Lil Wayne");
+        // feat./ft./featuring (case-insensitive).
+        assert_eq!(primary_artist_token("Lil Wayne feat. T-Pain"), "Lil Wayne");
+        assert_eq!(primary_artist_token("Lil Wayne ft. Drake"), "Lil Wayne");
+        assert_eq!(primary_artist_token("Lil Wayne Feat T-Pain"), "Lil Wayne");
+        assert_eq!(primary_artist_token("Lil Wayne featuring Drake"), "Lil Wayne");
+        // Other separators.
+        assert_eq!(primary_artist_token("Lil Wayne & Drake"), "Lil Wayne");
+        assert_eq!(primary_artist_token("Lil Wayne + Drake"), "Lil Wayne");
+        assert_eq!(primary_artist_token("Lil Wayne, Drake"), "Lil Wayne");
+        assert_eq!(primary_artist_token("Lil Wayne; Drake"), "Lil Wayne");
+        assert_eq!(primary_artist_token("Lil Wayne / Drake"), "Lil Wayne");
+        // The TRUE primary in a feat. arrangement must be the leading
+        // artist — this is the v0.10.26 bug case.
+        assert_eq!(
+            primary_artist_token("T-Pain feat. Lil Wayne"),
+            "T-Pain"
+        );
+        // Empty.
+        assert_eq!(primary_artist_token(""), "");
+        // Whitespace only.
+        assert_eq!(primary_artist_token("   "), "");
+    }
+
+    #[test]
+    fn primary_artist_matches_accepts_real_artist() {
+        // Exact match.
+        assert!(primary_artist_matches("Lil Wayne", "Lil Wayne"));
+        // Case-insensitive.
+        assert!(primary_artist_matches("LIL WAYNE", "lil wayne"));
+        // Feat. credit — primary is still Lil Wayne, validation passes.
+        assert!(primary_artist_matches("Lil Wayne feat. T-Pain", "Lil Wayne"));
+        assert!(primary_artist_matches("Lil Wayne & Drake", "Lil Wayne"));
+        // Bidirectional substring — SMTC reports "Beatles", iTunes returns
+        // "The Beatles".
+        assert!(primary_artist_matches("The Beatles", "Beatles"));
+        assert!(primary_artist_matches("Beatles", "The Beatles"));
+        // Punctuation variants normalize.
+        assert!(primary_artist_matches("AC/DC", "AC/DC"));
+        // Curly apostrophe in record vs ASCII in SMTC.
+        assert!(primary_artist_matches("Beyonc\u{00E9}", "Beyonc\u{00E9}"));
+    }
+
+    #[test]
+    fn primary_artist_matches_rejects_wrong_artist() {
+        // The v0.10.26 failure case: iTunes returns a T-Pain track when we
+        // asked for Lil Wayne. Must reject.
+        assert!(!primary_artist_matches("T-Pain", "Lil Wayne"));
+        // T-Pain feat. Lil Wayne does NOT satisfy a Lil Wayne validation —
+        // primary is T-Pain.
+        assert!(!primary_artist_matches("T-Pain feat. Lil Wayne", "Lil Wayne"));
+        // Completely unrelated.
+        assert!(!primary_artist_matches("Drake", "Kendrick Lamar"));
+        // Empty inputs — bail out rather than spuriously match.
+        assert!(!primary_artist_matches("", "Lil Wayne"));
+        assert!(!primary_artist_matches("Lil Wayne", ""));
+        assert!(!primary_artist_matches("", ""));
+    }
+
+    #[test]
+    fn pick_artist_matched_accepts_first_on_empty_validation() {
+        // Empty validation_artist passes the first record through (matches
+        // variant (c) call sites where the caller deliberately disables
+        // validation — though those don't happen in current code).
+        let results = vec![
+            serde_json::json!({ "artistName": "T-Pain", "id": 1 }),
+            serde_json::json!({ "artistName": "Lil Wayne", "id": 2 }),
+        ];
+        let chosen = pick_artist_matched(
+            results.iter(),
+            |r| r.get("artistName").and_then(|a| a.as_str()).map(String::from),
+            "",
+        );
+        assert_eq!(chosen.and_then(|r| r.get("id")?.as_i64()), Some(1));
+    }
+
+    #[test]
+    fn pick_artist_matched_skips_to_matching_record() {
+        // Simulates the Lil Wayne case: iTunes returns a T-Pain track
+        // first, the real Lil Wayne track second. Validation must skip
+        // T-Pain and pick the Lil Wayne record.
+        let results = vec![
+            serde_json::json!({ "artistName": "T-Pain", "id": 1 }),
+            serde_json::json!({ "artistName": "Lil Wayne", "id": 2 }),
+        ];
+        let chosen = pick_artist_matched(
+            results.iter(),
+            |r| r.get("artistName").and_then(|a| a.as_str()).map(String::from),
+            "Lil Wayne",
+        );
+        assert_eq!(chosen.and_then(|r| r.get("id")?.as_i64()), Some(2));
+    }
+
+    #[test]
+    fn pick_artist_matched_returns_none_when_no_record_matches() {
+        // 10 results, none by the requested artist → reject (better no art
+        // than wrong art).
+        let results: Vec<serde_json::Value> = (0..10)
+            .map(|i| serde_json::json!({ "artistName": format!("Wrong Artist {i}"), "id": i }))
+            .collect();
+        let chosen = pick_artist_matched(
+            results.iter(),
+            |r| r.get("artistName").and_then(|a| a.as_str()).map(String::from),
+            "Lil Wayne",
+        );
+        assert!(chosen.is_none());
+    }
 }
