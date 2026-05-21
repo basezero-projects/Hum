@@ -398,53 +398,6 @@ impl WebPlayerProbe for PandoraProbe {
     }
 }
 
-/// Fetch album art via the iTunes Search API. SMTC for browser-based
-/// players (Pandora web especially) returns the browser favicon as the
-/// thumbnail, which looks awful behind Hum's blurred-art treatment. The
-/// bridge has real artist + title from UIA; iTunes Search is a public
-/// no-auth endpoint that returns artwork URLs for the matching song.
-///
-/// Returns a `data:image/jpeg;base64,...` URL on success, or `None` if
-/// iTunes has no match or any network step fails. The fetched bytes are
-/// the 600×600 variant (replacing the API's default `100x100bb.jpg` with
-/// `600x600bb.jpg` — Apple's CDN serves arbitrary sizes via filename
-/// rewrite, a documented and widely-used trick).
-///
-/// Reused across all future no-Media-Session web probes (SoundCloud,
-/// Bandcamp, etc.) since iTunes covers commercial releases broadly.
-async fn fetch_art_via_itunes(
-    client: &reqwest::Client,
-    artist: &str,
-    title: &str,
-) -> Option<String> {
-    use base64::Engine;
-
-    let query = format!("{artist} {title}");
-    let search_url = reqwest::Url::parse_with_params(
-        "https://itunes.apple.com/search",
-        &[
-            ("term", query.as_str()),
-            ("entity", "song"),
-            ("limit", "1"),
-        ],
-    )
-    .ok()?;
-
-    let body: serde_json::Value = client.get(search_url).send().await.ok()?.json().await.ok()?;
-    let first = body.get("results")?.as_array()?.first()?;
-    let art_url_100 = first.get("artworkUrl100")?.as_str()?;
-
-    // Bump 100×100 → 600×600 via filename rewrite.
-    let art_url = art_url_100.replace("100x100bb", "600x600bb");
-
-    let bytes = client.get(&art_url).send().await.ok()?.bytes().await.ok()?;
-    if bytes.is_empty() {
-        return None;
-    }
-    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    Some(format!("data:image/jpeg;base64,{b64}"))
-}
-
 /// Spawn the bridge worker. The worker watches the SMTC snapshot and,
 /// when a probe matches, polls UIA every 2s. Idle (5s tick, zero UIA
 /// calls) when no probe matches.
@@ -505,7 +458,7 @@ pub fn start(app: AppHandle, snapshot: SharedSnapshot, shared: SharedWebBridge) 
                                 let app_for_art = app.clone();
                                 let client_for_art = http_client.clone();
                                 tauri::async_runtime::spawn(async move {
-                                    let Some(data_url) = fetch_art_via_itunes(
+                                    let Some(data_url) = crate::smtc::fetch_art_via_itunes(
                                         &client_for_art,
                                         &art_artist,
                                         &art_title,

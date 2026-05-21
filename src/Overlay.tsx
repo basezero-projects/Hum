@@ -531,14 +531,15 @@ export default function Overlay() {
     font_size_px: baseSettings.font_size_px * scale,
     line_padding_px: Math.max(0, Math.round(baseSettings.line_padding_px * scale)),
   };
-  // Text shadow is the opposite color of the text — black halo over light
-  // bg made the dark text invisible. When auto-contrast says the surface
-  // is light, we render dark text + WHITE halo. Otherwise default = light
-  // text + BLACK halo (works against any dark / mid-tone background).
+  // Drop shadow under the text — directional (light source from above)
+  // rather than a symmetric halo. Two stacked offsets: a tight sharp one
+  // for edge definition + a wider soft one for depth against busy
+  // backgrounds. Color flips opposite the text (dark text gets a white
+  // shadow on light surfaces, light text gets a black shadow elsewhere).
   const effectiveTextShadow =
     autoColorActive && surfaceIsLight
-      ? "0 2px 6px rgba(255,255,255,0.95), 0 0 14px rgba(255,255,255,0.7)"
-      : "0 2px 6px rgba(0,0,0,0.95), 0 0 14px rgba(0,0,0,0.65)";
+      ? "0 1px 2px rgba(255,255,255,0.9), 0 3px 10px rgba(255,255,255,0.55)"
+      : "0 1px 2px rgba(0,0,0,0.9), 0 3px 10px rgba(0,0,0,0.55)";
   // When tint is on AND we have a color extracted from the current art, blend
   // the user's bg_color with the tint at 50/50 in RGB. Force a minimum 22%
   // opacity so the toggle is visibly doing something even when the user has
@@ -1105,7 +1106,7 @@ function TranslationRow({
         fontWeight: 400,
         color: settings.text_color_dim,
         textAlign: settings.text_align,
-        textShadow: textShadow ?? "0 2px 6px rgba(0,0,0,0.95), 0 0 14px rgba(0,0,0,0.65)",
+        textShadow: textShadow ?? "0 1px 2px rgba(0,0,0,0.9), 0 3px 10px rgba(0,0,0,0.55)",
         opacity: 0.85,
         lineHeight: 1.2,
         maxWidth: "92vw",
@@ -1171,7 +1172,7 @@ function LineRow({
         // color still matters for any leftover non-span text (none in practice).
         color: isCur ? settings.text_color : settings.text_color_dim,
         textAlign: settings.text_align,
-        textShadow: textShadow ?? "0 2px 6px rgba(0,0,0,0.95), 0 0 14px rgba(0,0,0,0.65)",
+        textShadow: textShadow ?? "0 1px 2px rgba(0,0,0,0.9), 0 3px 10px rgba(0,0,0,0.55)",
         opacity: text ? 1 : 0.2,
         // Disable color-transition on the container while karaoke is active
         // so it doesn't fight the per-word transitions.

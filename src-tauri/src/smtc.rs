@@ -400,6 +400,15 @@ pub struct AlbumArtPayload {
 // bloat every timeline-changed payload by that much; we emit it via a
 // dedicated `album-art-loaded` event the frontend keys against the current
 // track. Best-effort — many sources don't expose a thumbnail at all.
+//
+// Priority: iTunes Search API first (real album cover at 600×600) then
+// fall back to the SMTC-supplied thumbnail. SMTC thumbnails for browser
+// sources are either video thumbnails (YouTube) or the browser favicon
+// (Pandora, etc.); both look wrong behind the blurred-art treatment.
+// For Spotify desktop / iTunes desktop / Apple Music desktop the SMTC
+// thumbnail IS the canonical album art and iTunes Search usually
+// returns the same cover anyway, so the iTunes-first preference is
+// strictly an improvement or a no-op.
 fn spawn_art_fetch(
     app: AppHandle,
     art: SharedAlbumArt,
@@ -408,25 +417,44 @@ fn spawn_art_fetch(
     artist: String,
 ) {
     tauri::async_runtime::spawn(async move {
-        let result = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
-            let props = session.TryGetMediaPropertiesAsync()?.get()?;
-            read_thumbnail_bytes(&props)
-        })
-        .await;
-        let bytes = match result {
-            Ok(Ok(b)) => b,
-            Ok(Err(_)) => return,
-            Err(_) => return,
+        // First try iTunes Search if we have something to query with.
+        // Empty artist + title means SMTC didn't give us a real song
+        // (idle session, etc.) — skip the external call.
+        let itunes_data_url = if !title.trim().is_empty() {
+            match build_itunes_http_client() {
+                Ok(client) => fetch_art_via_itunes(&client, &artist, &title).await,
+                Err(_) => None,
+            }
+        } else {
+            None
         };
-        if bytes.is_empty() {
-            return;
-        }
-        let mime = guess_image_mime(&bytes);
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+
+        let data_url = if let Some(url) = itunes_data_url {
+            url
+        } else {
+            // iTunes miss — fall back to the SMTC thumbnail.
+            let result = tokio::task::spawn_blocking(move || -> Result<Vec<u8>> {
+                let props = session.TryGetMediaPropertiesAsync()?.get()?;
+                read_thumbnail_bytes(&props)
+            })
+            .await;
+            let bytes = match result {
+                Ok(Ok(b)) => b,
+                Ok(Err(_)) => return,
+                Err(_) => return,
+            };
+            if bytes.is_empty() {
+                return;
+            }
+            let mime = guess_image_mime(&bytes);
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+            format!("data:{mime};base64,{b64}")
+        };
+
         let payload = AlbumArtPayload {
             title,
             artist,
-            data_url: format!("data:{mime};base64,{b64}"),
+            data_url,
         };
         // Write to shared cache BEFORE emitting so a get_current_album_art
         // invocation racing the listener subscription on the frontend's mount
@@ -437,6 +465,61 @@ fn spawn_art_fetch(
         }
         let _ = app.emit("album-art-loaded", &payload);
     });
+}
+
+fn build_itunes_http_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .user_agent(format!("hum/{}", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .context("build itunes search http client")
+}
+
+/// Fetch album art via the iTunes Search API. Public, no-auth. Used by
+/// both `spawn_art_fetch` (any SMTC source) and `web_bridge` (Pandora-
+/// style probes) to get a real album cover instead of whatever SMTC
+/// supplied (favicons, video thumbnails, etc.).
+///
+/// Returns a `data:image/jpeg;base64,...` URL on success, or `None` if
+/// iTunes has no match or any network step fails. Image is the 600×600
+/// variant (filename rewrite from the API's default `100x100bb.jpg` to
+/// `600x600bb.jpg` — documented widely-used trick on Apple's CDN).
+pub async fn fetch_art_via_itunes(
+    client: &reqwest::Client,
+    artist: &str,
+    title: &str,
+) -> Option<String> {
+    use base64::Engine;
+
+    let query = format!("{artist} {title}");
+    let search_url = reqwest::Url::parse_with_params(
+        "https://itunes.apple.com/search",
+        &[
+            ("term", query.as_str()),
+            ("entity", "song"),
+            ("limit", "1"),
+        ],
+    )
+    .ok()?;
+
+    let body: serde_json::Value = client
+        .get(search_url)
+        .send()
+        .await
+        .ok()?
+        .json()
+        .await
+        .ok()?;
+    let first = body.get("results")?.as_array()?.first()?;
+    let art_url_100 = first.get("artworkUrl100")?.as_str()?;
+
+    let art_url = art_url_100.replace("100x100bb", "600x600bb");
+    let bytes = client.get(&art_url).send().await.ok()?.bytes().await.ok()?;
+    if bytes.is_empty() {
+        return None;
+    }
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Some(format!("data:image/jpeg;base64,{b64}"))
 }
 
 /// Hard cap on thumbnail size we'll accept from SMTC. Real-world album art
