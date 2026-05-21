@@ -77,3 +77,26 @@ html, body {
   -moz-osx-font-smoothing: grayscale;
   color: hsl(var(--foreground));
 }
+
+/* Lyric line swap motion — runs when a LineRow's inner span remounts via
+   a key change on the line text. Spring-ish overshoot easing on the
+   translateY gives the new lyric a quick lift from below into place
+   while it fades in. Same animation for prev / cur / next so the whole
+   row group moves as a unit when the song advances by one line. */
+@keyframes hum-line-in {
+  0% {
+    transform: translateY(10px);
+    opacity: 0;
+  }
+  60% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.hum-line-in {
+  animation: hum-line-in 340ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}

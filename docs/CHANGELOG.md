@@ -6,6 +6,18 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.10.12] - 2026-05-21
+
+### Fixed
+- **LRCLib now finds "G Eazy & Halsey - Him & I (Lyrics)" and other tracks that previously returned non-matching records.** Specific case verified via live LRCLib query: searching for the cleaned title `"G Eazy & Halsey - Him & I"` returns 3 records, but all 3 are unsynced AND have track_name `"G-Eazy & Halsey - Him & I (Official Video)"` — `pick_best` rejects them because its bidirectional substring check fails on `"G-Eazy"` (hyphen) vs `"G Eazy"` (space, from SMTC). Meanwhile a search for the stripped form `"Him & I"` returns 20 records including the canonical `"Him & I"` by `"G-Eazy feat. Halsey"` at 269s — synced. The retry to the stripped form was already implemented in v0.10.5 but was gated on `try_search_lrclib` returning zero records, which doesn't fire when the first pass returned the wrong-titled records. Retry logic moved up into `fetch_lrclib` and now fires whenever the first-pass `pick_best` returns None — covering both "zero records returned" AND "records returned but all filtered out" cases.
+
+### Architecture / files
+- **`src-tauri/src/lyrics.rs`** — deleted the `try_search_lrclib` wrapper that did empty-records-only retry. `fetch_lrclib` now calls `try_search_lrclib_once` directly in the parallel `tokio::join!` with `try_get_lrclib`, then after the first-pass `pick_best` fails, runs a sequential second-pass: compute `strip_youtube_noise(title)`, if it changed, fire another `try_search_lrclib_once` with the stripped query, then `pick_best(records, &stripped, ...)` — passing the stripped form to pick_best so the substring check matches the cleaner record titles LRCLib returns for clean queries. Net cost: +0 API calls on tracks where the first pass works, +1 API call on tracks that need the retry (which were previously NotFound anyway). User-Agent bumped to `hum/0.10.12`.
+
+### Diagnostic notes
+- For the G-Eazy case the resolution chain is now: `clean_title("G Eazy & Halsey - Him & I (Lyrics)")` strips `(Lyrics)` → `"G Eazy & Halsey - Him & I"` → first search returns 3 unsynced wrong-titled records → `pick_best` filters them all out (hyphen mismatch + no duration match on the 286s "(Official Video)" records vs the 269s actual song) → retry fires → `strip_youtube_noise` drops `"G Eazy & Halsey - "` prefix → second search for `"Him & I"` returns the synced 269s record → match.
+- The retry's `pick_best` is called with the stripped title rather than the original because the second-pass records have CLEAN track_names (e.g. `"Him & I"` directly), so substring matching against the stripped title is correct. Passing the original would also work in most cases (the stripped title is a substring of the original) but adds noise to the substring check for titles like `"Him & I (with Halsey)"` where the parens content doesn't appear in the original.
+
 ## [0.10.11] - 2026-05-21
 
 ### Fixed

@@ -30,7 +30,7 @@ use crate::smtc::SharedSnapshot;
 
 const STORE_FILE: &str = "lyrics-cache.json";
 const USER_AGENT: &str =
-    "hum/0.10.11 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
+    "hum/0.10.12 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WordSpan {
@@ -439,7 +439,7 @@ async fn fetch_lrclib(
     // /api/get 404s or returns empty.
     let (get_res, search_res) = tokio::join!(
         try_get_lrclib(client, artist, title, album, duration_ms),
-        try_search_lrclib(client, title),
+        try_search_lrclib_once(client, title),
     );
 
     if let Ok(Some(rec)) = &get_res {
@@ -454,6 +454,28 @@ async fn fetch_lrclib(
             let cached = to_cached(rec);
             if !matches!(cached, CachedLyrics::NotFound) {
                 return Ok((cached, "lrclib-search".into()));
+            }
+        }
+    }
+
+    // Aggressive retry: when the first-pass search either returned zero
+    // records OR returned records that all failed pick_best (wrong title
+    // shape, wrong duration), try again with the YouTube-noise-stripped
+    // title. This catches the "G Eazy & Halsey - Him & I (Lyrics)" case
+    // where LRCLib returned 3 unsynced "G-Eazy & Halsey - Him & I (Official
+    // Video)" records that failed pick_best's substring check (hyphen vs
+    // space in "G-Eazy" vs "G Eazy"), while the stripped query "Him & I"
+    // returns the canonical synced record. The retry runs only when the
+    // first pass didn't yield a usable record AND there's something to
+    // strip — keeps the API call cost at +0 in the happy path.
+    let stripped = strip_youtube_noise(title);
+    if !stripped.is_empty() && stripped != title {
+        if let Ok(records) = try_search_lrclib_once(client, &stripped).await {
+            if let Some(rec) = pick_best(records, &stripped, artist, duration_ms) {
+                let cached = to_cached(rec);
+                if !matches!(cached, CachedLyrics::NotFound) {
+                    return Ok((cached, "lrclib-search".into()));
+                }
             }
         }
     }
@@ -513,42 +535,24 @@ async fn try_get_lrclib(
     anyhow::bail!("/api/get returned {status}");
 }
 
-/// Returns Ok(records) (possibly empty) on a 2xx OR 4xx (4xx means "your
-/// query didn't match anything I can parse" — that's an authoritative miss,
-/// not a transient error). Err only on 5xx / network / parse failures.
-///
-/// Two-pass retry-on-miss: first call with the title as-given; if zero
-/// records come back, retry with `strip_youtube_noise` (drops leading
-/// `"Artist - "` prefix and trailing `" ft. X"` / `" feat. X"`). Common
-/// YouTube uploader convention bakes the artist into the title with a
-/// hyphen separator, and LRCLib's fulltext index returns zero rows when
-/// the query has 5+ tokens and the stored track_name has 1 ("Bartender"
-/// vs "T-Pain - Bartender ft. Akon"). The aggressive form is intentionally
-/// separate from `clean_title` so the dev console still shows the SMTC
-/// title verbatim.
+/// Single LRCLib `/api/search` call. Returns Ok(records) (possibly empty)
+/// on a 2xx OR 4xx (4xx means "your query didn't match anything I can
+/// parse" — that's an authoritative miss, not a transient error). Err
+/// only on 5xx / network / parse failures.
 ///
 /// Title-only search. We don't pass `artist_name` — LRCLib applies that
 /// as a strict filter and SMTC-reported artists routinely diverge from
 /// LRCLib's canonical form ("TPainVEVO" → cleans to "TPain"; LRCLib has
 /// "T-Pain"). `pick_best`'s bidirectional title-substring filter + ±5s
 /// duration filter handles disambiguation downstream.
-async fn try_search_lrclib(
-    client: &reqwest::Client,
-    title: &str,
-) -> Result<Vec<LrcRecord>> {
-    let records = try_search_lrclib_once(client, title).await?;
-    if !records.is_empty() {
-        return Ok(records);
-    }
-    // Zero hits — try the aggressive YouTube-style title.
-    let stripped = strip_youtube_noise(title);
-    if stripped == title || stripped.is_empty() {
-        // No change — nothing more to try.
-        return Ok(records);
-    }
-    try_search_lrclib_once(client, &stripped).await
-}
-
+///
+/// The aggressive retry (call this again with `strip_youtube_noise(title)`
+/// to drop the leading `"Artist - "` prefix and trailing `" ft. X"`) is
+/// the caller's responsibility — `fetch_lrclib` does it when the first
+/// pass + pick_best didn't yield a usable record. Was previously a
+/// `try_search_lrclib` wrapper here that did the retry on empty-records
+/// only; moved to `fetch_lrclib` so it also fires when records came back
+/// but pick_best filtered them all out.
 async fn try_search_lrclib_once(
     client: &reqwest::Client,
     title: &str,
