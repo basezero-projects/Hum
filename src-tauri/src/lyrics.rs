@@ -30,7 +30,7 @@ use crate::smtc::SharedSnapshot;
 
 const STORE_FILE: &str = "lyrics-cache.json";
 const USER_AGENT: &str =
-    "hum/0.10.13 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
+    "hum/0.10.14 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WordSpan {
@@ -613,6 +613,30 @@ fn strip_youtube_noise(title: &str) -> String {
     s.trim().to_string()
 }
 
+/// Lowercase + collapse common Unicode punctuation that LRCLib uploaders use
+/// inconsistently into ASCII equivalents. Two different uploads of the same
+/// song routinely use different apostrophe flavors (`'` ASCII vs `'` U+2019
+/// vs `'` U+2018), different quote flavors, or hyphen vs en-dash. Without
+/// this, the substring match in `pick_best` rejects records that are
+/// otherwise correct — e.g. a YouTube-bridged title with `Can't` (ASCII)
+/// would miss a LRCLib record uploaded as `Can't` (curly).
+fn normalize_for_match(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            // Apostrophes: curly right (’), curly left (‘), prime (′), reversed prime (‵)
+            '\u{2019}' | '\u{2018}' | '\u{2032}' | '\u{2035}' => '\'',
+            // Double quotes: curly left (“), curly right (”), double prime (″)
+            '\u{201C}' | '\u{201D}' | '\u{2033}' => '"',
+            // Dashes: en-dash (–), em-dash (—), figure dash (‒), horizontal bar (―)
+            '\u{2013}' | '\u{2014}' | '\u{2012}' | '\u{2015}' => '-',
+            // Non-breaking space → regular space
+            '\u{00A0}' => ' ',
+            _ => c,
+        })
+        .collect::<String>()
+        .to_lowercase()
+}
+
 fn pick_best(
     records: Vec<LrcRecord>,
     title: &str,
@@ -620,20 +644,26 @@ fn pick_best(
     requested_duration_ms: u64,
 ) -> Option<LrcRecord> {
     // Filter by:
-    //   1. Title substring match (case-insensitive, bidirectional) — avoids
-    //      picking entirely unrelated tracks that happened to surface in search.
-    //   2. Duration within ±5s of the requested track — covers/remixes of the
-    //      same name usually have very different lengths. This was the Duka/
-    //      Toxic risk: Ashnikko's 163s Toxic shouldn't get picked when a 203s
-    //      Toxic was requested.
+    //   1. Title substring match (case-insensitive, bidirectional,
+    //      punctuation-normalized — curly apostrophes / quotes / en-em
+    //      dashes all collapse to their ASCII equivalents before
+    //      comparison). Avoids picking entirely unrelated tracks that
+    //      happened to surface in search, while not rejecting records
+    //      that differ only in Unicode punctuation flavor (which LRCLib
+    //      uploads do — e.g. "The Man Who Can't Be Moved" vs "The Man
+    //      Who Can't Be Moved" in the same search response).
+    //   2. Duration within ±5s of the requested track — covers/remixes of
+    //      the same name usually have very different lengths. This was
+    //      the Duka/Toxic risk: Ashnikko's 163s Toxic shouldn't get
+    //      picked when a 203s Toxic was requested.
     let requested_secs = requested_duration_ms as i64 / 1000;
-    let title_l = title.to_lowercase();
+    let title_l = normalize_for_match(title);
     let tolerance_secs: i64 = 5;
 
     let mut candidates: Vec<_> = records
         .into_iter()
         .filter(|r| {
-            let rec_title = r.track_name.as_deref().unwrap_or("").to_lowercase();
+            let rec_title = normalize_for_match(r.track_name.as_deref().unwrap_or(""));
             let title_match =
                 rec_title.contains(&title_l) || title_l.contains(&rec_title) || rec_title == title_l;
             if !title_match {

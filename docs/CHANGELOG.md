@@ -6,6 +6,18 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.10.14] - 2026-05-21
+
+### Fixed
+- **LRCLib title-match no longer rejects records that differ only in punctuation flavor.** Live LRCLib data shows different uploaders use different Unicode punctuation for the same song — one record titled "The Man Who Can't Be Moved" with an ASCII apostrophe (`'`), another with a curly right single quote (`'` U+2019), another with an en-dash where ASCII uses a hyphen. The substring match in `pick_best` is byte-level, so `Can't` (ASCII) was failing against `Can't` (curly) and the candidate got filtered out. Now both the query title and each record's title are normalized through a new `normalize_for_match` helper before lowercasing — curly apostrophes / left+right quotes / primes collapse to ASCII `'`, curly double quotes collapse to ASCII `"`, en-dash / em-dash / figure-dash / horizontal-bar collapse to ASCII `-`, and non-breaking space (U+00A0) collapses to regular space. Symmetric — applies to both sides of every comparison, so no record that genuinely matches gets rejected on punctuation grounds.
+
+### Architecture / files
+- **`src-tauri/src/lyrics.rs`** — new `fn normalize_for_match(s: &str) -> String`. Called twice in `pick_best`'s filter loop: once on the query title (cached as `title_l`), once per record on `r.track_name`. Replaces the previous `s.to_lowercase()` direct calls. Lowercase happens AFTER the character-by-character normalization map so the casing rules apply to the normalized characters (matters for none of the punctuation chars but keeps the API tidy). User-Agent bumped to `hum/0.10.14`.
+
+### Diagnostic notes
+- The trigger for this fix was a real-world report of "no lyrics for The Script - The Man Who Can't Be Moved (Lyrics)". The first-pass LRCLib search returns 15 records with the YouTube-noisy title shape (e.g. "The Script - The Man Who Can't Be Moved (Lyrics)"), and the v0.10.5 retry catches the second-pass query for "The Man Who Can't Be Moved" returning 20 records — but those 20 records use a mix of ASCII and curly apostrophes, so any record whose punctuation flavor didn't match the SMTC-reported title was being skipped. With the normalization, all flavors collapse to the same comparison string.
+- If a particular track still returns NotFound after this fix, the next suspect is the duration filter (±5s tolerance). YouTube lyric videos sometimes add intro/outro screens that push the upload past the canonical song duration by 5–10s, which would still filter all matches out. Out of scope for this fix; revisit if real-world reports surface.
+
 ## [0.10.13] - 2026-05-21
 
 ### Added
