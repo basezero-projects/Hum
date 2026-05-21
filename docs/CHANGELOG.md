@@ -6,6 +6,18 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.10.16] - 2026-05-21
+
+### Added
+- **Upcoming first lyric preview during song intros.** When a track has synced lyrics loaded but the song hasn't reached the first line yet (intro / instrumental opening), the overlay now shows `lines[0]` in the smaller "next" row below the current row. The current row stays as the status line (`♪`) since no line is technically "playing." When the song advances past the first line's timestamp, `displayIdx` flips to 0, the preview becomes the current line (big row), and `lines[1]` shifts into the next slot — same transition the line-swap motion (v0.10.13) already animates. Previously the overlay rendered a lonely `♪` through the whole intro and the user had no signal for how long the wait would be or what would come first.
+
+### Architecture / files
+- **`src/Overlay.tsx`** — the `prev` / `cur` / `next` derivation block previously short-circuited on `displayIdx >= 0`. Now when synced lyrics are loaded but `displayIdx === -1`, the code takes a separate branch that sets `next = lyrics.lines[0]` and leaves `cur` / `prev` undefined (so the existing `middleText` fallback to `statusLine(...)` still drives the cur row's content — no behavioral change for the "♪" / "♪ fetching" / "♪ no lyrics" cases). Single-line and full-page layouts unaffected (single-line only ever renders the cur row; full-page renders all lines indexed by position so the intro preview is implicit there).
+
+### Diagnostic notes
+- The preview only renders when status is `synced`. For status `fetching` / `not_found` / `error` / `instrumental` / `plain`, `next` stays undefined and the next row is empty — those statuses don't have a meaningful "upcoming first lyric" to show.
+- If a synced track has its first lyric at t=0 (no intro), the preview state lasts for a single frame before `displayIdx` advances to 0. Invisible in practice. No special case needed.
+
 ## [0.10.15] - 2026-05-21
 
 ### Fixed

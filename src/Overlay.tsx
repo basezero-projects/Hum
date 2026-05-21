@@ -451,13 +451,22 @@ export default function Overlay() {
   let prev: LyricLine | undefined;
   let cur: LyricLine | undefined;
   let next: LyricLine | undefined;
-  if (lyrics && lyrics.status === "synced" && lyrics.lines.length > 0 && displayIdx >= 0) {
-    cur = lyrics.lines[displayIdx];
-    prev = displayIdx > 0 ? lyrics.lines[displayIdx - 1] : undefined;
-    next =
-      displayIdx + 1 < lyrics.lines.length
-        ? lyrics.lines[displayIdx + 1]
-        : undefined;
+  if (lyrics && lyrics.status === "synced" && lyrics.lines.length > 0) {
+    if (displayIdx >= 0) {
+      cur = lyrics.lines[displayIdx];
+      prev = displayIdx > 0 ? lyrics.lines[displayIdx - 1] : undefined;
+      next =
+        displayIdx + 1 < lyrics.lines.length
+          ? lyrics.lines[displayIdx + 1]
+          : undefined;
+    } else {
+      // Song is still in the intro — no line has been reached yet. Surface
+      // the upcoming first line in the `next` slot so the user can see
+      // what's about to start instead of staring at a lonely `♪` and
+      // wondering when lyrics begin. `cur` stays undefined so the status
+      // line ("♪") renders in the big middle row; `prev` stays empty.
+      next = lyrics.lines[0];
+    }
   }
 
   const middleText =
