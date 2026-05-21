@@ -1455,7 +1455,57 @@ pub fn clean_title(title: &str) -> String {
     let cleaned = cleaner().replace_all(&cleaned, "").to_string();
     // 3. Strip trailing pipe-separated tags.
     let cleaned = pipe_tag_cleaner().replace_all(&cleaned, "").to_string();
+    // 4. Strip BARE trailing uploader-chrome tags — same vocabulary the
+    //    bracketed cleaner catches, but without any surrounding `[]` / `()` /
+    //    `|`. Real failure case: YouTube video titled `"Shaggy - Angel
+    //    Lyrics"` reaches the resolver with the whole string in the title
+    //    field; bracketed/pipe cleaners don't touch it, and the trailing
+    //    bare word `Lyrics` poisons the LRCLib search query enough to miss
+    //    even the most popular songs. Stripping it here makes the first-pass
+    //    /api/search query match canonical records, and lets the retry path
+    //    (`strip_youtube_noise`) see a clean title before stripping the
+    //    leading `"Shaggy - "` channel prefix.
+    let cleaned = bare_trailing_tag_cleaner().replace(&cleaned, "$1").to_string();
     cleaned.trim().to_string()
+}
+
+// Bare trailing uploader-chrome tags — `Lyrics`, `Lyric Video`, `Music Video`,
+// `Official Music Video`, `Official Audio`, `Official Visualizer`, plus quality
+// markers (`HD`, `UHD`, `4K`, `8K`, `1080p`, `1440p`, `2160p`). Matched as a
+// repeated trailing group so compound tags like `"Song HD 4K Music Video"`
+// collapse to `"Song"` in one pass. The capturing `(.*?\S)` is non-greedy so
+// the regex consumes the *most* trailing tags rather than the fewest. Requires
+// at least one non-whitespace char before the first tag, so a title that IS
+// the bare tag (e.g. just `"Lyrics"` or `"Music Video"`) is preserved intact.
+//
+// Vocabulary is deliberately narrower than `cleaner()` — only the chrome words
+// safe to strip without brackets. Bare `Audio` / `Visualizer` / `MV` / `HQ`
+// without an `Official` qualifier are skipped because they appear in legit
+// song titles often enough to risk false positives.
+fn bare_trailing_tag_cleaner() -> &'static Regex {
+    static C: OnceLock<Regex> = OnceLock::new();
+    C.get_or_init(|| {
+        Regex::new(
+            r"(?ix)
+              (.*?\S)
+              (?:
+                  \s+
+                  (?:
+                      lyrics? |
+                      lyric\s+video |
+                      official\s+lyric\s+video |
+                      music\s+video |
+                      official\s+(?:music\s+)?video |
+                      official\s+audio |
+                      official\s+visualizer |
+                      hd | uhd | 4k | 8k | 1080p | 1440p | 2160p
+                  )
+              )+
+              \s*$
+            ",
+        )
+        .unwrap()
+    })
 }
 
 // Trailing YouTube lyric-channel quote excerpts ("i want you i need you oh
@@ -1795,6 +1845,50 @@ mod tests {
             clean_title("Song (Tell Me) (Official 4K Video) \"the hook\""),
             "Song (Tell Me)"
         );
+
+        // ── v0.10.24 — bare trailing uploader-chrome tags ────────────────
+        //
+        // Real-world failure case: YouTube uploader titled the video
+        // `"Shaggy - Angel Lyrics"`. The whole string landed in SMTC's
+        // title field (artist field was unrelated/empty), and the bare
+        // trailing `Lyrics` survived every previous cleaner because there
+        // were no brackets, parens, or pipe. After this slice the bare
+        // tag strips before the retry path even sees the title, so the
+        // first-pass LRCLib /api/search query matches Shaggy's "Angel"
+        // canonically.
+        assert_eq!(clean_title("Angel Lyrics"), "Angel");
+        assert_eq!(clean_title("Beautiful Things Lyrics"), "Beautiful Things");
+        assert_eq!(clean_title("Shaggy - Angel Lyrics"), "Shaggy - Angel");
+        assert_eq!(clean_title("Some Song Lyric Video"), "Some Song");
+        assert_eq!(clean_title("Track Music Video"), "Track");
+        assert_eq!(clean_title("Track Official Music Video"), "Track");
+        assert_eq!(clean_title("Track Official Video"), "Track");
+        assert_eq!(clean_title("Track Official Audio"), "Track");
+        assert_eq!(clean_title("Track Official Visualizer"), "Track");
+        // Quality markers
+        assert_eq!(clean_title("Song HD"), "Song");
+        assert_eq!(clean_title("Song UHD"), "Song");
+        assert_eq!(clean_title("Song 4K"), "Song");
+        assert_eq!(clean_title("Song 8K"), "Song");
+        assert_eq!(clean_title("Song 1080p"), "Song");
+        // Compound trailing tags strip in one pass
+        assert_eq!(clean_title("Song HD 4K"), "Song");
+        assert_eq!(clean_title("Song HD 4K Music Video"), "Song");
+        assert_eq!(clean_title("Song Official Music Video HD"), "Song");
+        // Preserve titles that ARE the bare tag (single word, no preceding
+        // content) — songs literally titled "Lyrics", "Music Video", etc.
+        assert_eq!(clean_title("Lyrics"), "Lyrics");
+        assert_eq!(clean_title("Music Video"), "Music Video");
+        // Preserve case where the trailing token isn't in our safe-strip
+        // vocabulary (bare `Audio` / `Visualizer` / `MV` / `HQ` without
+        // `Official` qualifier — too risky for false positives).
+        assert_eq!(clean_title("Song Audio"), "Song Audio");
+        assert_eq!(clean_title("Song MV"), "Song MV");
+        assert_eq!(clean_title("Song HQ"), "Song HQ");
+        // Compose with bracketed cleaner — bare tag inside parens still works
+        assert_eq!(clean_title("Angel (Lyrics)"), "Angel");
+        // Compose with bracketed cleaner where bracketed AND bare appear
+        assert_eq!(clean_title("Angel (HD) Lyrics"), "Angel");
     }
 
     #[test]

@@ -6,6 +6,14 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.10.24] - 2026-05-21
+
+### Fixed
+- **Songs titled `"Artist - Song Lyrics"` on YouTube now resolve to real lyrics.** Real example that hit Hum: playing Shaggy's "Angel" via a YouTube upload titled `"Shaggy - Angel Lyrics"` showed `♪ no lyrics for Shaggy - Angel Lyrics` despite "Angel" being one of the most-covered songs on LRCLib. The trailing bare word `Lyrics` (no brackets, no parens, no pipe) survived every previous cleaner pass and poisoned the LRCLib search query — even the retry path that strips the leading `"Shaggy - "` channel prefix saw `"Angel Lyrics"` rather than `"Angel"` and missed. The cleaner now also strips bare trailing uploader-chrome words from titles: `Lyrics`, `Lyric Video`, `Music Video`, `Official Music Video`, `Official Video`, `Official Audio`, `Official Visualizer`, and quality markers `HD`, `UHD`, `4K`, `8K`, `1080p`, `1440p`, `2160p`. Compound trailing tags collapse in one pass (`"Song HD 4K Music Video"` → `"Song"`). Titles that ARE the bare tag (e.g. a song literally named "Lyrics" or "Music Video") are preserved by requiring at least one non-whitespace char before the first tag.
+
+### Architecture / files
+- **`src-tauri/src/lyrics.rs`** — new `bare_trailing_tag_cleaner()` regex added as step 4 in the `clean_title` pipeline (after the bracketed `cleaner()` and `pipe_tag_cleaner()`). The vocabulary is deliberately narrower than the bracketed cleaner — bare `Audio`, `Visualizer`, `MV`, `HQ` without an `Official` qualifier are NOT stripped because they appear in legit song titles often enough to risk false positives. Bare `Lyrics`/`Lyric Video`/`Music Video`/`Official *` and the quality markers are safe because no canonical released song uses them as a title suffix outside of YouTube uploader conventions. 13 new unit tests added to the existing `cleans_titles` test, covering the original Shaggy failure, every bare-tag variant, compound trailing tags, preservation of single-word "tag-only" titles, preservation of the risky bare vocab (`Audio`/`MV`/`HQ`), and composition with the bracketed cleaner.
+
 ## [0.10.23] - 2026-05-21
 
 ### Added
