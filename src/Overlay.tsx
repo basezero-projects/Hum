@@ -1255,6 +1255,15 @@ function statusLine(l: CurrentLyrics, t: CurrentTrack | null): string {
       return t?.title
         ? `♪ no lyrics for ${t.title}`
         : "♪ no lyrics on LRCLib";
+    case "unsupported":
+      // Source publishes audio but no metadata Hum can decode — Pandora
+      // web is the motivating case. Show a clear reason rather than
+      // pretending we just couldn't find lyrics for "Now Playing on
+      // Pandora" (which is the browser tab title, not a song).
+      if (l.source === "unsupported-source" && t?.title?.endsWith("Now Playing on Pandora")) {
+        return "♪ Pandora web — track info unavailable";
+      }
+      return "♪ track info unavailable for this source";
     case "instrumental":
       return "♪ instrumental";
     case "plain":

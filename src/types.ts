@@ -59,6 +59,7 @@ export type LyricsStatus =
   | "plain"
   | "instrumental"
   | "not_found"
+  | "unsupported"
   | "error";
 
 export type CurrentLyrics = {

@@ -221,6 +221,16 @@ export default function DevConsole() {
               </div>
             )}
           </div>
+        ) : lyrics.status === "unsupported" ? (
+          <div>
+            <div style={{ color: "#888", marginBottom: 0 }}>
+              Track info unavailable from this source —{" "}
+              <span style={{ color: "#fff" }}>
+                {lyrics.track.title || "(no title)"}
+              </span>{" "}
+              cannot be decoded by Hum.
+            </div>
+          </div>
         ) : lyrics.status === "error" ? (
           <div>
             <div style={{ color: "#f87171", marginBottom: 8 }}>
