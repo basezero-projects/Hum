@@ -103,9 +103,6 @@ fn is_chromium_process(name: &str) -> bool {
 /// reach into whichever renderer process is hosting that window's content,
 /// so we don't need to chase the per-tab child processes ourselves.
 ///
-/// NOTE: called by PandoraProbe::read() in Task 5 (UIA tree walk, blocked
-/// on inspect.exe verification). The allow is item-scoped, not file-wide.
-#[allow(dead_code)]
 fn find_chrome_windows<F: Fn(&str) -> bool>(predicate: F) -> Vec<HWND> {
     struct Ctx<'a> {
         predicate: &'a dyn Fn(&str) -> bool,
@@ -144,8 +141,6 @@ fn find_chrome_windows<F: Fn(&str) -> bool>(predicate: F) -> Vec<HWND> {
     ctx.hits
 }
 
-// Called by find_chrome_windows (Task 5).
-#[allow(dead_code)]
 fn read_window_title(hwnd: HWND) -> String {
     let mut buf = [0u16; 512];
     // GetWindowTextW returns the number of characters copied, NOT
@@ -158,8 +153,6 @@ fn read_window_title(hwnd: HWND) -> String {
     String::from_utf16_lossy(&buf[..n as usize])
 }
 
-// Called by find_chrome_windows (Task 5).
-#[allow(dead_code)]
 fn read_process_name_for_window(hwnd: HWND) -> String {
     let mut pid: u32 = 0;
     let _ = unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
@@ -179,6 +172,120 @@ fn read_process_name_for_window(hwnd: HWND) -> String {
     } else {
         String::from_utf16_lossy(&name_buf[..n as usize])
     }
+}
+
+// ─── Pandora UIA selector reference ────────────────────────────────────────
+//
+// Discovered via inspect.exe against pandora.com Chrome window on 2026-05-21.
+// Pandora's CSS Modules use a `{Module}__{slot}__{name}` convention with
+// inconsistent leading-letter case across slots (`nowPlayingTopInfo` vs
+// `NowPlayingTopInfo`). The matcher below is case-insensitive on the
+// distinguishing `__current__<role>Name` suffix to absorb that, and uses
+// substring match because Pandora's ClassName is a space-separated multi-
+// class list where the first token is role-specific and subsequent tokens
+// (`nowPlayingTopInfo__current__link` shared across all three roles, plus
+// ImageLoader__shadow / __intrinsic for art elements) are noise we ignore.
+//
+// Track title:
+//   LocalizedControlType = "link"
+//   ClassName substring  = "__current__trackName"
+//   Name                 = song title (sometimes duplicated visible+aria-label)
+//
+// Artist:
+//   LocalizedControlType = "link"
+//   ClassName substring  = "__current__artistName"
+//   Name                 = artist name(s), e.g. "Kane Brown, Swae Lee & Khalid"
+//
+// Album:
+//   LocalizedControlType = "link"
+//   ClassName substring  = "__current__albumName"
+//   Name                 = album, e.g. "Different Man"
+//
+// Selector strategy: depth-first walk of the Chrome window's root
+// IUIAutomationElement subtree via the control-view tree walker, filter
+// by lowercased ClassName containing the role's substring, return the
+// matching node's Name property. Stable across Pandora's React rebuilds
+// because the substring is derived from CSS Module source slot names.
+
+/// Walk the descendants of `root` and return the `Name` property of the
+/// first element whose `ClassName` contains `class_substr` (case-
+/// insensitive). Returns `None` if no element matches or the property
+/// reads fail. Bails after MAX_NODES nodes to keep worst-case latency
+/// bounded — Pandora's tree is well under that.
+fn find_text_by_class_substr(
+    automation: &uiautomation::UIAutomation,
+    root: &uiautomation::UIElement,
+    class_substr: &str,
+) -> Option<String> {
+    const MAX_NODES: usize = 5_000;
+    let walker = automation.get_control_view_walker().ok()?;
+    let needle = class_substr.to_lowercase();
+    let mut stack: Vec<uiautomation::UIElement> = vec![root.clone()];
+    let mut visited = 0_usize;
+
+    while let Some(node) = stack.pop() {
+        visited += 1;
+        if visited > MAX_NODES {
+            eprintln!(
+                "[web_bridge] PandoraProbe: tree walk hit MAX_NODES={MAX_NODES} cap looking for {class_substr:?}"
+            );
+            return None;
+        }
+
+        if let Ok(class) = node.get_classname() {
+            if class.to_lowercase().contains(&needle) {
+                if let Ok(name) = node.get_name() {
+                    let trimmed = name.trim();
+                    if !trimmed.is_empty() {
+                        return Some(trimmed.to_string());
+                    }
+                }
+            }
+        }
+
+        // Push children in reverse so the visit order remains
+        // document order (depth-first, leftmost-first).
+        let mut children: Vec<uiautomation::UIElement> = Vec::new();
+        if let Ok(first) = walker.get_first_child(&node) {
+            let mut cur = Some(first);
+            while let Some(c) = cur {
+                children.push(c.clone());
+                cur = walker.get_next_sibling(&c).ok();
+            }
+        }
+        for c in children.into_iter().rev() {
+            stack.push(c);
+        }
+    }
+    None
+}
+
+/// Pandora's track-title `Name` property sometimes contains the visible
+/// text concatenated with the aria-label, producing strings like
+/// `"Song Title Song Title"`. When the string is `"{half} {half}"` —
+/// i.e. two copies separated by exactly one space — collapse to a single
+/// copy. Defensive: only dedupes when the two halves match exactly, so
+/// legitimate titles that happen to contain repeated words are preserved.
+fn dedupe_doubled(s: &str) -> String {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    // "ABC ABC" has the form left + " " + right where left == right.
+    // The space falls at index N in a string of length 2N+1.
+    let len = trimmed.len();
+    if len >= 3 && !len.is_multiple_of(2) {
+        // Odd total length — the midpoint space is at (len - 1) / 2.
+        let mid = (len - 1) / 2;
+        if trimmed.as_bytes().get(mid) == Some(&b' ') {
+            let left = &trimmed[..mid];
+            let right = &trimmed[mid + 1..];
+            if !left.is_empty() && left == right {
+                return left.to_string();
+            }
+        }
+    }
+    trimmed.to_string()
 }
 
 // PandoraProbe lives in this same module — see Task 4.
@@ -210,7 +317,56 @@ impl WebPlayerProbe for PandoraProbe {
     }
 
     fn read(&self) -> anyhow::Result<Option<WebBridgeTrack>> {
-        // Filled in in Task 5.
+        use uiautomation::UIAutomation;
+
+        let automation = UIAutomation::new()
+            .map_err(|e| anyhow::anyhow!("UIAutomation::new failed: {e:?}"))?;
+
+        // Find Chromium windows whose title ends with the Pandora suffix.
+        let hwnds = find_chrome_windows(|t| t.ends_with("Now Playing on Pandora"));
+        if hwnds.is_empty() {
+            return Ok(None);
+        }
+
+        // Try each matching window — first one that yields a clean read wins.
+        for hwnd in hwnds {
+            // HWND is windows@0.58; uiautomation uses windows@0.62 — the
+            // types are distinct crate versions so From<HWND> doesn't cross.
+            // Bridge via the raw isize handle value, which Handle: From<isize>.
+            let root = match automation.element_from_handle((hwnd.0 as isize).into()) {
+                Ok(elem) => elem,
+                Err(_) => continue,
+            };
+
+            let title_raw = find_text_by_class_substr(&automation, &root, "__current__trackName")
+                .unwrap_or_default();
+            let artist_raw = find_text_by_class_substr(&automation, &root, "__current__artistName")
+                .unwrap_or_default();
+            let album_raw = find_text_by_class_substr(&automation, &root, "__current__albumName")
+                .unwrap_or_default();
+
+            let title = dedupe_doubled(&title_raw);
+            let artist = dedupe_doubled(&artist_raw);
+            let album = dedupe_doubled(&album_raw);
+
+            if title.is_empty() {
+                continue;
+            }
+
+            let now_unix_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+
+            return Ok(Some(WebBridgeTrack {
+                title,
+                artist,
+                album,
+                source: self.name().to_string(),
+                last_seen_unix_ms: now_unix_ms,
+            }));
+        }
+
         Ok(None)
     }
 }
@@ -374,5 +530,27 @@ mod tests {
             "Rick Astley - Never Gonna Give You Up",
             "Chrome.exe",
         ));
+    }
+
+    #[test]
+    fn dedupe_doubled_handles_exact_doubling() {
+        assert_eq!(dedupe_doubled("Be Like That Be Like That"), "Be Like That");
+        assert_eq!(dedupe_doubled("Different Man Different Man"), "Different Man");
+    }
+
+    #[test]
+    fn dedupe_doubled_preserves_non_doubled_strings() {
+        assert_eq!(dedupe_doubled("Be Like That"), "Be Like That");
+        assert_eq!(dedupe_doubled("Be Like That (Alex Waldin Remix)"), "Be Like That (Alex Waldin Remix)");
+        assert_eq!(dedupe_doubled("Kane Brown, Swae Lee & Khalid"), "Kane Brown, Swae Lee & Khalid");
+        // Two different halves that happen to be even-length total — don't trim.
+        assert_eq!(dedupe_doubled("Hello World"), "Hello World");
+    }
+
+    #[test]
+    fn dedupe_doubled_trims_whitespace() {
+        assert_eq!(dedupe_doubled("  Song  "), "Song");
+        assert_eq!(dedupe_doubled(""), "");
+        assert_eq!(dedupe_doubled("   "), "");
     }
 }
