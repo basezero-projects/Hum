@@ -564,14 +564,26 @@ export default function Overlay() {
   // Row layout used by 3-line and single-line: art on the left, lyrics column
   // on the right. The art's height comes from align-self: stretch on the art
   // element, which equals the row's height = lyrics column's natural height.
-  // Position relative so the update banner can pin to the row (and therefore
-  // sit next to the album art) instead of the outer container's corner.
   const innerRowStyle: React.CSSProperties = {
-    position: "relative",
     display: "flex",
     flexDirection: "row",
     alignItems: "center",
     gap: showArt && albumArt ? 14 : 0,
+    width: "100%",
+    minHeight: 0,
+  };
+
+  // Vertical stack that holds the update banner (when visible) above the
+  // horizontal art+lyrics row. The ResizeObserver-tracked element (which
+  // drives the window's auto-resize-to-content) sits here, NOT on
+  // `innerRowStyle`, so banner height contributes to the window height.
+  // When `UpdateBanner` returns null (idle phase), this collapses to just
+  // the row's height — no visual change.
+  const outerStackStyle: React.CSSProperties = {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "stretch",
+    gap: 4,
     width: "100%",
     minHeight: 0,
   };
@@ -670,10 +682,11 @@ export default function Overlay() {
       style={containerStyle}
     >
       <NudgeBanner banner={nudgeBanner} />
-      <div ref={setInnerRowEl} style={innerRowStyle}>
+      <div ref={setInnerRowEl} style={outerStackStyle}>
         <UpdateBanner state={updateState} onInstall={installUpdate} />
-        {showArt && albumArt ? <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} /> : null}
-        <div ref={setLyricsColEl} style={lyricsColStyle}>
+        <div style={innerRowStyle}>
+          {showArt && albumArt ? <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} /> : null}
+          <div ref={setLyricsColEl} style={lyricsColStyle}>
           <LineRow text={prev?.text} kind="prev" dragRegion={isEdit} settings={settingsForRender} textShadow={effectiveTextShadow} />
           <LineRow
             text={middleText}
@@ -688,6 +701,7 @@ export default function Overlay() {
           ) : (
             <LineRow text={next?.text} kind="next" dragRegion={isEdit} settings={settingsForRender} textShadow={effectiveTextShadow} />
           )}
+          </div>
         </div>
       </div>
     </div>
@@ -720,23 +734,20 @@ function UpdateBanner({
   if (state.phase === "idle") return null;
   const clickable = state.phase === "available";
 
+  // Sits in normal flow as the first child of `outerStackStyle` in the main
+  // render tree — above the art+lyrics row, contributing its own height to
+  // the window's auto-resize. `align-self: flex-start` keeps the dot+label
+  // hugging the left edge instead of stretching to full width.
   const wrapperStyle: React.CSSProperties = {
-    position: "absolute",
-    // Pinned to the top-left of the INNER ROW (which contains the album
-    // art). The dot sits just above the album art's top-left corner —
-    // tracks with the art regardless of how big the user resizes the
-    // overlay window.
-    top: -4,
-    left: 0,
+    alignSelf: "flex-start",
     display: "flex",
     alignItems: "center",
     gap: 8,
     cursor: clickable ? "pointer" : "default",
     pointerEvents: clickable ? "auto" : "none",
     userSelect: "none",
-    padding: "4px 6px",
+    padding: "2px 4px",
     borderRadius: 4,
-    zIndex: 10,
   };
 
   const dotStyle: React.CSSProperties = {

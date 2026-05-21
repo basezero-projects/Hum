@@ -251,12 +251,9 @@ pub fn run() {
                             Some(w) => w,
                             None => continue,
                         };
-                        let (pos, size) = match (
-                            overlay.outer_position(),
-                            overlay.outer_size(),
-                        ) {
-                            (Ok(p), Ok(s)) => (p, s),
-                            _ => continue,
+                        let pos = match overlay.outer_position() {
+                            Ok(p) => p,
+                            Err(_) => continue,
                         };
                         let visible = banner_visible.load(Ordering::Acquire);
                         let in_zone = if visible {
@@ -264,20 +261,20 @@ pub fn run() {
                             // SAFETY: GetCursorPos writes to the POINT we
                             // own on the stack; no aliasing.
                             if unsafe { GetCursorPos(&mut pt) }.is_ok() {
-                                // Banner is now pinned to the top-left of
-                                // the inner row, which is centered
-                                // vertically in the overlay. So the click
-                                // hole is the top-left ~360px wide,
-                                // covering the middle 60% vertical band
-                                // (catches the banner regardless of
-                                // window scale, since aspect is locked).
+                                // Banner now sits at the very top of the
+                                // overlay's content area (the outer-stack
+                                // column lays it out above the art+lyrics
+                                // row). Click hole = top-left, ~360px wide
+                                // by 48px tall, which covers the
+                                // container's 12px top padding + ~24px of
+                                // banner content + a few px of buffer.
+                                const BANNER_ZONE_H: i32 = 48;
                                 let left = pos.x;
-                                let top = pos.y + (size.height as i32) / 5;
-                                let bottom = pos.y + (size.height as i32) * 4 / 5;
+                                let top = pos.y;
                                 pt.x >= left
                                     && pt.x < left + BANNER_ZONE_W
                                     && pt.y >= top
-                                    && pt.y < bottom
+                                    && pt.y < top + BANNER_ZONE_H
                             } else {
                                 false
                             }

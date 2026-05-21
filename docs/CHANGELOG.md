@@ -6,6 +6,15 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.10.6] - 2026-05-21
+
+### Changed
+- **Update banner no longer overlaps the lyrics.** The "New Update Available: v0.X.Y — Click to update" pill used to be absolutely positioned at the top-left of the inner row (`position: absolute; top: -4; left: 0`), which placed it on top of the previous lyric line. Now it sits in normal flow as the first child of a new vertical-stack container, with the art+lyrics row below it and a 4px gap between. When no update is pending the banner returns `null` and the stack collapses to just the row — no visual change from before. When an update is pending the overlay window auto-resizes up by ~24px to accommodate the banner (the `ResizeObserver` target was moved from the inner row onto the outer stack), and the gold dot + label sit cleanly above the "It's always half and never whole" / previous-line position instead of crashing into it.
+
+### Architecture / files
+- **`src/Overlay.tsx`** — new `outerStackStyle` (column flex, align-stretch, 4px gap) wraps the existing `innerRowStyle` (now row-only, `position: relative` removed since nothing's absolute inside anymore) and the `<UpdateBanner>` component. The `setInnerRowEl` ref (which feeds the `ResizeObserver` → `setSize(LogicalSize)` chain that auto-sizes the overlay window to content) moves from the row to the outer stack so banner height is included in the resize math. `UpdateBanner`'s `wrapperStyle` loses `position: absolute`, `top`, `left`, `zIndex`; gains `alignSelf: "flex-start"` so the dot+label hug the left edge instead of stretching to full width. Inner padding tightens from `4px 6px` to `2px 4px` so the banner sits flush against the top edge of the window.
+- **`src-tauri/src/lib.rs`** — ghost-mode "click hole" zone moves from a top-left ~360px-wide band covering the middle 60% vertical (which targeted the OLD centered-banner position) to a top-left 360×48px rectangle at the very top of the window content. Catches cursor over the banner's new flow position. New `BANNER_ZONE_H: i32 = 48` const inside the polling closure. Vertical math simplified from `(height/5, height*4/5)` to `(0, BANNER_ZONE_H)`.
+
 ## [0.10.5] - 2026-05-21
 
 ### Fixed
