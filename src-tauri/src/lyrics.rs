@@ -53,6 +53,11 @@ pub struct LyricLine {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CachedLyrics {
     NotFound,
+    /// The source publishes audio but doesn't expose track metadata in any
+    /// form Hum can read (e.g. Pandora web with no UIA selector match).
+    /// Renders as a clear "source-specific reason" message rather than
+    /// the generic "no lyrics for <garbage tab title>" output.
+    Unsupported,
     Instrumental,
     Plain {
         text: String,
@@ -104,6 +109,7 @@ pub enum Status {
     Plain,
     Instrumental,
     NotFound,
+    Unsupported,
     Error,
 }
 
@@ -394,6 +400,14 @@ async fn apply_outcome(
             s.lines = vec![];
             s.translation = None;
             let _ = app.emit("lyrics-loaded", &*s);
+        }
+        CachedLyrics::Unsupported => {
+            s.status = Status::Unsupported;
+            s.line_count = 0;
+            s.plain = None;
+            s.lines = vec![];
+            s.translation = None;
+            let _ = app.emit("lyrics-not-found", &*s);
         }
         CachedLyrics::NotFound => {
             s.status = if out.source == "error" {
@@ -1584,18 +1598,19 @@ fn read_store(app: &AppHandle, key: &str) -> Option<CachedLyrics> {
     // shouldn't lock the user out of a fresh fetch under the new logic.
     // Successful matches (Synced / Plain / Instrumental) stay cached forever
     // because their content doesn't depend on resolver heuristics.
-    if matches!(cached, CachedLyrics::NotFound) {
+    if matches!(cached, CachedLyrics::NotFound | CachedLyrics::Unsupported) {
         return None;
     }
     Some(cached)
 }
 
 fn write_store(app: &AppHandle, key: &str, cached: &CachedLyrics) {
-    // Symmetric with read_store — don't write NotFound to disk at all, so
-    // restarts always get a fresh resolution attempt with the current
-    // algorithm. In-memory NotFound cache (set above this call) still
-    // suppresses redundant API calls within a single session.
-    if matches!(cached, CachedLyrics::NotFound) {
+    // Don't persist NotFound or Unsupported — these are session-local
+    // states that should re-evaluate on every replay. Caching them would
+    // mask both Hum's own improvements (resolver tweaks between releases)
+    // and improvements in the upstream source (Pandora finally adding
+    // Media Session metadata).
+    if matches!(cached, CachedLyrics::NotFound | CachedLyrics::Unsupported) {
         return;
     }
     let Ok(store) = app.store(STORE_FILE) else { return };
