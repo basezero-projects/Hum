@@ -38,6 +38,14 @@ pub struct Settings {
     /// isn't available for the track. Defaults off so existing users aren't
     /// surprised by a color change after upgrading.
     pub tint_bg_from_album_art: bool,
+    /// When on, the overlay paints a heavily blurred, dimmed copy of the
+    /// current track's album art as the window background — Apple Music
+    /// "Now Playing" style. The user's bg_color is rendered on top so the
+    /// regular opacity slider still tints the result. No-op when album art
+    /// isn't available. Defaults ON because this is the visual identity of
+    /// the overlay now; existing users see a much richer background after
+    /// upgrading.
+    pub blur_album_art_background: bool,
     /// When on, the overlay samples a small strip of pixels just outside
     /// the window every ~2s and inverts the lyric text color based on the
     /// background's luminance — light desktop → dark text, dark desktop →
@@ -71,6 +79,7 @@ impl Default for Settings {
             show_album_art: true,
             show_translation: false,
             tint_bg_from_album_art: false,
+            blur_album_art_background: true,
             // Default ON — the whole point of this app is "show lyrics
             // over whatever you're doing", which means the background is
             // unpredictable. Auto-contrast keeps the text readable

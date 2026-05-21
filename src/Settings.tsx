@@ -176,6 +176,17 @@ export default function SettingsView() {
           background. No effect on tracks without art. Forces a minimum 22%
           opacity so the tint is visible even when Background opacity is 0.
         </Hint>
+        <Toggle
+          label="Blurred album art background"
+          checked={s.blur_album_art_background}
+          onChange={(v) => update("blur_album_art_background", v)}
+        />
+        <Hint>
+          Paints a heavily blurred, dimmed copy of the current track's album
+          art behind the lyrics — Apple Music "Now Playing" style. Your
+          background color renders on top so the opacity slider still tints
+          the result. No effect on tracks without art.
+        </Hint>
       </Section>
 
       <Section title="Layout">

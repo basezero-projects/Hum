@@ -32,6 +32,7 @@ const DEFAULT_SETTINGS: Settings = {
   show_album_art: true,
   show_translation: false,
   tint_bg_from_album_art: false,
+  blur_album_art_background: true,
   auto_contrast: true,
   streamer_enabled: false,
   streamer_port: 38247,
@@ -553,6 +554,23 @@ export default function Overlay() {
     tintActive && settings.bg_opacity < 22 ? 22 : settings.bg_opacity;
   const bgRgba = colorWithOpacity(effectiveBgColor, effectiveOpacity);
 
+  // Blurred album art behind the lyrics — Apple Music "Now Playing" style.
+  // Renders only when there's art for the *current* track AND the user
+  // hasn't turned the setting off. The user's bg_color paints on top so
+  // the opacity slider still works as a darkening tint.
+  const showBlurBg =
+    settings.blur_album_art_background &&
+    !!albumArt &&
+    !!track &&
+    albumArt.title === track.title &&
+    albumArt.artist === track.artist;
+  // When the blur is active we drop the container's own bg paint and
+  // render bgRgba as a layered absolute div above the blur instead.
+  // Otherwise it'd cover the blur entirely (bg paints under flex
+  // content but ABOVE absolute children with z-auto in the same
+  // stacking context).
+  const containerBg = showBlurBg ? "transparent" : bgRgba;
+
   // Outer frame for all layouts: full window, visual chrome, vertical centering
   // of the inner content. The inner row (3-line / single-line) OR the inner
   // scrolling column (full-page) controls horizontal layout.
@@ -567,7 +585,7 @@ export default function Overlay() {
     gap: layoutMode === "full_page" ? settings.line_padding_px : 0,
     padding: "12px 16px",
     boxSizing: "border-box",
-    background: bgRgba,
+    background: containerBg,
     fontFamily: `"${settings.font_family}", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`,
     userSelect: "none",
     cursor: isEdit ? "move" : "default",
@@ -580,6 +598,11 @@ export default function Overlay() {
   // Row layout used by 3-line and single-line: art on the left, lyrics column
   // on the right. The art's height comes from align-self: stretch on the art
   // element, which equals the row's height = lyrics column's natural height.
+  //
+  // `position: relative` lets this flex row stack ABOVE the absolutely-
+  // positioned blurred album-art background layer when that's enabled.
+  // Without positioning, CSS paint order puts absolute siblings on top of
+  // static flex children regardless of DOM order.
   const innerRowStyle: React.CSSProperties = {
     display: "flex",
     flexDirection: "row",
@@ -587,6 +610,7 @@ export default function Overlay() {
     gap: showArt && albumArt ? 14 : 0,
     width: "100%",
     minHeight: 0,
+    position: "relative",
   };
 
   // Vertical stack that holds the update banner (when visible) above the
@@ -595,6 +619,7 @@ export default function Overlay() {
   // `innerRowStyle`, so banner height contributes to the window height.
   // When `UpdateBanner` returns null (idle phase), this collapses to just
   // the row's height — no visual change.
+  // `position: relative` keeps this above the blurred album-art background.
   const outerStackStyle: React.CSSProperties = {
     display: "flex",
     flexDirection: "column",
@@ -602,6 +627,7 @@ export default function Overlay() {
     gap: 4,
     width: "100%",
     minHeight: 0,
+    position: "relative",
   };
 
   const lyricsColStyle: React.CSSProperties = {
@@ -633,6 +659,9 @@ export default function Overlay() {
         onMouseLeave={() => setHovered(false)}
         style={containerStyle}
       >
+        {showBlurBg ? (
+          <BlurredAlbumBg dataUrl={albumArt!.data_url} tintColor={bgRgba} />
+        ) : null}
         <div style={innerRowStyle}>
           {showArt && albumArt ? <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} /> : null}
           <div ref={setLyricsColEl} style={lyricsColStyle}>
@@ -662,6 +691,9 @@ export default function Overlay() {
         onMouseLeave={() => setHovered(false)}
         style={containerStyle}
       >
+        {showBlurBg ? (
+          <BlurredAlbumBg dataUrl={albumArt!.data_url} tintColor={bgRgba} />
+        ) : null}
         {showArt && albumArt ? <AlbumArtBadge dataUrl={albumArt.data_url} /> : null}
         {hasLines ? (
           lyrics!.lines.map((line, i) => (
@@ -697,6 +729,9 @@ export default function Overlay() {
       onMouseLeave={() => setHovered(false)}
       style={containerStyle}
     >
+      {showBlurBg ? (
+        <BlurredAlbumBg dataUrl={albumArt!.data_url} tintColor={bgRgba} />
+      ) : null}
       <NudgeBanner banner={nudgeBanner} />
       <div ref={setInnerRowEl} style={outerStackStyle}>
         <UpdateBanner state={updateState} onInstall={installUpdate} />
@@ -882,6 +917,65 @@ function NudgeBanner({ banner }: { banner: { value: number; until: number } | nu
   );
 }
 
+// Heavily blurred + dimmed copy of the current track's album art, used as
+// the overlay's background layer ("Apple Music Now Playing" style). Two
+// stacked absolute divs:
+//   1. The blurred image — `inset: -48px` extends past the container edges
+//      so the blur's soft falloff doesn't bleed in as transparent fringes.
+//   2. The user's bg_color (rgba string, may be `"transparent"`) as a tint
+//      on top of the blur. Keeps the bg-opacity slider working as a darken /
+//      lighten control over the blurred art.
+// Container needs `overflow: hidden` (the three layout containers all set
+// it) so the oversized inset doesn't leak outside the window chrome.
+function BlurredAlbumBg({
+  dataUrl,
+  tintColor,
+}: {
+  dataUrl: string;
+  tintColor: string;
+}) {
+  // Outer wrapper pins to the container edges and clips its own overflow.
+  // The full-page layout uses `overflow: auto`, so without this wrapper
+  // the inner negative-inset blur would create phantom scroll content.
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        overflow: "hidden",
+        pointerEvents: "none",
+        borderRadius: 8,
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          // Extend past the wrapper so the blur's soft falloff doesn't
+          // show as a transparent halo at the edges. 48px > the 40px
+          // blur radius below.
+          top: -48,
+          left: -48,
+          right: -48,
+          bottom: -48,
+          backgroundImage: `url(${dataUrl})`,
+          backgroundSize: "cover",
+          backgroundPosition: "center",
+          filter: "blur(40px) saturate(1.35) brightness(0.62)",
+        }}
+      />
+      {tintColor !== "transparent" ? (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: tintColor,
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
 function AlbumArtBadge({ dataUrl }: { dataUrl: string }) {
   // Used by full-page layout — small absolute-positioned thumbnail in the
   // corner since side-by-side would conflict with the scrolling column.
@@ -1033,6 +1127,10 @@ function LineRow({
         lineHeight: 1.2,
         maxWidth: "92vw",
         letterSpacing: isCur ? 0.2 : 0,
+        // Positioned so this row paints above the absolutely-positioned
+        // blurred album-art background (full-page layout renders each
+        // LineRow as a direct flex child of the container).
+        position: "relative",
         ...wrapStyle,
       }}
     >
@@ -1041,14 +1139,28 @@ function LineRow({
             const idx = karaoke!.currentWordIdx;
             const isPast = idx > i;
             const isCurrent = idx === i;
-            const lit = isPast || isCurrent;
             const dur = wordDurationMs(karaoke!.words, i, karaoke!.nextTimeMs);
+            // Karaoke wipe: each word is filled with a two-stop gradient
+            // (lit on the left half, dim on the right half) clipped to the
+            // text glyphs via background-clip: text. background-position
+            // slides the gradient under the glyphs:
+            //   past    → 0% 0%   (lit half covers the word)
+            //   current → animates 100% → 0% (left-to-right sweep)
+            //   future  → 100% 0% (dim half covers the word)
+            // Smooth fill instead of the old abrupt dim→lit step.
+            const bgPos = isPast || isCurrent ? "0% 0%" : "100% 0%";
             return (
               <span
                 key={i}
                 style={{
-                  color: lit ? settings.text_color : settings.text_color_dim,
-                  transition: isCurrent ? `color ${dur}ms linear` : "none",
+                  background: `linear-gradient(to right, ${settings.text_color} 0%, ${settings.text_color} 50%, ${settings.text_color_dim} 50%, ${settings.text_color_dim} 100%)`,
+                  backgroundSize: "200% 100%",
+                  backgroundPosition: bgPos,
+                  backgroundClip: "text",
+                  WebkitBackgroundClip: "text",
+                  color: "transparent",
+                  WebkitTextFillColor: "transparent",
+                  transition: isCurrent ? `background-position ${dur}ms linear` : "none",
                 }}
               >
                 {w.text}

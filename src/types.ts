@@ -38,6 +38,7 @@ export type Settings = {
   show_album_art: boolean;
   show_translation: boolean;
   tint_bg_from_album_art: boolean;
+  blur_album_art_background: boolean;
   auto_contrast: boolean;
   streamer_enabled: boolean;
   streamer_port: number;
