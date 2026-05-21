@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 
 use tauri::image::Image;
-use tauri::menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+use tauri::menu::{CheckMenuItemBuilder, MenuBuilder, MenuItem, MenuItemBuilder, SubmenuBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
 use tokio::sync::RwLock;
@@ -60,6 +60,48 @@ async fn get_current_lyrics(
 ) -> Result<CurrentLyrics, String> {
     let s = state.read().await;
     Ok(s.clone())
+}
+
+/// Frontend calls this when a tray-relevant update is detected (or
+/// cleared) so the "Check for updates" menu item can flip its label
+/// to "Install update vX.Y.Z" — the tray becomes the actionable
+/// surface; the overlay banner is just a pointer.
+#[tauri::command]
+fn set_update_indicator(
+    app: tauri::AppHandle,
+    pending_version: Option<String>,
+) -> Result<(), String> {
+    let item = match app.try_state::<UpdateMenuItem>() {
+        Some(s) => s.0.clone(),
+        None => return Err("update menu item not registered".into()),
+    };
+    let new_text = match pending_version {
+        Some(v) => format!("Install update v{v}"),
+        None => "Check for updates".to_string(),
+    };
+    item.set_text(new_text).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Managed state — handle to the dynamic-label "Check for updates" /
+/// "Install update vX" tray menu item. Held in Tauri state so
+/// `set_update_indicator` can find it.
+struct UpdateMenuItem(MenuItem<tauri::Wry>);
+
+/// Frontend tells us when the update banner is visible / hidden so the
+/// ghost-mode cursor-poll worker knows whether to poke a clickable
+/// hole in the click-through region.
+#[tauri::command]
+fn set_update_banner_visible(
+    app: tauri::AppHandle,
+    visible: bool,
+) -> Result<(), String> {
+    if let Some(s) = app.try_state::<Arc<AtomicBool>>() {
+        s.store(visible, Ordering::Release);
+    } else {
+        return Err("update banner state not registered".into());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -169,6 +211,91 @@ pub fn run() {
                 let _ = main.hide();
             }
 
+            // Window height auto-follows content via the frontend's
+            // ResizeObserver in Overlay.tsx — no empty vertical space
+            // possible. Width is user-controllable (drag the right edge);
+            // dragging text bigger via wider window. Vertical drag is
+            // effectively a no-op since the next ResizeObserver fire
+            // snaps height back to content.
+
+            // Ghost-mode "click hole" for the update banner. In ghost
+            // mode the whole overlay is click-through; this worker polls
+            // the OS cursor position and toggles set_ignore_cursor_events
+            // on/off so the small top-right banner area receives clicks
+            // even though the rest of the overlay still passes them
+            // through. No-op in edit / locked mode (mode.rs owns the
+            // ignore_cursor_events state there).
+            let banner_visible: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+            app.manage(banner_visible.clone());
+            // mode_state was moved into Builder::manage above; grab the
+            // managed copy back out for the poll worker's closure.
+            let mode_state_clone = app.state::<SharedMode>().inner().clone();
+            let app_for_poll = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                #[cfg(windows)]
+                {
+                    use std::time::Duration;
+                    use tokio::time::sleep;
+                    use windows::Win32::Foundation::POINT;
+                    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+                    const BANNER_ZONE_W: i32 = 360;
+                    loop {
+                        sleep(Duration::from_millis(80)).await;
+                        let mode = OverlayMode::from_u8(
+                            mode_state_clone.load(Ordering::Acquire),
+                        );
+                        if !matches!(mode, OverlayMode::Ghost) {
+                            continue;
+                        }
+                        let overlay = match app_for_poll.get_webview_window("overlay") {
+                            Some(w) => w,
+                            None => continue,
+                        };
+                        let (pos, size) = match (
+                            overlay.outer_position(),
+                            overlay.outer_size(),
+                        ) {
+                            (Ok(p), Ok(s)) => (p, s),
+                            _ => continue,
+                        };
+                        let visible = banner_visible.load(Ordering::Acquire);
+                        let in_zone = if visible {
+                            let mut pt = POINT { x: 0, y: 0 };
+                            // SAFETY: GetCursorPos writes to the POINT we
+                            // own on the stack; no aliasing.
+                            if unsafe { GetCursorPos(&mut pt) }.is_ok() {
+                                // Banner is now pinned to the top-left of
+                                // the inner row, which is centered
+                                // vertically in the overlay. So the click
+                                // hole is the top-left ~360px wide,
+                                // covering the middle 60% vertical band
+                                // (catches the banner regardless of
+                                // window scale, since aspect is locked).
+                                let left = pos.x;
+                                let top = pos.y + (size.height as i32) / 5;
+                                let bottom = pos.y + (size.height as i32) * 4 / 5;
+                                pt.x >= left
+                                    && pt.x < left + BANNER_ZONE_W
+                                    && pt.y >= top
+                                    && pt.y < bottom
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        // ignore_cursor_events = true → click passes through.
+                        // We want the banner zone to receive clicks, so flip
+                        // to false when cursor is over it.
+                        let _ = overlay.set_ignore_cursor_events(!in_zone);
+                    }
+                }
+                #[cfg(not(windows))]
+                {
+                    let _ = (mode_state_clone, app_for_poll, banner_visible);
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -182,6 +309,8 @@ pub fn run() {
             update_settings,
             reset_settings,
             open_settings_window,
+            set_update_indicator,
+            set_update_banner_visible,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -230,6 +359,7 @@ fn build_tray(app: &tauri::AppHandle, initial_mode: OverlayMode) -> tauri::Resul
         locked: mode_locked,
         ghost: mode_ghost,
     });
+    app.manage(UpdateMenuItem(check_updates_item.clone()));
 
     let initial_icon = Image::from_bytes(icon_for(initial_mode))?;
 
@@ -265,9 +395,12 @@ fn build_tray(app: &tauri::AppHandle, initial_mode: OverlayMode) -> tauri::Resul
             }
             "check-updates" => {
                 use tauri::Emitter;
-                // Frontend (Overlay.tsx) owns the check + install + relaunch
-                // sequence so all UI feedback lives in one place. We just
-                // poke it to re-run the check.
+                // Single tray click handles both jobs:
+                // - If the frontend already has an Update available,
+                //   it'll install + relaunch on receiving this event.
+                // - Otherwise it runs a fresh check().
+                // The menu item's LABEL ("Check for updates" vs "Install
+                // update vX") tells the user which it's about to do.
                 let _ = app.emit("updater-check-requested", ());
             }
             "toggle-console" => {

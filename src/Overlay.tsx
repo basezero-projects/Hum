@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { check as checkForUpdate, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import type {
   CurrentLyrics,
   CurrentTrack,
@@ -58,6 +59,9 @@ export default function Overlay() {
   // practice — the row height was driven by the image's intrinsic size).
   const [lyricsColEl, setLyricsColEl] = useState<HTMLDivElement | null>(null);
   const [artSize, setArtSize] = useState<number>(80);
+  // Inner row element ref — drives the auto-resize of the window's
+  // height to match content. No empty space inside the window.
+  const [innerRowEl, setInnerRowEl] = useState<HTMLDivElement | null>(null);
   // Background luminance from contrast.rs's screen-capture worker. Null
   // until the first sample arrives. Frontend uses hysteresis around the
   // threshold to avoid color-flicker on dynamic backgrounds (videos).
@@ -293,38 +297,72 @@ export default function Overlay() {
     return () => window.removeEventListener("resize", handler);
   }, []);
 
-  // Auto-update check. Runs once on overlay mount + whenever the user
-  // picks "Check for updates" from the tray menu. Failures are swallowed
-  // (no endpoint configured / offline / not yet released) so the banner
-  // never shows when there's nothing to install.
+  // updateStateRef so the tray-event listener (single closure created
+  // on mount) can read the latest state without re-subscribing every
+  // time the state changes.
+  const updateStateRef = useRef(updateState);
   useEffect(() => {
-    const run = async () => {
+    updateStateRef.current = updateState;
+  }, [updateState]);
+
+  // Auto-update check. Runs once on overlay mount + whenever the user
+  // picks "Check for updates" / "Install update vX" from the tray menu.
+  // Same tray event covers both: if we already have an Update object,
+  // install it; otherwise run a fresh check.
+  useEffect(() => {
+    const runCheck = async () => {
       try {
         const update = await checkForUpdate();
         if (update?.available) {
           setUpdateState({ phase: "available", version: update.version, update });
+          invoke("set_update_indicator", { pendingVersion: update.version }).catch(() => {});
         }
       } catch {
         // Silent — don't surface "no endpoint reachable" noise to users.
       }
     };
-    run();
+    runCheck();
     const un = listen("updater-check-requested", () => {
-      run();
+      if (updateStateRef.current.phase === "available") {
+        // Trigger install by calling the same handler the banner uses.
+        // We re-derive from state so we don't need to pass it in.
+        installUpdateInternal();
+      } else {
+        runCheck();
+      }
     });
     return () => {
       un.then((fn) => fn()).catch(() => {});
     };
   }, []);
 
-  async function installUpdate() {
-    if (updateState.phase !== "available") return;
-    const { version, update } = updateState;
+  // Tell the Rust ghost-mode cursor-poll worker whether the banner is
+  // currently visible so it can poke a clickable hole in the
+  // click-through region when needed.
+  useEffect(() => {
+    const visible = updateState.phase !== "idle";
+    invoke("set_update_banner_visible", { visible }).catch(() => {});
+  }, [updateState.phase]);
+
+  async function installUpdateInternal() {
+    const cur = updateStateRef.current;
+    if (cur.phase !== "available") return;
+    const { version, update } = cur;
+    if (!update) {
+      // Demo path — no real Update object. Simulate the lifecycle so
+      // Wes can see the visual. Remove the inner branch when ready.
+      setUpdateState({ phase: "downloading", version });
+      window.setTimeout(() => {
+        setUpdateState({ phase: "ready", version });
+        invoke("set_update_indicator", { pendingVersion: null }).catch(() => {});
+      }, 1500);
+      return;
+    }
     setUpdateState({ phase: "downloading", version });
     try {
       await update.downloadAndInstall();
       setUpdateState({ phase: "ready", version });
-      // Give the user a beat to see the "ready" badge before restarting.
+      invoke("set_update_indicator", { pendingVersion: null }).catch(() => {});
       window.setTimeout(() => {
         relaunch().catch(() => {});
       }, 800);
@@ -332,6 +370,20 @@ export default function Overlay() {
       setUpdateState({ phase: "error", message: String(e) });
     }
   }
+  // Backwards-compat name for the banner's onInstall prop.
+  const installUpdate = installUpdateInternal;
+
+  // ─── TEMPORARY DEMO: force the update banner to appear so Wes can see
+  // what it looks like without an actual release endpoint configured.
+  // REMOVE BEFORE NEXT COMMIT.
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setUpdateState({ phase: "available", version: "0.11.0-demo", update: null as unknown as Update });
+      invoke("set_update_indicator", { pendingVersion: "0.11.0-demo" }).catch(() => {});
+    }, 800);
+    return () => window.clearTimeout(t);
+  }, []);
+  // ─── END DEMO
 
   // Sync the album art's size to the lyrics column's measured height.
   // useLayoutEffect for the initial measure (before browser paint, so no
@@ -351,6 +403,45 @@ export default function Overlay() {
     ro.observe(lyricsColEl);
     return () => ro.disconnect();
   }, [lyricsColEl]);
+
+  // Auto-resize the OS window's height to match the inner row's content
+  // height + a small padding buffer. Result: no empty vertical space
+  // inside the window. User can still drag the right edge to make it
+  // wider (which scales text larger, which auto-grows the window
+  // height to match). Dragging the bottom edge effectively snaps back
+  // to content height on the next observe tick.
+  useEffect(() => {
+    if (!innerRowEl) return;
+    let inFlight = false;
+    const apply = async (rowH: number) => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const win = getCurrentWindow();
+        const padding = 24; // top + bottom container padding (12 + 12)
+        const targetH = Math.max(60, Math.round(rowH + padding));
+        const cur = await win.outerSize();
+        const sf = await win.scaleFactor();
+        const curW = cur.width / sf;
+        const curH = cur.height / sf;
+        if (Math.abs(curH - targetH) > 2) {
+          await win.setSize(new LogicalSize(curW, targetH));
+        }
+      } catch {
+        // Window APIs not available — no-op (shouldn't happen in Tauri).
+      } finally {
+        inFlight = false;
+      }
+    };
+    const ro = new ResizeObserver((entries) => {
+      const h = entries[0]?.contentRect.height;
+      if (h && h > 0) apply(h);
+    });
+    ro.observe(innerRowEl);
+    // Initial measure for the very first render.
+    apply(innerRowEl.getBoundingClientRect().height);
+    return () => ro.disconnect();
+  }, [innerRowEl]);
 
   let prev: LyricLine | undefined;
   let cur: LyricLine | undefined;
@@ -405,10 +496,12 @@ export default function Overlay() {
   const effectiveTextColorDim = autoColorActive
     ? (bgIsLight ? "rgba(0,0,0,0.45)" : "rgba(255,255,255,0.45)")
     : settings.text_color_dim;
-  // Scale factor: drives font sizes + line padding so the whole comp
-  // shrinks/grows with the window. Min of width/height ratio to baseline,
-  // so text never overflows when only width is narrower than baseline.
-  const scale = Math.min(winSize.w / BASELINE_WINDOW_W_PX, winSize.h / BASELINE_WINDOW_H_PX);
+  // Scale factor: driven by WIDTH only since height auto-follows content
+  // (see the innerRow ResizeObserver above). Drag the window wider →
+  // text scales up → content gets taller → window height auto-grows.
+  // Drag narrower → text scales down → content shrinks → window height
+  // auto-shrinks. No empty vertical space ever.
+  const scale = Math.max(0.4, winSize.w / BASELINE_WINDOW_W_PX);
   const baseSettings = autoColorActive
     ? { ...settings, text_color: effectiveTextColor, text_color_dim: effectiveTextColorDim }
     : settings;
@@ -471,7 +564,10 @@ export default function Overlay() {
   // Row layout used by 3-line and single-line: art on the left, lyrics column
   // on the right. The art's height comes from align-self: stretch on the art
   // element, which equals the row's height = lyrics column's natural height.
+  // Position relative so the update banner can pin to the row (and therefore
+  // sit next to the album art) instead of the outer container's corner.
   const innerRowStyle: React.CSSProperties = {
+    position: "relative",
     display: "flex",
     flexDirection: "row",
     alignItems: "center",
@@ -574,8 +670,8 @@ export default function Overlay() {
       style={containerStyle}
     >
       <NudgeBanner banner={nudgeBanner} />
-      <UpdateBanner state={updateState} onInstall={installUpdate} />
-      <div style={innerRowStyle}>
+      <div ref={setInnerRowEl} style={innerRowStyle}>
+        <UpdateBanner state={updateState} onInstall={installUpdate} />
         {showArt && albumArt ? <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} /> : null}
         <div ref={setLyricsColEl} style={lyricsColStyle}>
           <LineRow text={prev?.text} kind="prev" dragRegion={isEdit} settings={settingsForRender} textShadow={effectiveTextShadow} />
@@ -598,10 +694,16 @@ export default function Overlay() {
   );
 }
 
-// Subtle update banner pinned to the top-right of the overlay. Stays
-// visible until the user clicks (downloading) or dismisses by clicking
-// the X. Auto-install + relaunch on click. Designed to fit in the
-// overlay's existing chrome — gold pill, dark backdrop, small.
+// Update notice pinned to the top-right of the overlay. Default state is
+// just a small gold dot — minimal pixel footprint, doesn't compete with
+// the lyrics for attention. Hovering expands it into the full message.
+// Click anywhere on the dot or expanded label installs the update and
+// relaunches.
+//
+// Clickable in all three modes (edit / locked / ghost). For ghost mode
+// the Rust side runs a cursor-poll worker that toggles
+// ignore_cursor_events so this small top-right region receives clicks
+// while the rest of the overlay stays click-through.
 function UpdateBanner({
   state,
   onInstall,
@@ -614,40 +716,106 @@ function UpdateBanner({
     | { phase: "error"; message: string };
   onInstall: () => void;
 }) {
+  const [hover, setHover] = useState(false);
   if (state.phase === "idle") return null;
-  const baseStyle: React.CSSProperties = {
+  const clickable = state.phase === "available";
+
+  const wrapperStyle: React.CSSProperties = {
     position: "absolute",
-    top: 4,
-    right: 8,
-    background: "rgba(0,0,0,0.65)",
-    color: "#d4af37",
-    padding: "3px 10px",
-    borderRadius: 6,
+    // Pinned to the top-left of the INNER ROW (which contains the album
+    // art). The dot sits just above the album art's top-left corner —
+    // tracks with the art regardless of how big the user resizes the
+    // overlay window.
+    top: -4,
+    left: 0,
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    cursor: clickable ? "pointer" : "default",
+    pointerEvents: clickable ? "auto" : "none",
+    userSelect: "none",
+    padding: "4px 6px",
+    borderRadius: 4,
+    zIndex: 10,
+  };
+
+  const dotStyle: React.CSSProperties = {
+    display: "inline-block",
+    width: 9,
+    height: 9,
+    borderRadius: "50%",
+    flexShrink: 0,
+  };
+
+  const labelStyle: React.CSSProperties = {
     fontSize: 11,
+    letterSpacing: 0.3,
+    color: "rgba(234,234,234,0.92)",
     fontWeight: 500,
     fontVariantNumeric: "tabular-nums",
-    letterSpacing: 0.4,
-    border: "1px solid rgba(212,175,55,0.35)",
-    cursor: state.phase === "available" ? "pointer" : "default",
-    userSelect: "none",
+    textShadow: "0 1px 2px rgba(0,0,0,0.7)",
+    overflow: "hidden",
+    whiteSpace: "nowrap",
+    transition: "opacity 180ms ease, max-width 220ms ease",
   };
-  if (state.phase === "available") {
-    return (
-      <div style={baseStyle} onClick={onInstall} title="Click to install update + restart">
-        update v{state.version} → click to install
-      </div>
-    );
+
+  let dotColor = "#d4af37";
+  let labelText: React.ReactNode = null;
+  switch (state.phase) {
+    case "available":
+      dotColor = "#d4af37";
+      labelText = `New Update Available: v${state.version} — Click to update`;
+      break;
+    case "downloading":
+      dotColor = "#d4af37";
+      labelText = `Installing v${state.version}…`;
+      break;
+    case "ready":
+      dotColor = "#7ad07a";
+      labelText = `v${state.version} installed — restarting`;
+      break;
+    case "error":
+      dotColor = "#e57373";
+      labelText = "Update failed";
+      break;
   }
-  if (state.phase === "downloading") {
-    return <div style={baseStyle}>installing v{state.version}…</div>;
-  }
-  if (state.phase === "ready") {
-    return <div style={baseStyle}>v{state.version} installed → restarting</div>;
-  }
-  // error
+
+  // Force-show the label for non-"available" states so users see what's
+  // happening during install / failure without needing to hover.
+  const expanded = hover || state.phase !== "available";
+
   return (
-    <div style={{ ...baseStyle, color: "#e57373", borderColor: "rgba(229,115,115,0.4)" }}>
-      update failed
+    <div
+      style={wrapperStyle}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onClick={clickable ? onInstall : undefined}
+      title={
+        clickable
+          ? `Install update v${(state as { version: string }).version} and restart`
+          : undefined
+      }
+    >
+      <span
+        style={{
+          ...dotStyle,
+          background: dotColor,
+          boxShadow: `0 0 6px ${dotColor}80`,
+        }}
+      />
+      <span
+        style={{
+          ...labelStyle,
+          opacity: expanded ? 1 : 0,
+          maxWidth: expanded ? 360 : 0,
+          color:
+            state.phase === "error"
+              ? "rgba(229,115,115,0.95)"
+              : labelStyle.color,
+        }}
+      >
+        {labelText}
+      </span>
     </div>
   );
 }

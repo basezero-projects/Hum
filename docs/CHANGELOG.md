@@ -4,6 +4,21 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.10.1] - 2026-05-21
+
+### Changed
+- **Overlay window height now hugs its content.** The window no longer has empty vertical space below or above the lyrics row — height auto-resizes the instant content height changes (track change, font-size tweak in Settings, banner appearing/disappearing). Default window height dropped from 200px to 130px on first launch. You can still drag the right edge to widen the overlay (wider = bigger text via auto-fit), but dragging the bottom edge is effectively a no-op — the next layout fire snaps height back to content. Implemented in `src/Overlay.tsx` with a `ResizeObserver` on the inner row element calling `getCurrentWindow().setSize(new LogicalSize(w, h))` whenever the row's `offsetHeight` changes.
+
+### Added
+- **Ghost mode keeps the update banner clickable.** Previously, in ghost mode (where the whole overlay is click-through and your mouse passes right through to whatever's behind it), the gold "update v0.X.Y → click to install" banner pinned to the top-right couldn't actually be clicked — clicks went straight through to the app underneath. Now a small banner-shaped zone in the top-right corner stays clickable while the rest of the overlay remains pass-through. Implementation: a background worker in `lib.rs` polls the Windows cursor position every ~40ms while in ghost mode AND the banner is visible, and toggles `set_ignore_cursor_events` on/off based on whether the cursor sits in the banner zone. No effect outside ghost mode (edit + locked modes already had normal click handling).
+- **Tray menu item label flips when an update is detected.** The "Check for updates" item in the system tray menu now changes to "Install update v0.X.Y" once the overlay's startup check (or a manual click) finds a newer version. Clicking it in either state does the right thing — runs a fresh check if no update is known, or triggers the install + relaunch sequence if one is already downloaded and ready. Makes the tray actionable on its own without needing to see the overlay banner.
+
+### Architecture / files
+- **`src/Overlay.tsx`** — new `innerRowEl` ref + `ResizeObserver` effect drives `setSize(LogicalSize)` on every height change. `updateStateRef` mirrors `updateState` so the single `updater-check-requested` tray-event listener (created once on mount) can branch on the latest phase without re-subscribing. Two new `invoke()` calls — `set_update_indicator({ pendingVersion })` whenever the update phase enters/exits "available", and `set_update_banner_visible({ visible })` whenever the banner mounts/unmounts — feed the Rust side.
+- **`src-tauri/src/lib.rs`** — new `UpdateMenuItem` managed-state wrapper holds the `MenuItem<Wry>` handle for the "Check for updates" tray entry so `set_update_indicator` can rewrite its text. New `Arc<AtomicBool>` managed-state holds the banner-visibility flag for the cursor-poll worker. New background `tauri::async_runtime::spawn` worker polls `GetCursorPos` from `windows::Win32::UI::WindowsAndMessaging` every ~40ms; when mode is ghost AND banner is visible, it computes the overlay window's screen rect, derives a banner-shaped zone (top-right corner, height-fifth bands), and flips `set_ignore_cursor_events(!in_zone)`. Two new Tauri commands registered in the `invoke_handler!`: `set_update_indicator`, `set_update_banner_visible`.
+- **`src-tauri/Cargo.toml`** — `windows` crate gains `Win32_UI_WindowsAndMessaging` + `Win32_Foundation` features for `GetCursorPos`.
+- **`src-tauri/tauri.conf.json`** — overlay window default `height: 200` → `height: 130` so first-launch isn't a giant black bar.
+
 ## [0.10.0] - 2026-05-14
 
 ### Removed
