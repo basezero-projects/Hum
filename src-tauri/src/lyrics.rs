@@ -30,7 +30,7 @@ use crate::smtc::SharedSnapshot;
 
 const STORE_FILE: &str = "lyrics-cache.json";
 const USER_AGENT: &str =
-    "hum/0.10.18 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
+    "hum/0.10.19 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WordSpan {
@@ -639,61 +639,144 @@ fn normalize_for_match(s: &str) -> String {
         .to_lowercase()
 }
 
+/// Pick the best LRCLib record for the user's track using a weighted
+/// scoring system instead of cascading hard filters. Every previous
+/// approach (substring + ±N-second duration) had an "all-or-nothing"
+/// failure mode: one weak signal rejected the candidate entirely. Real
+/// LRCLib data is too noisy for that — YouTube lyric uploads add 5-15s
+/// of intro/outro padding, different uploaders use different artist
+/// capitalizations, some records carbon-copy the YouTube title verbatim
+/// (with the "Artist - " prefix and "(Lyrics)" suffix) while the canonical
+/// upload uses the clean studio title. The scoring system uses each
+/// signal as evidence and lets a strong match on one signal compensate
+/// for a weak match on another.
+///
+/// Score components (max ~165, threshold 80):
+///   - **Title (0-100)**: exact match = 100, one-contains-other = 60-90
+///     based on length ratio, weak word-token overlap = 20-50, no overlap = -1
+///     (filtered out — saves cycles since title is the dominant signal).
+///   - **Duration (-50 to +30)**: 0-5s diff = 30, 6-10s = 22, 11-20s = 12,
+///     21-30s = 4, 31+s = -50 (strong negative, reflects "this is probably
+///     a different recording entirely"). Zero requested duration = neutral 15.
+///   - **Artist (0-20)**: only when user-provided artist is non-empty.
+///     Exact = 20, substring = 10, otherwise 0.
+///   - **Synced bonus (0 or +20)**: synced records preferred over plain.
+///
+/// Threshold 80 means a record needs strong evidence on at least two
+/// signals to be returned. Concrete cases:
+///   - Exact title + same duration + synced = 100 + 30 + 20 = 150 → picked.
+///   - Exact title + 8s duration diff + synced = 100 + 22 + 20 = 142 → picked.
+///     (This is the "The Script" / "Fleetwood Mac" lyric-video padding case.)
+///   - Exact title + 40s duration diff + synced = 100 + (-50) + 20 = 70 →
+///     filtered. (This is the "Ashnikko Toxic vs Britney Toxic" disambiguation
+///     — when only the wrong-duration record exists, return None and let
+///     the strip-and-retry path try a cleaner query.)
+///   - Partial title match (rec has the user title as substring) + 5s diff
+///     + synced = 80 + 30 + 20 = 130 → picked. (Carbon-copy LRCLib uploads
+///     of the YouTube video title.)
+///
+/// Substring/contains check uses `normalize_for_match` (lowercase + collapse
+/// Unicode punctuation flavors) so curly-vs-ASCII apostrophe mismatches
+/// don't artificially lower the score.
 fn pick_best(
     records: Vec<LrcRecord>,
     title: &str,
-    _artist: &str,
+    artist: &str,
     requested_duration_ms: u64,
 ) -> Option<LrcRecord> {
-    // Filter by:
-    //   1. Title substring match (case-insensitive, bidirectional,
-    //      punctuation-normalized — curly apostrophes / quotes / en-em
-    //      dashes all collapse to their ASCII equivalents before
-    //      comparison). Avoids picking entirely unrelated tracks that
-    //      happened to surface in search, while not rejecting records
-    //      that differ only in Unicode punctuation flavor (which LRCLib
-    //      uploads do — e.g. "The Man Who Can't Be Moved" vs "The Man
-    //      Who Can't Be Moved" in the same search response).
-    //   2. Duration within ±10s of the requested track — covers/remixes
-    //      of the same name usually have very different lengths (Ashnikko's
-    //      163s Toxic vs Britney's 203s Toxic = 40s diff, comfortably
-    //      filtered out). Widened from ±5s in v0.10.17 because YouTube
-    //      lyric-video uploads routinely add 5-10s intro/outro screens —
-    //      "The Script - The Man Who Can't Be Moved (Lyrics)" plays at
-    //      ~249s on YouTube while every LRCLib record is 240-244s. ±5s
-    //      was rejecting the entire match set. ±10s catches the padding
-    //      without becoming permissive enough to confuse unrelated covers.
-    let requested_secs = requested_duration_ms as i64 / 1000;
     let title_l = normalize_for_match(title);
-    let tolerance_secs: i64 = 10;
+    let artist_l = normalize_for_match(artist);
+    let requested_secs = requested_duration_ms as i64 / 1000;
 
-    let mut candidates: Vec<_> = records
+    const THRESHOLD: i64 = 80;
+
+    let mut scored: Vec<(i64, LrcRecord)> = records
         .into_iter()
-        .filter(|r| {
+        .map(|r| {
             let rec_title = normalize_for_match(r.track_name.as_deref().unwrap_or(""));
-            let title_match =
-                rec_title.contains(&title_l) || title_l.contains(&rec_title) || rec_title == title_l;
-            if !title_match {
-                return false;
+            let rec_artist = normalize_for_match(r.artist_name.as_deref().unwrap_or(""));
+
+            // --- Title score -----------------------------------------------
+            let title_score: i64 = if rec_title.is_empty() {
+                -1
+            } else if rec_title == title_l {
+                100
+            } else if rec_title.contains(&title_l) || title_l.contains(&rec_title) {
+                // Bidirectional substring. Score by length-ratio: when sizes
+                // are close, the substring carries almost all the title's
+                // meaning. When sizes are far apart, the longer side has a
+                // lot of extra noise — still a hit, but weaker.
+                let shorter = rec_title.len().min(title_l.len()) as f64;
+                let longer = rec_title.len().max(title_l.len()) as f64;
+                let ratio = if longer > 0.0 { shorter / longer } else { 1.0 };
+                (60.0 + 30.0 * ratio) as i64
+            } else {
+                // Last-chance partial overlap: count shared whitespace-
+                // separated word tokens (after normalization). Catches
+                // cases like "Foo Bar" vs "Bar Foo" word-reorderings or
+                // tracks where SMTC reports a different cleanup than the
+                // LRCLib uploader did. Score 0-50 based on overlap fraction.
+                let user_tokens: std::collections::HashSet<&str> =
+                    title_l.split_whitespace().filter(|t| t.len() > 1).collect();
+                let rec_tokens: std::collections::HashSet<&str> =
+                    rec_title.split_whitespace().filter(|t| t.len() > 1).collect();
+                if user_tokens.is_empty() || rec_tokens.is_empty() {
+                    -1
+                } else {
+                    let shared = user_tokens.intersection(&rec_tokens).count();
+                    let min_set = user_tokens.len().min(rec_tokens.len());
+                    if shared == 0 {
+                        -1
+                    } else {
+                        let frac = shared as f64 / min_set as f64;
+                        (20.0 + 30.0 * frac) as i64
+                    }
+                }
+            };
+
+            if title_score < 0 {
+                return (-1_000, r);
             }
-            // Skip duration filter only when we have no requested duration to
-            // compare against (shouldn't happen in practice — SMTC and iTunes
-            // both provide it).
-            if requested_secs == 0 {
-                return true;
-            }
-            let r_secs = r.duration.unwrap_or(0.0) as i64;
-            (r_secs - requested_secs).abs() <= tolerance_secs
+
+            // --- Duration score --------------------------------------------
+            let rec_secs = r.duration.unwrap_or(0.0) as i64;
+            let duration_score: i64 = if requested_secs == 0 || rec_secs == 0 {
+                15 // neutral — no signal either way
+            } else {
+                let diff = (rec_secs - requested_secs).abs();
+                match diff {
+                    0..=5 => 30,
+                    6..=10 => 22,
+                    11..=20 => 12,
+                    21..=30 => 4,
+                    _ => -50, // 31+s = probably a different recording
+                }
+            };
+
+            // --- Artist score ----------------------------------------------
+            let artist_score: i64 = if artist_l.is_empty() || rec_artist.is_empty() {
+                0 // can't compare — neutral
+            } else if rec_artist == artist_l {
+                20
+            } else if rec_artist.contains(&artist_l) || artist_l.contains(&rec_artist) {
+                10
+            } else {
+                0
+            };
+
+            // --- Synced bonus ----------------------------------------------
+            let synced_bonus = if r.synced_lyrics.is_some() { 20 } else { 0 };
+
+            let total = title_score + duration_score + artist_score + synced_bonus;
+            (total, r)
         })
+        .filter(|(score, _)| *score >= THRESHOLD)
         .collect();
 
-    candidates.sort_by(|a, b| {
-        // Prefer records with synced lyrics.
-        let ra = a.synced_lyrics.is_some();
-        let rb = b.synced_lyrics.is_some();
-        rb.cmp(&ra)
-    });
-    candidates.into_iter().next()
+    // Highest score wins. Stable sort preserves the upstream order of
+    // ties, which is roughly LRCLib's relevance order — close enough.
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.into_iter().next().map(|(_, r)| r)
 }
 
 fn to_cached_ref(rec: &LrcRecord) -> CachedLyrics {

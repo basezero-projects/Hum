@@ -6,6 +6,22 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.10.19] - 2026-05-21
+
+### Changed
+- **LRCLib record matching switched from cascading hard filters to weighted scoring.** Every prior version of `pick_best` used "title substring AND duration ±N seconds OR rejected" — one weak signal rejected the candidate entirely. Real LRCLib data is too noisy for hard filters: YouTube lyric uploads vary 5-15s from canonical durations, uploader-pseudonym records mix verbatim YouTube titles with canonical ones, artist names appear in 4-5 capitalization/spacing flavors. Every track that previously needed a per-track bandaid (Fleetwood Mac, G-Eazy & Halsey, The Script, Goo Goo Dolls) had the SAME root cause: a strong signal on one dimension was being killed by a marginal failure on another. The new pick_best scores each candidate on title similarity (0-100), duration closeness (-50 to +30), artist match (0-20), synced-vs-plain bonus (0 or +20). A threshold of 80 requires strong evidence on at least two signals; a record above the threshold with the highest total wins. Strong title matches survive marginal duration mismatches, exact title matches with bad duration AND wrong artist correctly get rejected (the classic Britney-vs-Ashnikko "Toxic" disambiguation still works), and partial-token overlap can rescue records whose title shape doesn't quite match the SMTC-reported form.
+
+### Architecture / files
+- **`src-tauri/src/lyrics.rs`** — `pick_best` rewritten end to end. The `_artist` parameter that was previously ignored is now used for the artist-score component. Title scoring has four tiers: exact match (100), bidirectional substring with length-ratio scaling (60-90 — short ratios mean one side has lots of extra noise around a real match, longer ratios mean the substring carries most of the meaning), word-token overlap (20-50 — last-chance partial match for cases like reordered words or unusual cleanups), no overlap (-1, filtered before scoring continues). Duration scoring is a step function: 0-5s = +30, 6-10s = +22, 11-20s = +12, 21-30s = +4, 31+s = -50 (the negative is what enforces the Toxic disambiguation). Artist score is 0 / 10 / 20 for empty / substring / exact (skipped when either side is empty so SMTC-blank-artist tracks aren't penalized). Synced bonus is a flat +20. Threshold constant is `THRESHOLD: i64 = 80`. Walkthroughs of concrete cases live in the function-level doc comment. User-Agent bumped to `hum/0.10.19`.
+
+### Diagnostic notes
+- Concrete score walkthroughs for the tracks that previously failed:
+  - **Fleetwood Mac - Dreams (Official Audio)**: PASS 1 (cleaned to "Fleetwood Mac - Dreams") returns records that contain or equal the user title. Exact match record at 250s vs YouTube ~256s → 100 + 22 + 20 = 142, picked.
+  - **G Eazy & Halsey - Him & I (Lyrics)**: PASS 1 returns "G-Eazy & Halsey - Him & I (Official Video)" records, where rec contains user title minus 9 chars of "(Official Video)" noise (ratio ~0.74). Title 60 + 30·0.74 = 82. Duration close. Synced. Total ~124, picked. (Plus the PASS 2 stripped retry remains in place as a fallback.)
+  - **The Script - The Man Who Can't Be Moved (Lyrics)**: PASS 1 returns carbon-copy "The Script - The Man Who Can't Be Moved (Lyrics)" records where rec_title CONTAINS user_title (the user title cleaned of "(Lyrics)" is exactly the substring before " (lyrics)" in the rec). Ratio ~0.82, title = 84. Duration diff ~8s, score 22. Synced 20. Total 126, picked.
+  - **The Goo Goo Dolls - Iris**: Exact title match against "The Goo Goo Dolls - Iris" record at 290s. If YouTube duration is anywhere from 280-300s, score 100+22+20 = 142 (10s diff threshold) or 100+12+20 = 132 (20s diff threshold) — both well above 80.
+- Toxic disambiguation: if a user is playing Britney's "Toxic" (~200s) but LRCLib search returns only the Ashnikko version (160s), record-1 scores 100 (exact title) + (-50) (40s diff) + 20 (synced) + 0 (artist mismatch if SMTC reported "Britney Spears") = 70 → below threshold 80 → filtered → return None → resolver continues to SimpMusic / NetEase or returns NotFound. Behavior matches what the old hard ±5s/±10s filter did for that case, but the new code achieves it through scoring rather than threshold tuning.
+
 ## [0.10.18] - 2026-05-21
 
 ### Fixed
