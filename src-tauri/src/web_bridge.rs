@@ -81,9 +81,18 @@ impl WebPlayerProbe for PandoraProbe {
     }
 
     fn detects(&self, smtc_title: &str, smtc_app_id: &str) -> bool {
-        // Filled in in Task 3.
-        let _ = (smtc_title, smtc_app_id);
-        false
+        // Chromium-derived browsers (Chrome, Edge, Brave, Opera) all
+        // expose UIA trees identically. Match any AUMID that mentions
+        // Chrome — covers the common case and a few derivatives.
+        // Reject empty app_id outright (idle session / no source).
+        if smtc_app_id.is_empty() || !smtc_app_id.contains("Chrome") {
+            return false;
+        }
+        // Pandora's <title> element is always "{station name} - Now
+        // Playing on Pandora". Match the suffix exactly — substring
+        // matches would false-positive on song titles containing the
+        // word "Pandora" (Aerosmith's "Pandora", Greek mythology, etc.).
+        smtc_title.ends_with("Now Playing on Pandora")
     }
 
     fn read(&self) -> anyhow::Result<Option<WebBridgeTrack>> {
@@ -109,4 +118,88 @@ fn _silence_unused_app_emitter(app: &AppHandle) {
 
 fn _silence_unused_duration() {
     let _ = Duration::from_secs(1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `app_id.contains("Chrome")` matches the real Chrome AUMID
+    /// (`"Chrome.exe"` on most installs, `"MSEdge.exe"`-based hybrids on
+    /// custom builds — we accept any Chromium-derived app since the UIA
+    /// tree shape is identical). `app_id` is empty when SMTC didn't
+    /// report a source — be tolerant.
+    #[test]
+    fn pandora_detects_real_chrome_pandora_session() {
+        let p = PandoraProbe;
+        assert!(p.detects(
+            "Today's Hits Radio - Now Playing on Pandora",
+            "Chrome.exe",
+        ));
+        assert!(p.detects(
+            "Some Other Station - Now Playing on Pandora",
+            "Google.Chrome",
+        ));
+    }
+
+    #[test]
+    fn pandora_rejects_non_chrome_apps() {
+        let p = PandoraProbe;
+        // Even if a desktop Pandora app set the title to match, we
+        // don't activate the probe for non-Chrome sources — they
+        // expose SMTC correctly and don't need DOM scraping.
+        assert!(!p.detects(
+            "Today's Hits Radio - Now Playing on Pandora",
+            "Spotify.exe",
+        ));
+        assert!(!p.detects(
+            "Today's Hits Radio - Now Playing on Pandora",
+            "",
+        ));
+    }
+
+    #[test]
+    fn pandora_rejects_non_pandora_titles_in_chrome() {
+        let p = PandoraProbe;
+        // YouTube in Chrome — must NOT match.
+        assert!(!p.detects(
+            "Rick Astley - Never Gonna Give You Up (Official Music Video)",
+            "Chrome.exe",
+        ));
+        // Spotify Web in Chrome — must NOT match.
+        assert!(!p.detects(
+            "Bohemian Rhapsody · Queen - Spotify",
+            "Chrome.exe",
+        ));
+        // Empty title in Chrome — must NOT match (idle browser tab).
+        assert!(!p.detects("", "Chrome.exe"));
+    }
+
+    #[test]
+    fn pandora_does_not_false_positive_on_word_pandora_elsewhere() {
+        let p = PandoraProbe;
+        // A YouTube video about Pandora's Box mythology, or a Spotify
+        // album called Pandora. Title doesn't END with the canonical
+        // Pandora-tab suffix — must NOT match.
+        assert!(!p.detects(
+            "Pandora's Box - Greek Mythology Explained",
+            "Chrome.exe",
+        ));
+        assert!(!p.detects(
+            "Pandora · Aerosmith - Spotify",
+            "Chrome.exe",
+        ));
+    }
+
+    #[test]
+    fn any_probe_detects_aggregates_correctly() {
+        assert!(any_probe_detects(
+            "Today's Hits Radio - Now Playing on Pandora",
+            "Chrome.exe",
+        ));
+        assert!(!any_probe_detects(
+            "Rick Astley - Never Gonna Give You Up",
+            "Chrome.exe",
+        ));
+    }
 }
