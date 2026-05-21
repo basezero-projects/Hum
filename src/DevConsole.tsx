@@ -193,12 +193,33 @@ export default function DevConsole() {
             …
           </div>
         ) : lyrics.status === "not_found" ? (
-          <div style={{ color: "#888" }}>
-            No lyrics on LRCLib for{" "}
-            <span style={{ color: "#fff" }}>
-              {lyrics.track.title || "(no title)"} —{" "}
-              {lyrics.track.artist || "(no artist)"}
-            </span>
+          <div>
+            <div style={{ color: "#888", marginBottom: lyrics.errors?.length ? 8 : 0 }}>
+              No lyrics found for{" "}
+              <span style={{ color: "#fff" }}>
+                {lyrics.track.title || "(no title)"} —{" "}
+                {lyrics.track.artist || "(no artist)"}
+              </span>
+            </div>
+            {lyrics.errors && lyrics.errors.length > 0 && (
+              <div
+                style={{
+                  fontSize: 11,
+                  fontFamily:
+                    "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+                  color: "#fbbf24",
+                  background: "#1a1610",
+                  border: "1px solid #3a2f1a",
+                  borderRadius: 4,
+                  padding: "8px 10px",
+                  whiteSpace: "pre-wrap",
+                  lineHeight: 1.5,
+                }}
+                title="Authoritative miss from at least one source; these are peer-source errors that didn't change the outcome."
+              >
+                {lyrics.errors.join("\n")}
+              </div>
+            )}
           </div>
         ) : lyrics.status === "error" ? (
           <div>

@@ -30,7 +30,7 @@ use crate::smtc::SharedSnapshot;
 
 const STORE_FILE: &str = "lyrics-cache.json";
 const USER_AGENT: &str =
-    "hum/0.10.3 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
+    "hum/0.10.4 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WordSpan {
@@ -227,6 +227,12 @@ async fn resolve_lyrics(
     let cleaned_title = clean_title(&track.title);
     let cleaned_artist = clean_artist(&track.artist);
     let mut errors: Vec<String> = Vec::new();
+    // Did at least one source authoritatively reply "no match" (vs erroring)?
+    // If yes, we treat the overall result as NotFound even when other sources
+    // errored — a peer's network blip doesn't downgrade an authoritative miss
+    // to a generic "fetch failed." Only when *every* source errored is this
+    // a real fetch failure that warrants `Status::Error`.
+    let mut any_clean_notfound = false;
 
     match fetch_lrclib(client, &cleaned_artist, &cleaned_title, &track.album, track.duration_ms)
         .await
@@ -235,7 +241,9 @@ async fn resolve_lyrics(
             mem.write().await.insert(key.to_string(), cached.clone());
             return Outcome { cached, source, persist: true, errors: Vec::new() };
         }
-        Ok(_) => {} // NotFound — try next source
+        Ok(_) => {
+            any_clean_notfound = true;
+        }
         Err(e) => {
             eprintln!(
                 "[lyrics] lrclib failed for '{cleaned_title}' / '{cleaned_artist}': {e:#}"
@@ -249,7 +257,9 @@ async fn resolve_lyrics(
             mem.write().await.insert(key.to_string(), cached.clone());
             return Outcome { cached, source, persist: true, errors: Vec::new() };
         }
-        Ok(_) => {}
+        Ok(_) => {
+            any_clean_notfound = true;
+        }
         Err(e) => {
             eprintln!(
                 "[lyrics] simpmusic failed for '{cleaned_title}' / '{cleaned_artist}': {e:#}"
@@ -263,7 +273,9 @@ async fn resolve_lyrics(
             mem.write().await.insert(key.to_string(), cached.clone());
             return Outcome { cached, source, persist: true, errors: Vec::new() };
         }
-        Ok(_) => {}
+        Ok(_) => {
+            any_clean_notfound = true;
+        }
         Err(e) => {
             eprintln!(
                 "[lyrics] netease failed for '{cleaned_title}' / '{cleaned_artist}': {e:#}"
@@ -272,19 +284,28 @@ async fn resolve_lyrics(
         }
     }
 
-    // All sources tried. If none errored, this is an authoritative NotFound —
-    // cache it so we don't refetch on every re-emit of the same track. If
-    // anything errored, surface the per-source detail and DO NOT cache, so
-    // the next track-change retries from scratch.
-    if errors.is_empty() {
-        mem.write().await.insert(key.to_string(), CachedLyrics::NotFound);
+    if any_clean_notfound {
+        // At least one authoritative miss — show NotFound. Errors (if any)
+        // still pass through to `CurrentLyrics.errors` so the dev console can
+        // surface the peer timeout for debugging, but the user-facing status
+        // is the clean miss, not a generic "error fetching lyrics."
+        //
+        // Cache only when fully clean (no peer errors) — if a peer timed out
+        // we want the next track-change to retry from scratch in case the
+        // peer had the lyric and the authoritative-source response was a
+        // false NotFound (unlikely with LRCLib, but defensive).
+        if errors.is_empty() {
+            mem.write().await.insert(key.to_string(), CachedLyrics::NotFound);
+        }
         Outcome {
             cached: CachedLyrics::NotFound,
             source: "all-sources".into(),
-            persist: true,
-            errors: Vec::new(),
+            persist: errors.is_empty(),
+            errors,
         }
     } else {
+        // Every source errored — a true fetch failure. Don't cache; surface
+        // as Status::Error so the user knows to wait it out.
         Outcome::error(errors)
     }
 }
@@ -418,7 +439,7 @@ async fn fetch_lrclib(
     // /api/get 404s or returns empty.
     let (get_res, search_res) = tokio::join!(
         try_get_lrclib(client, artist, title, album, duration_ms),
-        try_search_lrclib(client, artist, title),
+        try_search_lrclib(client, title),
     );
 
     if let Ok(Some(rec)) = &get_res {
@@ -496,26 +517,27 @@ async fn try_get_lrclib(
 /// query didn't match anything I can parse" — that's an authoritative miss,
 /// not a transient error). Err only on 5xx / network / parse failures.
 ///
-/// This used to call `.error_for_status()?`, which turned LRCLib's routine
-/// 400-on-noisy-params into a transient error. With three sources falling
-/// through `last_error.is_some()` → `Outcome::error()`, a single 4xx from
-/// any of them surfaced as "♪ error fetching lyrics" instead of a clean
-/// "no lyrics for X". The fix mirrors `try_get_lrclib`'s 4xx-as-Ok-None
-/// pattern.
+/// Title-only search. We used to pass `artist_name` as an additional filter,
+/// but LRCLib applies that as a strict filter on its stored artist string —
+/// and SMTC-reported artists routinely diverge from LRCLib's canonical form
+/// in ways `clean_artist` can't fix (e.g. YouTube reports T-Pain's channel as
+/// `"TPainVEVO"`; cleaner strips `VEVO` to `"TPain"`; LRCLib has `"T-Pain"`
+/// — different strings, zero matches, false NotFound). `pick_best`'s
+/// bidirectional title-substring filter + ±5s duration filter does the real
+/// disambiguation downstream, so we get a hit on "Bartender" via title.
+///
+/// Note also: this used to call `.error_for_status()?`, which turned LRCLib's
+/// routine 400-on-noisy-params into a transient error. The 4xx-as-Ok-empty
+/// pattern below mirrors `try_get_lrclib`'s 4xx-as-Ok-None.
 async fn try_search_lrclib(
     client: &reqwest::Client,
-    artist: &str,
     title: &str,
 ) -> Result<Vec<LrcRecord>> {
-    let mut params: Vec<(&str, &str)> = vec![("track_name", title)];
-    // Omit artist_name when blank so LRCLib doesn't see an empty-string param
-    // (which a fraction of YouTube Topic videos and ambient-source tracks
-    // trigger). Title-only search is still allowed.
-    if !artist.trim().is_empty() {
-        params.push(("artist_name", artist));
-    }
-    let url = reqwest::Url::parse_with_params("https://lrclib.net/api/search", &params)
-        .context("build /api/search url")?;
+    let url = reqwest::Url::parse_with_params(
+        "https://lrclib.net/api/search",
+        &[("track_name", title)],
+    )
+    .context("build /api/search url")?;
 
     let resp = client.get(url).send().await.context("GET /api/search")?;
     let status = resp.status();
