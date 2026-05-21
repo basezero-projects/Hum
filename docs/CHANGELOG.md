@@ -6,6 +6,18 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.10.5] - 2026-05-21
+
+### Fixed
+- **LRCLib search now retries with YouTube-style noise stripped when the first pass returns zero records.** Specific case the 0.10.4 release missed: a YouTube video titled `"T-Pain - Bartender (Official HD Video) ft. Akon"` cleans to `"T-Pain - Bartender ft. Akon"` after `clean_title` (which only strips parenthesised/bracketed noise). LRCLib's fulltext `/api/search?track_name=...` returns zero records for that 5-token query when the canonical stored track is just `"Bartender"` (1 token). The overlay surfaced as "♪ no lyrics for T-Pain - Bartender (Official HD Video) ft. Akon" even though LRCLib has the song. Now: when the first `/api/search` call returns empty, we retry once with `strip_youtube_noise()` — drops the leading `Artist - ` prefix and trailing ` ft. X` / ` feat. X` / ` featuring X` (case-insensitive, without parens requirement). For the T-Pain case this becomes `"Bartender"`, which finds the right record. `pick_best` then confirms via duration ±5s.
+
+### Architecture / files
+- **`src-tauri/src/lyrics.rs`** — `try_search_lrclib` is now a wrapper that calls a new `try_search_lrclib_once`. First pass uses the cleaned title as-given; if empty, retries once with the output of `strip_youtube_noise`. New `strip_youtube_noise(title) -> String` function: (1) regex strips trailing ` (feat\.?|ft\.?|featuring)\s+.+$`, (2) `String::find(" - ")` strips the leading prefix when the post-strip candidate still has ≥2 non-whitespace chars (avoids eating the whole title for fragments like `"A - B"`). Conservative on purpose — runs only as fallback when the baseline search already returned zero. User-Agent bumped to `hum/0.10.5`.
+
+### Known limitations
+- Titles with legit embedded ` - ` like `"Born In The U.S.A. - 1984 Remaster"` will, on the retry fallback, strip to `"1984 Remaster"` and almost certainly still find nothing on LRCLib. Net result: NotFound, no worse than the status quo. The retry only fires when the baseline already returned zero, so the false-positive cost is "we still don't find lyrics" — never worse.
+- LRCLib `/api/search` does not currently get a retry with the aggressive form when the FIRST pass returned records but `pick_best` filtered them all out (e.g., duration mismatch). Could matter for medleys / extended remixes where the YouTube duration diverges from LRCLib's stored version by >5s. Out of scope for this fix.
+
 ## [0.10.4] - 2026-05-21
 
 ### Fixed

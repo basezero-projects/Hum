@@ -30,7 +30,7 @@ use crate::smtc::SharedSnapshot;
 
 const STORE_FILE: &str = "lyrics-cache.json";
 const USER_AGENT: &str =
-    "hum/0.10.4 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
+    "hum/0.10.5 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WordSpan {
@@ -517,19 +517,39 @@ async fn try_get_lrclib(
 /// query didn't match anything I can parse" — that's an authoritative miss,
 /// not a transient error). Err only on 5xx / network / parse failures.
 ///
-/// Title-only search. We used to pass `artist_name` as an additional filter,
-/// but LRCLib applies that as a strict filter on its stored artist string —
-/// and SMTC-reported artists routinely diverge from LRCLib's canonical form
-/// in ways `clean_artist` can't fix (e.g. YouTube reports T-Pain's channel as
-/// `"TPainVEVO"`; cleaner strips `VEVO` to `"TPain"`; LRCLib has `"T-Pain"`
-/// — different strings, zero matches, false NotFound). `pick_best`'s
-/// bidirectional title-substring filter + ±5s duration filter does the real
-/// disambiguation downstream, so we get a hit on "Bartender" via title.
+/// Two-pass retry-on-miss: first call with the title as-given; if zero
+/// records come back, retry with `strip_youtube_noise` (drops leading
+/// `"Artist - "` prefix and trailing `" ft. X"` / `" feat. X"`). Common
+/// YouTube uploader convention bakes the artist into the title with a
+/// hyphen separator, and LRCLib's fulltext index returns zero rows when
+/// the query has 5+ tokens and the stored track_name has 1 ("Bartender"
+/// vs "T-Pain - Bartender ft. Akon"). The aggressive form is intentionally
+/// separate from `clean_title` so the dev console still shows the SMTC
+/// title verbatim.
 ///
-/// Note also: this used to call `.error_for_status()?`, which turned LRCLib's
-/// routine 400-on-noisy-params into a transient error. The 4xx-as-Ok-empty
-/// pattern below mirrors `try_get_lrclib`'s 4xx-as-Ok-None.
+/// Title-only search. We don't pass `artist_name` — LRCLib applies that
+/// as a strict filter and SMTC-reported artists routinely diverge from
+/// LRCLib's canonical form ("TPainVEVO" → cleans to "TPain"; LRCLib has
+/// "T-Pain"). `pick_best`'s bidirectional title-substring filter + ±5s
+/// duration filter handles disambiguation downstream.
 async fn try_search_lrclib(
+    client: &reqwest::Client,
+    title: &str,
+) -> Result<Vec<LrcRecord>> {
+    let records = try_search_lrclib_once(client, title).await?;
+    if !records.is_empty() {
+        return Ok(records);
+    }
+    // Zero hits — try the aggressive YouTube-style title.
+    let stripped = strip_youtube_noise(title);
+    if stripped == title || stripped.is_empty() {
+        // No change — nothing more to try.
+        return Ok(records);
+    }
+    try_search_lrclib_once(client, &stripped).await
+}
+
+async fn try_search_lrclib_once(
     client: &reqwest::Client,
     title: &str,
 ) -> Result<Vec<LrcRecord>> {
@@ -551,6 +571,42 @@ async fn try_search_lrclib(
     let records: Vec<LrcRecord> =
         serde_json::from_str(&body).context("parse /api/search json")?;
     Ok(records)
+}
+
+/// Aggressive YouTube-noise stripper, applied only as retry-on-miss fallback
+/// for LRCLib /api/search. NOT applied to the title shown in the dev console
+/// or used for /api/get (which already requires exact metadata match).
+///
+/// Operations, in order:
+/// 1. Strip trailing ` ft. X` / ` feat. X` / ` featuring X` (case-insensitive)
+///    that survived `clean_title` because it wasn't inside parens/brackets.
+/// 2. Strip leading `Word(s) - ` when the title contains ` - ` AND the
+///    candidate post-strip still has ≥2 non-whitespace chars (avoids
+///    eating the whole title for short fragments like `"A - B"`).
+///
+/// Edge case: titles with legit embedded ` - ` like `"Born In The U.S.A. -
+/// 1984 Remaster"` would strip to just `"1984 Remaster"` here, which won't
+/// find lyrics either. Net result: NotFound, same as the baseline. The
+/// retry only runs when the baseline already returned zero, so the false-
+/// positive cost is "we still don't find lyrics" — never worse than the
+/// status quo. The gain is YouTube uploader conventions like
+/// `"T-Pain - Bartender ft. Akon"` → `"Bartender"` now resolve correctly.
+fn strip_youtube_noise(title: &str) -> String {
+    static FEAT_RE: OnceLock<Regex> = OnceLock::new();
+    let feat_re = FEAT_RE.get_or_init(|| {
+        Regex::new(r"(?i)\s+(?:feat\.?|ft\.?|featuring)\s+.+$").unwrap()
+    });
+
+    let mut s = feat_re.replace(title, "").to_string();
+
+    if let Some(idx) = s.find(" - ") {
+        let candidate = s[idx + 3..].trim().to_string();
+        if candidate.chars().filter(|c| !c.is_whitespace()).count() >= 2 {
+            s = candidate;
+        }
+    }
+
+    s.trim().to_string()
 }
 
 fn pick_best(
