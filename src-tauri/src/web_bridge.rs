@@ -78,7 +78,26 @@ pub fn any_probe_detects(smtc_title: &str, smtc_app_id: &str) -> bool {
 /// entries in this slice.
 static PROBES: &[&dyn WebPlayerProbe] = &[&PandoraProbe];
 
-/// Enumerate top-level Chrome windows whose title matches `predicate`.
+/// Recognized Chromium-derived browser process names. UIA tree structure
+/// is identical across these, so any of them hosting a Pandora tab is a
+/// valid target for the probe. Match is case-insensitive. Keep this
+/// aligned with the `app_id`-side check inside `PandoraProbe::detects` —
+/// the two gates need to agree on what counts as "a Chromium browser."
+const CHROMIUM_PROCESS_NAMES: &[&str] = &[
+    "chrome.exe",
+    "msedge.exe",
+    "brave.exe",
+    "opera.exe",
+    "vivaldi.exe",
+];
+
+fn is_chromium_process(name: &str) -> bool {
+    CHROMIUM_PROCESS_NAMES
+        .iter()
+        .any(|n| name.eq_ignore_ascii_case(n))
+}
+
+/// Enumerate top-level Chromium-browser windows whose title matches `predicate`.
 /// Returns the `HWND` of each match. Used by probes to find the right
 /// Chromium window when multiple tabs / multiple Chrome windows are open.
 ///
@@ -111,7 +130,7 @@ fn find_chrome_windows<F: Fn(&str) -> bool>(predicate: F) -> Vec<HWND> {
         }
 
         let process_name = read_process_name_for_window(hwnd);
-        if process_name.eq_ignore_ascii_case("chrome.exe") {
+        if is_chromium_process(&process_name) {
             ctx.hits.push(hwnd);
         }
         BOOL(1)
@@ -165,10 +184,15 @@ impl WebPlayerProbe for PandoraProbe {
     }
 
     fn detects(&self, smtc_title: &str, smtc_app_id: &str) -> bool {
-        // Chromium-derived browsers (Chrome, Edge, Brave, Opera) all
-        // expose UIA trees identically. Match any AUMID that mentions
-        // Chrome — covers the common case and a few derivatives.
-        // Reject empty app_id outright (idle session / no source).
+        // Chromium-derived browsers (Chrome, Edge, Brave, Opera,
+        // Vivaldi) all expose UIA trees identically. SMTC's AUMID for
+        // these usually contains "Chrome" (Chrome.exe itself, Chromium
+        // forks that report the upstream identifier, etc.) — broad
+        // substring match catches the common cases. The window-side
+        // gate (`find_chrome_windows` + `is_chromium_process`) is the
+        // narrower check that actually filters to known Chromium
+        // process names; both gates need to keep agreeing on what
+        // "Chromium" means.
         if smtc_app_id.is_empty() || !smtc_app_id.contains("Chrome") {
             return false;
         }
