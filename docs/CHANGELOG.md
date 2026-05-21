@@ -6,6 +6,14 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.10.25] - 2026-05-21
+
+### Fixed
+- **YouTube uploads with a file extension in the title now find lyrics.** Real example that hit Hum: playing Uncle Kracker's "Follow Me" via a YouTube upload titled `"Follow Me Uncle Kracker Lyrics.wmv"` showed `♪ no lyrics for Follow Me Uncle Kracker Lyrics.wmv` despite being a well-known song. The `.wmv` extension shielded the trailing bare `Lyrics` from v0.10.24's `bare_trailing_tag_cleaner` (which requires `\s+Lyrics\s*$`), so the whole uploader-chrome suffix survived every cleaner pass and poisoned the LRCLib search. The cleaner now strips trailing media file extensions as the FIRST pipeline step, before any other cleaner runs. Vocabulary covers video containers (`.wmv`, `.mp4`, `.mkv`, `.avi`, `.mov`, `.webm`, `.flv`, `.m4v`, `.mpg`, `.mpeg`) and audio containers (`.mp3`, `.wav`, `.flac`, `.m4a`, `.aac`, `.ogg`, `.opus`). Case-insensitive. Trailing whitespace after the extension is allowed (`"Song.wmv  "` → `"Song"`). Mid-title extensions are left alone — only the trailing position is stripped, because no canonical released song has a media file extension at the end of its title but some weird tracks could plausibly contain `.mp3` in the middle (`"Song.mp3 (Live)"` → `"Song.mp3"`).
+
+### Architecture / files
+- **`src-tauri/src/lyrics.rs`** — new `file_extension_stripper()` regex added as step 1 in the `clean_title` pipeline. Runs BEFORE the existing trailing-quote / bracketed / pipe / bare-trailing-tag steps, so by the time v0.10.24's `bare_trailing_tag_cleaner` looks for trailing `Lyrics` it sees the cleaned `"Follow Me Uncle Kracker Lyrics"` rather than the original `"Follow Me Uncle Kracker Lyrics.wmv"`. Vocabulary is restricted to real media container extensions — no ambiguous tokens like `.live` or `.remix`. Same safety bar as v0.10.24's "Lyrics is safe, Audio is not" reasoning: file extensions never appear at the end of canonical released song titles. 22 new unit tests added to the existing `cleans_titles` test, covering the original Uncle Kracker failure, every supported extension (video + audio), case-insensitivity, trailing whitespace, composition with the bracketed + bare-tag cleaners, and preservation of mid-title extensions.
+
 ## [0.10.24] - 2026-05-21
 
 ### Fixed

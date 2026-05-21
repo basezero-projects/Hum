@@ -1443,19 +1443,29 @@ fn pipe_tag_cleaner() -> &'static Regex {
 }
 
 pub fn clean_title(title: &str) -> String {
-    // 1. Strip trailing YouTube lyric-channel quote excerpt. Channels like
+    // 1. Strip trailing video/audio file extensions. YouTube uploads of legacy
+    //    files often keep the original filename verbatim — e.g.
+    //    `"Follow Me Uncle Kracker Lyrics.wmv"`. The extension shields the
+    //    trailing `Lyrics` token from `bare_trailing_tag_cleaner` (which
+    //    requires `\s+Lyrics\s*$`), so the whole uploader-chrome suffix
+    //    survives every other cleaner. Stripping first lets the rest of
+    //    the pipeline see the real title. Vocabulary is restricted to
+    //    real media container extensions — no canonical released song has
+    //    one of these in its title.
+    let cleaned = file_extension_stripper().replace(title, "").to_string();
+    // 2. Strip trailing YouTube lyric-channel quote excerpt. Channels like
     //    BangersOnly bait clicks by appending a memorable line in quotes
     //    after the real title — e.g. `Beautiful Things (Lyrics) "i want
     //    you i need you oh god"`. Nothing else in the cleaner pipeline
     //    touched these, so the quoted suffix tanked the title score in
     //    `pick_best`'s length-ratio path. Stripping first lets the rest
     //    of the pipeline see the real song title.
-    let cleaned = trailing_quote_stripper().replace(title, "$1").to_string();
-    // 2. Strip parenthetical / bracketed noise tags.
+    let cleaned = trailing_quote_stripper().replace(&cleaned, "$1").to_string();
+    // 3. Strip parenthetical / bracketed noise tags.
     let cleaned = cleaner().replace_all(&cleaned, "").to_string();
-    // 3. Strip trailing pipe-separated tags.
+    // 4. Strip trailing pipe-separated tags.
     let cleaned = pipe_tag_cleaner().replace_all(&cleaned, "").to_string();
-    // 4. Strip BARE trailing uploader-chrome tags — same vocabulary the
+    // 5. Strip BARE trailing uploader-chrome tags — same vocabulary the
     //    bracketed cleaner catches, but without any surrounding `[]` / `()` /
     //    `|`. Real failure case: YouTube video titled `"Shaggy - Angel
     //    Lyrics"` reaches the resolver with the whole string in the title
@@ -1467,6 +1477,31 @@ pub fn clean_title(title: &str) -> String {
     //    leading `"Shaggy - "` channel prefix.
     let cleaned = bare_trailing_tag_cleaner().replace(&cleaned, "$1").to_string();
     cleaned.trim().to_string()
+}
+
+// Trailing media file extension — `.wmv`, `.mp4`, etc. Triggered by real
+// YouTube uploads named after the source file: "Follow Me Uncle Kracker
+// Lyrics.wmv". Match requires a dot + a known media-container extension at
+// the end of the title (allowing trailing whitespace). Vocabulary is
+// restricted to common video + audio container extensions; nothing
+// ambiguous like `.live` or `.remix`. No canonical released song title
+// contains one of these — the safe-strip bar is the same as v0.10.24's
+// bare-trailing-tag cleaner.
+fn file_extension_stripper() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(
+            r"(?ix)
+              \.
+              (?:
+                  wmv | mp4 | mkv | avi | mov | webm | flv | m4v | mpg | mpeg |
+                  mp3 | wav | flac | m4a | aac | ogg | opus
+              )
+              \s*$
+            ",
+        )
+        .unwrap()
+    })
 }
 
 // Bare trailing uploader-chrome tags — `Lyrics`, `Lyric Video`, `Music Video`,
@@ -1889,6 +1924,56 @@ mod tests {
         assert_eq!(clean_title("Angel (Lyrics)"), "Angel");
         // Compose with bracketed cleaner where bracketed AND bare appear
         assert_eq!(clean_title("Angel (HD) Lyrics"), "Angel");
+
+        // ── v0.10.25 — trailing video/audio file extensions ──────────────
+        //
+        // Real-world failure case: YouTube upload titled "Follow Me Uncle
+        // Kracker Lyrics.wmv". The `.wmv` shielded the bare trailing
+        // `Lyrics` from v0.10.24's `bare_trailing_tag_cleaner` (which
+        // requires `\s+Lyrics\s*$`), so the whole uploader-chrome suffix
+        // survived. Now the extension strips first, then v0.10.24's bare-
+        // tag cleaner runs on a clean trailing `Lyrics`.
+        assert_eq!(
+            clean_title("Follow Me Uncle Kracker Lyrics.wmv"),
+            "Follow Me Uncle Kracker"
+        );
+        // Video container extensions
+        assert_eq!(clean_title("Song.wmv"), "Song");
+        assert_eq!(clean_title("Song.mp4"), "Song");
+        assert_eq!(clean_title("Song.mkv"), "Song");
+        assert_eq!(clean_title("Song.avi"), "Song");
+        assert_eq!(clean_title("Song.mov"), "Song");
+        assert_eq!(clean_title("Song.webm"), "Song");
+        assert_eq!(clean_title("Song.flv"), "Song");
+        assert_eq!(clean_title("Song.m4v"), "Song");
+        assert_eq!(clean_title("Song.mpg"), "Song");
+        assert_eq!(clean_title("Song.mpeg"), "Song");
+        // Audio container extensions
+        assert_eq!(clean_title("Song.mp3"), "Song");
+        assert_eq!(clean_title("Song.wav"), "Song");
+        assert_eq!(clean_title("Song.flac"), "Song");
+        assert_eq!(clean_title("Song.m4a"), "Song");
+        assert_eq!(clean_title("Song.aac"), "Song");
+        assert_eq!(clean_title("Song.ogg"), "Song");
+        assert_eq!(clean_title("Song.opus"), "Song");
+        // Case-insensitive
+        assert_eq!(clean_title("Song.WMV"), "Song");
+        assert_eq!(clean_title("Song.Mp4"), "Song");
+        // Trailing whitespace after the extension
+        assert_eq!(clean_title("Song.wmv  "), "Song");
+        // Compose with bare-tag cleaner — extension strips first, then bare
+        // tag cleaner sees the cleaned trailing keyword.
+        assert_eq!(clean_title("Angel Lyrics.wmv"), "Angel");
+        assert_eq!(clean_title("Song Official Music Video.mp4"), "Song");
+        // Compose with bracketed cleaner
+        assert_eq!(clean_title("Song (Official Video).mkv"), "Song");
+        // Preserve titles where the only "extension" is part of a real word
+        // — no token with a recognized extension should slip through. (No
+        // false positives expected; vocabulary is restricted to file-format
+        // container extensions, none of which look like English words.)
+        assert_eq!(clean_title("Plain Title"), "Plain Title");
+        // Extension in the middle of the title (not trailing) is left alone
+        assert_eq!(clean_title("Song.mp3 (Live)"), "Song.mp3");
     }
 
     #[test]
