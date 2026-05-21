@@ -8,10 +8,13 @@ use tauri::Manager;
 use tokio::sync::RwLock;
 
 #[cfg(windows)]
+mod itunes;
+
+#[cfg(windows)]
 mod smtc;
 
 #[cfg(windows)]
-mod itunes;
+mod web_bridge;
 
 mod contrast;
 mod lyrics;
