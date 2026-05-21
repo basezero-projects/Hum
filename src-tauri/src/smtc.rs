@@ -475,16 +475,39 @@ fn build_itunes_http_client() -> Result<reqwest::Client> {
         .context("build itunes search http client")
 }
 
-/// Fetch album art via the iTunes Search API. Public, no-auth. Used by
+/// Fetch album art from an external source. Public, no-auth. Used by
 /// both `spawn_art_fetch` (any SMTC source) and `web_bridge` (Pandora-
 /// style probes) to get a real album cover instead of whatever SMTC
 /// supplied (favicons, video thumbnails, etc.).
 ///
-/// Returns a `data:image/jpeg;base64,...` URL on success, or `None` if
-/// iTunes has no match or any network step fails. Image is the 600×600
-/// variant (filename rewrite from the API's default `100x100bb.jpg` to
-/// `600x600bb.jpg` — documented widely-used trick on Apple's CDN).
+/// Source preference:
+/// 1. iTunes Search API — Apple's catalog, 600×600 JPEG. Broad coverage
+///    of commercial releases, fast (~300ms typical).
+/// 2. Deezer Search API — fallback when iTunes misses. Different catalog
+///    (especially European / non-US-charting tracks). 1000×1000 JPEG.
+///    Public, no-auth, no quota at our usage levels.
+///
+/// Returns a `data:image/jpeg;base64,...` URL on success, `None` when
+/// both sources miss or all network steps fail.
 pub async fn fetch_art_via_itunes(
+    client: &reqwest::Client,
+    artist: &str,
+    title: &str,
+) -> Option<String> {
+    if let Some(url) = fetch_art_itunes_only(client, artist, title).await {
+        eprintln!("[smtc] art: iTunes hit for {artist:?} - {title:?}");
+        return Some(url);
+    }
+    eprintln!("[smtc] art: iTunes miss for {artist:?} - {title:?}, trying Deezer");
+    if let Some(url) = fetch_art_deezer_only(client, artist, title).await {
+        eprintln!("[smtc] art: Deezer hit for {artist:?} - {title:?}");
+        return Some(url);
+    }
+    eprintln!("[smtc] art: Deezer miss for {artist:?} - {title:?}");
+    None
+}
+
+async fn fetch_art_itunes_only(
     client: &reqwest::Client,
     artist: &str,
     title: &str,
@@ -502,19 +525,97 @@ pub async fn fetch_art_via_itunes(
     )
     .ok()?;
 
-    let body: serde_json::Value = client
-        .get(search_url)
-        .send()
-        .await
-        .ok()?
-        .json()
-        .await
-        .ok()?;
+    let resp = match client.get(search_url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[smtc] art: iTunes search request failed: {e}");
+            return None;
+        }
+    };
+    let body: serde_json::Value = match resp.json().await {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("[smtc] art: iTunes JSON parse failed: {e}");
+            return None;
+        }
+    };
     let first = body.get("results")?.as_array()?.first()?;
     let art_url_100 = first.get("artworkUrl100")?.as_str()?;
 
     let art_url = art_url_100.replace("100x100bb", "600x600bb");
-    let bytes = client.get(&art_url).send().await.ok()?.bytes().await.ok()?;
+    let bytes = match client.get(&art_url).send().await {
+        Ok(r) => match r.bytes().await {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("[smtc] art: iTunes image bytes read failed: {e}");
+                return None;
+            }
+        },
+        Err(e) => {
+            eprintln!("[smtc] art: iTunes image fetch failed: {e}");
+            return None;
+        }
+    };
+    if bytes.is_empty() {
+        return None;
+    }
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Some(format!("data:image/jpeg;base64,{b64}"))
+}
+
+async fn fetch_art_deezer_only(
+    client: &reqwest::Client,
+    artist: &str,
+    title: &str,
+) -> Option<String> {
+    use base64::Engine;
+
+    // Deezer accepts a single `q` term with quoted artist/track filters,
+    // but a plain free-text query works just as well for our use case and
+    // is more forgiving on minor metadata mismatches.
+    let query = format!("{artist} {title}");
+    let search_url = reqwest::Url::parse_with_params(
+        "https://api.deezer.com/search",
+        &[("q", query.as_str()), ("limit", "1")],
+    )
+    .ok()?;
+
+    let resp = match client.get(search_url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[smtc] art: Deezer search request failed: {e}");
+            return None;
+        }
+    };
+    let body: serde_json::Value = match resp.json().await {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("[smtc] art: Deezer JSON parse failed: {e}");
+            return None;
+        }
+    };
+    let first = body.get("data")?.as_array()?.first()?;
+    // Deezer track payload exposes album.cover_xl (1000×1000),
+    // cover_big (500), cover_medium (250), cover_small (56). Take XL.
+    let art_url = first
+        .get("album")?
+        .get("cover_xl")
+        .or_else(|| first.get("album")?.get("cover_big"))?
+        .as_str()?;
+
+    let bytes = match client.get(art_url).send().await {
+        Ok(r) => match r.bytes().await {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("[smtc] art: Deezer image bytes read failed: {e}");
+                return None;
+            }
+        },
+        Err(e) => {
+            eprintln!("[smtc] art: Deezer image fetch failed: {e}");
+            return None;
+        }
+    };
     if bytes.is_empty() {
         return None;
     }
