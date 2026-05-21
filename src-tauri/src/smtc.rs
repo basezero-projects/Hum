@@ -74,6 +74,18 @@ pub struct CurrentTrack {
 
 pub type SharedSnapshot = Arc<RwLock<CurrentTrack>>;
 
+/// Last emitted album-art payload, kept so the frontend can `invoke`
+/// `get_current_album_art` on mount and pick up the art that fired BEFORE
+/// its `listen("album-art-loaded", …)` subscription completed. Without
+/// this, a fresh app launch with Chrome/Spotify already playing shows
+/// lyrics but no artwork until the user switches tracks (which fires
+/// `MediaPropertiesChanged` and re-emits the event with the listener now
+/// attached). The cache is overwritten on every successful art fetch and
+/// the frontend's render filter (`payload.title === track.title &&
+/// payload.artist === track.artist`) hides stale entries automatically
+/// during the ~100ms between track-change and the fresh art arriving.
+pub type SharedAlbumArt = Arc<RwLock<Option<AlbumArtPayload>>>;
+
 #[derive(Clone, Copy, Debug)]
 #[allow(clippy::enum_variant_names)]
 enum Msg {
@@ -124,10 +136,15 @@ impl Drop for ManagerHook {
 /// own emissions. SMTC sessions can hang around in Paused/Stopped/Closed states
 /// long after a tab closed (Chrome is notorious for this), so "session exists"
 /// is too coarse to use as a priority signal.
-pub fn start(app: AppHandle, snapshot: SharedSnapshot, smtc_playing: Arc<AtomicBool>) {
+pub fn start(
+    app: AppHandle,
+    snapshot: SharedSnapshot,
+    art: SharedAlbumArt,
+    smtc_playing: Arc<AtomicBool>,
+) {
     tauri::async_runtime::spawn(async move {
         eprintln!("[smtc] worker starting");
-        if let Err(e) = run(app, snapshot, smtc_playing).await {
+        if let Err(e) = run(app, snapshot, art, smtc_playing).await {
             eprintln!("[smtc] worker exited: {e:#}");
         } else {
             eprintln!("[smtc] worker exited (rx channel closed)");
@@ -138,6 +155,7 @@ pub fn start(app: AppHandle, snapshot: SharedSnapshot, smtc_playing: Arc<AtomicB
 async fn run(
     app: AppHandle,
     snapshot: SharedSnapshot,
+    art: SharedAlbumArt,
     smtc_playing: Arc<AtomicBool>,
 ) -> Result<()> {
     // RequestAsync returns IAsyncOperation; .get() blocks until ready. The
@@ -186,7 +204,7 @@ async fn run(
             .unwrap_or_default();
         smtc_playing.store(state == PlaybackState::Playing, Ordering::Relaxed);
         eprintln!("[smtc] startup: session attached, source='{aumid}', state={state:?}");
-        emit_full(&app, &snapshot, &h.session).await;
+        emit_full(&app, &snapshot, &art, &h.session).await;
     } else {
         smtc_playing.store(false, Ordering::Relaxed);
         eprintln!("[smtc] startup: no active session, smtc_playing=false");
@@ -213,7 +231,7 @@ async fn run(
                         .unwrap_or_default();
                     smtc_playing.store(state == PlaybackState::Playing, Ordering::Relaxed);
                     eprintln!("[smtc] new session attached, source='{aumid}', state={state:?}");
-                    emit_full(&app, &snapshot, &h.session).await;
+                    emit_full(&app, &snapshot, &art, &h.session).await;
                 } else {
                     // No active session — clear the snapshot and notify.
                     smtc_playing.store(false, Ordering::Relaxed);
@@ -240,7 +258,7 @@ async fn run(
                             snap.duration_ms = track.duration_ms;
                             let _ = app.emit("track-changed", &*snap);
                             drop(snap);
-                            spawn_art_fetch(app.clone(), h.session.clone(), title, artist);
+                            spawn_art_fetch(app.clone(), art.clone(), h.session.clone(), title, artist);
                         }
                         Err(e) => {
                             eprintln!("[smtc] Msg::MediaChanged → read_track failed: {e:#}");
@@ -324,6 +342,7 @@ fn attach_session(
 async fn emit_full(
     app: &AppHandle,
     snapshot: &SharedSnapshot,
+    art: &SharedAlbumArt,
     session: &GlobalSystemMediaTransportControlsSession,
 ) {
     let track = read_track(session).await.ok();
@@ -366,7 +385,7 @@ async fn emit_full(
     };
 
     if !snap_title.trim().is_empty() {
-        spawn_art_fetch(app.clone(), session.clone(), snap_title, snap_artist);
+        spawn_art_fetch(app.clone(), art.clone(), session.clone(), snap_title, snap_artist);
     }
 }
 
@@ -383,6 +402,7 @@ pub struct AlbumArtPayload {
 // track. Best-effort — many sources don't expose a thumbnail at all.
 fn spawn_art_fetch(
     app: AppHandle,
+    art: SharedAlbumArt,
     session: GlobalSystemMediaTransportControlsSession,
     title: String,
     artist: String,
@@ -408,6 +428,13 @@ fn spawn_art_fetch(
             artist,
             data_url: format!("data:{mime};base64,{b64}"),
         };
+        // Write to shared cache BEFORE emitting so a get_current_album_art
+        // invocation racing the listener subscription on the frontend's mount
+        // never sees a stale value relative to the just-emitted event.
+        {
+            let mut a = art.write().await;
+            *a = Some(payload.clone());
+        }
         let _ = app.emit("album-art-loaded", &payload);
     });
 }

@@ -19,7 +19,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
-use crate::smtc::{AlbumArtPayload, CurrentTrack, PlaybackState, SharedSnapshot};
+use crate::smtc::{AlbumArtPayload, CurrentTrack, PlaybackState, SharedAlbumArt, SharedSnapshot};
 
 const SCRIPT: &str = include_str!("../scripts/itunes_poll.ps1");
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -49,9 +49,14 @@ struct Line {
     error: Option<String>,
 }
 
-pub fn start(app: AppHandle, snapshot: SharedSnapshot, smtc_playing: Arc<AtomicBool>) {
+pub fn start(
+    app: AppHandle,
+    snapshot: SharedSnapshot,
+    art: SharedAlbumArt,
+    smtc_playing: Arc<AtomicBool>,
+) {
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = run(app, snapshot, smtc_playing).await {
+        if let Err(e) = run(app, snapshot, art, smtc_playing).await {
             eprintln!("[itunes] worker exited: {e:#}");
         }
     });
@@ -60,6 +65,7 @@ pub fn start(app: AppHandle, snapshot: SharedSnapshot, smtc_playing: Arc<AtomicB
 async fn run(
     app: AppHandle,
     snapshot: SharedSnapshot,
+    art: SharedAlbumArt,
     smtc_playing: Arc<AtomicBool>,
 ) -> Result<()> {
     // Stage the script to a UNIQUE temp file per process. The previous fixed
@@ -210,15 +216,19 @@ async fn run(
 
                 // Album art arrives only on track-change frames. Emit on the
                 // same channel SMTC uses so the frontend has a single matcher.
+                // Write to shared cache first so a startup-race get_current_-
+                // album_art invocation never sees a stale value.
                 if let Some(url) = parsed.art_data_url {
-                    let _ = app.emit(
-                        "album-art-loaded",
-                        &AlbumArtPayload {
-                            title: title.clone(),
-                            artist: snapshot.read().await.artist.clone(),
-                            data_url: url,
-                        },
-                    );
+                    let payload = AlbumArtPayload {
+                        title: title.clone(),
+                        artist: snapshot.read().await.artist.clone(),
+                        data_url: url,
+                    };
+                    {
+                        let mut a = art.write().await;
+                        *a = Some(payload.clone());
+                    }
+                    let _ = app.emit("album-art-loaded", &payload);
                     eprintln!("[itunes] album-art-loaded for '{title}'");
                 }
 

@@ -20,7 +20,7 @@ mod settings;
 mod streamer;
 
 #[cfg(windows)]
-use smtc::{CurrentTrack, SharedSnapshot};
+use smtc::{AlbumArtPayload, CurrentTrack, SharedAlbumArt, SharedSnapshot};
 
 #[cfg(not(windows))]
 mod smtc {
@@ -31,11 +31,19 @@ mod smtc {
     #[derive(Clone, Serialize, Debug, Default)]
     pub struct CurrentTrack {}
 
+    #[derive(Clone, Serialize, Debug)]
+    pub struct AlbumArtPayload {
+        pub title: String,
+        pub artist: String,
+        pub data_url: String,
+    }
+
     pub type SharedSnapshot = Arc<RwLock<CurrentTrack>>;
+    pub type SharedAlbumArt = Arc<RwLock<Option<AlbumArtPayload>>>;
 }
 
 #[cfg(not(windows))]
-use smtc::{CurrentTrack, SharedSnapshot};
+use smtc::{AlbumArtPayload, CurrentTrack, SharedAlbumArt, SharedSnapshot};
 
 use lyrics::{CurrentLyrics, SharedLyrics};
 use mode::{
@@ -60,6 +68,20 @@ async fn get_current_lyrics(
 ) -> Result<CurrentLyrics, String> {
     let s = state.read().await;
     Ok(s.clone())
+}
+
+/// Frontend invokes this once on mount, after the `album-art-loaded`
+/// listener has been registered. Closes the startup race: the backend
+/// may have emitted `album-art-loaded` before the listener was attached
+/// (Tauri events are fire-and-forget; no replay for late subscribers).
+/// Returns `None` if no art has been fetched yet (no active session, or
+/// the current source doesn't expose a thumbnail).
+#[tauri::command]
+async fn get_current_album_art(
+    state: tauri::State<'_, SharedAlbumArt>,
+) -> Result<Option<AlbumArtPayload>, String> {
+    let a = state.read().await;
+    Ok(a.clone())
 }
 
 /// Frontend calls this when a tray-relevant update is detected (or
@@ -122,6 +144,7 @@ fn toggle_overlay_visibility(app: tauri::AppHandle) -> Result<bool, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let snapshot: SharedSnapshot = Arc::new(RwLock::new(CurrentTrack::default()));
+    let album_art: SharedAlbumArt = Arc::new(RwLock::new(None));
     let lyrics_state: SharedLyrics = Arc::new(RwLock::new(CurrentLyrics::default()));
     let smtc_active: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     let mode_state: SharedMode = Arc::new(AtomicU8::new(OverlayMode::default() as u8));
@@ -147,10 +170,12 @@ pub fn run() {
         )
         .plugin(build_global_shortcut_plugin())
         .manage(snapshot)
+        .manage(album_art)
         .manage(lyrics_state)
         .manage(mode_state)
         .setup(move |app| {
             let snap = app.state::<SharedSnapshot>().inner().clone();
+            let art_state = app.state::<SharedAlbumArt>().inner().clone();
             let lyrics_shared = app.state::<SharedLyrics>().inner().clone();
 
             // Load persisted settings (if any) from the store BEFORE building
@@ -165,12 +190,23 @@ pub fn run() {
 
             #[cfg(windows)]
             {
-                smtc::start(app.handle().clone(), snap.clone(), smtc_active.clone());
-                itunes::start(app.handle().clone(), snap.clone(), smtc_active.clone());
+                smtc::start(
+                    app.handle().clone(),
+                    snap.clone(),
+                    art_state.clone(),
+                    smtc_active.clone(),
+                );
+                itunes::start(
+                    app.handle().clone(),
+                    snap.clone(),
+                    art_state.clone(),
+                    smtc_active.clone(),
+                );
             }
             #[cfg(not(windows))]
             {
                 let _ = &smtc_active;
+                let _ = &art_state;
             }
 
             lyrics::start(app.handle().clone(), lyrics_shared, snap);
@@ -298,6 +334,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_current_track,
             get_current_lyrics,
+            get_current_album_art,
             get_overlay_mode,
             set_overlay_mode,
             cycle_overlay_mode,

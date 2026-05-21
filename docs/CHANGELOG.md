@@ -6,6 +6,21 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.10.7] - 2026-05-21
+
+### Fixed
+- **Album art now shows on app launch when music is already playing.** Previously, opening the overlay while Spotify / Chrome / YouTube Music was mid-track showed lyrics but no artwork — the album art column stayed blank until the user skipped to a new song and back. The backend was firing `album-art-loaded` correctly on startup; the bug was on the frontend, where the `listen("album-art-loaded", …)` subscription is asynchronous (Tauri's `listen` returns a `Promise<() => void>`) and the event was being emitted before the listener had finished attaching. Tauri events are fire-and-forget — there's no replay for late subscribers — so the art landed in a void. Fix: backend now caches the last `AlbumArtPayload` in shared state alongside the snapshot, and a new `get_current_album_art` Tauri command returns it on demand. Frontend invokes that command on mount (after the listener is set up but in parallel with the existing `get_current_track` / `get_current_lyrics` invokes), populating `albumArt` state and triggering the dominant-color extraction. Works for both SMTC (Spotify, YouTube Music, anything Windows-aware) and iTunes paths.
+
+### Architecture / files
+- **`src-tauri/src/smtc.rs`** — new `pub type SharedAlbumArt = Arc<RwLock<Option<AlbumArtPayload>>>` type alias. `pub fn start`, `async fn run`, `emit_full`, and `spawn_art_fetch` all gain an `art: SharedAlbumArt` parameter. In `spawn_art_fetch`, the payload is written to the shared cache BEFORE the `album-art-loaded` event is emitted, so a `get_current_album_art` invocation that races the event listener always sees a value at least as fresh as whatever the listener will receive.
+- **`src-tauri/src/itunes.rs`** — same threading. The track-change emit block now builds the `AlbumArtPayload` locally, writes it to the cache, then emits — replacing the previous inline `&AlbumArtPayload { … }` construction.
+- **`src-tauri/src/lib.rs`** — new `let album_art: SharedAlbumArt = Arc::new(RwLock::new(None))` initialized in `run()`, managed via `.manage(album_art)`, captured into the `.setup` closure as `art_state`, and passed to both `smtc::start` and `itunes::start`. New `get_current_album_art` Tauri command (`async fn`, returns `Result<Option<AlbumArtPayload>, String>`) registered in `invoke_handler!`. The non-Windows stub `mod smtc` block now also declares `AlbumArtPayload` and `SharedAlbumArt` so the import line and the command signature compile cross-platform.
+- **`src/Overlay.tsx`** — new `invoke<…>("get_current_album_art")` call alongside the existing initial-state invokes. On success, calls `setAlbumArt(art)` and kicks off `extractDominantColor(art.data_url).then(setTintColor)` to match the event-listener path's behavior. On `null` (no art yet — no active session or source doesn't expose a thumbnail), does nothing; the listener catches the next emit normally.
+
+### Diagnostic notes
+- The race only manifested on fresh app launch with a session already active. Track-change after launch always worked because by then the listener had been attached for tens-of-seconds and was guaranteed to catch new events.
+- The cache lives in memory only — no persistence to disk. On next launch the artwork has to be re-fetched from SMTC anyway (the source app exposes the thumbnail; we just bridge it). Persistence would save a few hundred ms but isn't worth the disk I/O / staleness risk.
+
 ## [0.10.6] - 2026-05-21
 
 ### Changed

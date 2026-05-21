@@ -279,6 +279,22 @@ export default function Overlay() {
     invoke<CurrentLyrics>("get_current_lyrics")
       .then(applyLyrics)
       .catch(() => {});
+    // Pull whatever album art the backend has already fetched. Closes the
+    // startup race where the backend's emit_full → spawn_art_fetch chain
+    // fires `album-art-loaded` BEFORE the listen() above has finished
+    // subscribing (Tauri events are fire-and-forget; no replay for late
+    // subscribers). Without this, a fresh app launch with music already
+    // playing shows lyrics but no artwork until the user switches tracks.
+    invoke<{ title: string; artist: string; data_url: string } | null>(
+      "get_current_album_art",
+    )
+      .then((art) => {
+        if (art) {
+          setAlbumArt(art);
+          extractDominantColor(art.data_url).then(setTintColor);
+        }
+      })
+      .catch(() => {});
     invoke<OverlayMode>("get_overlay_mode").then(setMode).catch(() => {});
     invoke<Settings>("get_settings").then(applySettings).catch(() => {});
 
