@@ -7,6 +7,8 @@ use tauri_plugin_store::StoreExt;
 use tokio::sync::RwLock;
 
 use crate::mode::OverlayMode;
+#[cfg(windows)]
+use crate::backdrop::BackdropKind;
 
 const SETTINGS_STORE_FILE: &str = "settings.json";
 const SETTINGS_STORE_KEY: &str = "settings";
@@ -58,6 +60,12 @@ pub struct Settings {
     /// lyrics in their stream. Off by default — opens a TCP port.
     pub streamer_enabled: bool,
     pub streamer_port: u16,
+    /// Windows 11 DWM backdrop applied to the overlay window.
+    /// Persisted as snake_case string: "acrylic" | "mica" | "tabbed_mica" | "none".
+    #[cfg(windows)]
+    pub window_backdrop: BackdropKind,
+    #[cfg(not(windows))]
+    pub window_backdrop: String,
 }
 
 impl Default for Settings {
@@ -90,6 +98,10 @@ impl Default for Settings {
             // 38247 chosen as an unused-by-known-services port. Users
             // can change in Settings if it conflicts with anything local.
             streamer_port: 38247,
+            #[cfg(windows)]
+            window_backdrop: BackdropKind::Acrylic,
+            #[cfg(not(windows))]
+            window_backdrop: String::from("acrylic"),
         }
     }
 }
@@ -251,6 +263,16 @@ fn sanitize(s: &mut Settings) {
     if s.streamer_port < 1024 {
         s.streamer_port = defaults.streamer_port;
     }
+    #[cfg(not(windows))]
+    {
+        let v = s.window_backdrop.trim().to_ascii_lowercase();
+        s.window_backdrop = match v.as_str() {
+            "none" | "mica" | "acrylic" | "tabbed_mica" => v,
+            _ => "acrylic".to_string(),
+        };
+    }
+    // On Windows: BackdropKind's serde rejects unknown variants, and serde(default)
+    // on the struct falls back to BackdropKind::default() == Acrylic. No runtime check needed.
 }
 
 fn is_valid_hex_color(s: &str) -> bool {
@@ -278,6 +300,30 @@ fn is_valid_color_string(s: &str) -> bool {
         c.is_ascii_alphanumeric()
             || matches!(c, ' ' | ',' | '.' | '(' | ')' | '%' | '/')
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn window_backdrop_round_trips_through_serde() {
+        use crate::backdrop::BackdropKind;
+        let s = Settings { window_backdrop: BackdropKind::Mica, ..Default::default() };
+        let json = serde_json::to_string(&s).unwrap();
+        let parsed: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.window_backdrop, BackdropKind::Mica);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn missing_window_backdrop_defaults_to_acrylic() {
+        use crate::backdrop::BackdropKind;
+        let json = r#"{}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.window_backdrop, BackdropKind::Acrylic);
+    }
 }
 
 #[tauri::command]
