@@ -417,6 +417,21 @@ fn spawn_art_fetch(
     artist: String,
 ) {
     tauri::async_runtime::spawn(async move {
+        // If a web-bridge probe matches the current SMTC snapshot,
+        // skip art entirely on the SMTC side — the bridge has the
+        // real artist+title and will fetch art keyed to those values.
+        // Without this, smtc.rs would emit an art-loaded event keyed
+        // to Pandora's garbage tab title, racing the bridge's correct
+        // emission and potentially overwriting the SharedAlbumArt
+        // cache with the wrong value.
+        let source_app_id = session.SourceAppUserModelId()
+            .ok()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        if crate::web_bridge::any_probe_detects(&title, &source_app_id) {
+            return;
+        }
+
         // First try iTunes Search if we have something to query with.
         // Empty artist + title means SMTC didn't give us a real song
         // (idle session, etc.) — skip the external call.

@@ -475,6 +475,15 @@ pub fn start(app: AppHandle, snapshot: SharedSnapshot, shared: SharedWebBridge) 
                                         artist: art_artist,
                                         data_url,
                                     };
+                                    // Mirror smtc::spawn_art_fetch's cache-then-emit
+                                    // pattern so get_current_album_art (called by
+                                    // the frontend on mount) returns this payload
+                                    // for the bridge-keyed title, not whatever
+                                    // SMTC's spawn_art_fetch last wrote.
+                                    use tauri::Manager;
+                                    let art_state =
+                                        app_for_art.state::<crate::smtc::SharedAlbumArt>();
+                                    *art_state.inner().write().await = Some(payload.clone());
                                     let _ = app_for_art.emit("album-art-loaded", &payload);
                                 });
                             }
