@@ -33,6 +33,7 @@ const DEFAULT_SETTINGS: Settings = {
   show_translation: false,
   tint_bg_from_album_art: false,
   blur_album_art_background: true,
+  window_backdrop: "acrylic",
   auto_contrast: true,
   streamer_enabled: false,
   streamer_port: 38247,

@@ -39,6 +39,7 @@ export type Settings = {
   show_translation: boolean;
   tint_bg_from_album_art: boolean;
   blur_album_art_background: boolean;
+  window_backdrop: "acrylic" | "mica" | "tabbed_mica" | "none";
   auto_contrast: boolean;
   streamer_enabled: boolean;
   streamer_port: number;

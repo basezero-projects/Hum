@@ -188,6 +188,18 @@ export default function SettingsView() {
           the result. No effect on tracks without art. Toggle on the fly
           with <code>Ctrl+Alt+B</code>.
         </Hint>
+        <Row label="Window backdrop">
+          <Select<"acrylic" | "mica" | "tabbed_mica" | "none">
+            value={s.window_backdrop}
+            onChange={(v) => update("window_backdrop", v)}
+            options={[
+              ["acrylic", "Acrylic (default)"],
+              ["mica", "Mica"],
+              ["tabbed_mica", "Tabbed Mica"],
+              ["none", "None"],
+            ]}
+          />
+        </Row>
       </Section>
 
       <Section title="Layout">
