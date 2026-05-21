@@ -1258,22 +1258,31 @@ fn cleaner() -> &'static Regex {
     C.get_or_init(|| {
         // (?ix) = case-insensitive + ignore whitespace inside the pattern.
         //
-        // Video / audio / visualizer alternatives accept an optional `official`
-        // prefix so that uploads like "(Official Audio)", "(Official
-        // Visualizer)", "(Official Animated Video)" — not just the
-        // "(Official Music Video)" / "(Official Lyric Video)" / "(Official
-        // HD Video)" set the old regex hardcoded — get stripped. Without
-        // this, "Fleetwood Mac - Dreams (Official Audio)" left the parens
-        // intact and LRCLib search failed on the noisy query.
+        // Structural rule for the video/audio/visualizer terminals: accept
+        // ANY sequence of words before the noise terminal — `(?:[\w'\-]+\s+)*
+        // video` matches `(Video)`, `(Official Video)`, `(Official Music
+        // Video)`, `(Official 4K Video)`, `(Official Animated 8K HD Music
+        // Video)`, `(Live 1080p Audio)` and every other uploader fashion
+        // ending in those words.
+        //
+        // The previous version enumerated the allowed modifiers — `(?:music
+        // \s+|lyric\s+|hd\s+|animated\s+)?video` — which broke whenever
+        // a new quality token appeared mid-string. Real failure cases:
+        // `(Official 4K Video)` (4K not in allowlist), `(Official 60fps
+        // Music Video)` (60fps not in allowlist). Loosening to "any words
+        // before video/audio/visualizer" makes the cleaner robust to new
+        // tokens without needing a regex patch each time.
+        //
+        // The remaining alternatives (lyrics, feat./ft., remaster, live at,
+        // demo, acoustic, edit, etc.) stay as bounded vocabularies — they
+        // genuinely are finite sets and don't benefit from loosening.
         Regex::new(
             r"(?ix)
               \s*[\[\(]\s*
               (?:
-                  (?:official\s+)?(?:music\s+|lyric\s+|hd\s+|animated\s+)?video |
-                  (?:official\s+)?(?:music\s+)?audio |
-                  (?:official\s+)?visualizer |
-                  music\s+video |
-                  lyric\s+video |
+                  (?:[\w'\-]+\s+)*video |
+                  (?:[\w'\-]+\s+)*audio |
+                  (?:[\w'\-]+\s+)*visualizer |
                   lyrics? |
                   feat\.?\s.* |
                   ft\.?\s.* |
@@ -1294,7 +1303,7 @@ fn cleaner() -> &'static Regex {
                   edit |
                   bonus\s+track |
                   \d{1,2}k |
-                  hd | uhd | mv
+                  hd | uhd | mv | 1080p | 1440p | 2160p | 60fps | 30fps | hq
               )
               \s*[\]\)]
             ",
@@ -1332,9 +1341,43 @@ fn pipe_tag_cleaner() -> &'static Regex {
 }
 
 pub fn clean_title(title: &str) -> String {
-    let cleaned = cleaner().replace_all(title, "").to_string();
+    // 1. Strip trailing YouTube lyric-channel quote excerpt. Channels like
+    //    BangersOnly bait clicks by appending a memorable line in quotes
+    //    after the real title — e.g. `Beautiful Things (Lyrics) "i want
+    //    you i need you oh god"`. Nothing else in the cleaner pipeline
+    //    touched these, so the quoted suffix tanked the title score in
+    //    `pick_best`'s length-ratio path. Stripping first lets the rest
+    //    of the pipeline see the real song title.
+    let cleaned = trailing_quote_stripper().replace(title, "$1").to_string();
+    // 2. Strip parenthetical / bracketed noise tags.
+    let cleaned = cleaner().replace_all(&cleaned, "").to_string();
+    // 3. Strip trailing pipe-separated tags.
     let cleaned = pipe_tag_cleaner().replace_all(&cleaned, "").to_string();
     cleaned.trim().to_string()
+}
+
+// Trailing YouTube lyric-channel quote excerpts ("i want you i need you oh
+// god"). Match requires non-whitespace + whitespace before the opening quote
+// so legit fully-quoted titles like Macklemore's `"Same Love"` (no leading
+// content) are left alone. Replace with the captured `\S` to preserve the
+// last char of the real title. Handles both ASCII `"..."` and curly
+// `\u{201C}...\u{201D}` quotes — uploaders use both, sometimes in the same
+// title (curly opening, ASCII closing) because YouTube's smart-quote pass
+// is inconsistent.
+fn trailing_quote_stripper() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(
+            "(?x)\
+              (\\S)\\s+\
+              [\"\u{201C}]\
+              [^\"\u{201C}\u{201D}]+\
+              [\"\u{201D}]\
+              \\s*$\
+            ",
+        )
+        .unwrap()
+    })
 }
 
 // ─── Artist cleaner ────────────────────────────────────────────────────────
@@ -1567,6 +1610,7 @@ mod tests {
 
     #[test]
     fn cleans_titles() {
+        // ── Baseline (established v0.10.7+ behavior) ─────────────────────
         assert_eq!(clean_title("Apocalypse (Official Video)"), "Apocalypse");
         assert_eq!(clean_title("Apocalypse [Lyrics]"), "Apocalypse");
         assert_eq!(clean_title("Hey Jude (Remastered 2009)"), "Hey Jude");
@@ -1574,6 +1618,80 @@ mod tests {
         assert_eq!(clean_title("Test Song [HD] (4K)"), "Test Song");
         assert_eq!(clean_title("Track Name (Live at Wembley)"), "Track Name");
         assert_eq!(clean_title("Plain Title"), "Plain Title");
+
+        // ── v0.10.11 — Official Audio variants ───────────────────────────
+        assert_eq!(clean_title("Dreams (Official Audio)"), "Dreams");
+        assert_eq!(clean_title("Dreams (Official Visualizer)"), "Dreams");
+        assert_eq!(clean_title("Dreams (Official Animated Video)"), "Dreams");
+
+        // ── v0.10.21 — flexible modifier alternation ─────────────────────
+        //
+        // Previously the cleaner only accepted (music|lyric|hd|animated)
+        // before `video`; quality tokens like 4K / 8K / 60fps in the middle
+        // of the parenthetical caused the whole tag to survive.
+        //
+        // Real-world failure: "Train - Drops Of Jupiter (Tell Me) (Official
+        // 4K Video)" left `(Official 4K Video)` intact → length-ratio score
+        // < 80 → no lyrics.
+        assert_eq!(
+            clean_title("Train - Drops Of Jupiter (Tell Me) (Official 4K Video)"),
+            "Train - Drops Of Jupiter (Tell Me)"
+        );
+        assert_eq!(clean_title("Song (Official 8K Video)"), "Song");
+        assert_eq!(clean_title("Track (Official 60fps Music Video)"), "Track");
+        assert_eq!(clean_title("Song (Official Animated 4K Music Video)"), "Song");
+        assert_eq!(clean_title("X [Official 1080p HD Music Video]"), "X");
+        assert_eq!(clean_title("Y (Live 4K UHD Audio)"), "Y");
+        assert_eq!(clean_title("Z (Official Animated Visualizer)"), "Z");
+        assert_eq!(clean_title("A (HQ Audio)"), "A");
+        assert_eq!(clean_title("B (2160p Music Video)"), "B");
+
+        // ── v0.10.21 — trailing quote excerpt strip ──────────────────────
+        //
+        // YouTube lyric channels (BangersOnly, et al.) append a memorable
+        // line in quotes after the real title to bait clicks. Real-world
+        // failure: "Beautiful Things (Lyrics) \"i want you i need you oh
+        // god\"" — quoted suffix survived, length ratio tanked the score.
+        assert_eq!(
+            clean_title("Benson Boone - Beautiful Things (Lyrics) \"i want you i need you oh god\""),
+            "Benson Boone - Beautiful Things"
+        );
+        assert_eq!(
+            clean_title("Plain Title \"with a quoted suffix\""),
+            "Plain Title"
+        );
+        // Curly quotes (uploaders inconsistently smart-quote)
+        assert_eq!(
+            clean_title("Plain Title \u{201C}smart quoted suffix\u{201D}"),
+            "Plain Title"
+        );
+        // Mixed curly + ASCII (also seen in the wild)
+        assert_eq!(
+            clean_title("Plain Title \u{201C}mixed quoted\""),
+            "Plain Title"
+        );
+
+        // ── v0.10.21 — quote-stripper safeguards ─────────────────────────
+        //
+        // Fully-quoted titles (no leading non-quote content) must survive
+        // intact — `Macklemore - "Same Love"` is the canonical example.
+        // The artist `Macklemore - ` lives in the artist field separately;
+        // the title shown here is just the song's quoted name.
+        assert_eq!(clean_title("\"Same Love\""), "\"Same Love\"");
+        assert_eq!(clean_title("\u{201C}Same Love\u{201D}"), "\u{201C}Same Love\u{201D}");
+
+        // ── v0.10.21 — combined: cleaner runs AFTER quote-strip ──────────
+        //
+        // Ensure both layers compose: trailing quote AND trailing paren
+        // noise both get cleaned, leaving the bare title.
+        assert_eq!(
+            clean_title("Song (Official 4K Video) \"quoted suffix\""),
+            "Song"
+        );
+        assert_eq!(
+            clean_title("Song (Tell Me) (Official 4K Video) \"the hook\""),
+            "Song (Tell Me)"
+        );
     }
 
     #[test]
