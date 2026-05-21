@@ -30,7 +30,7 @@ use crate::smtc::SharedSnapshot;
 
 const STORE_FILE: &str = "lyrics-cache.json";
 const USER_AGENT: &str =
-    "hum/0.10.19 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
+    "hum/0.10.20 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WordSpan {
@@ -226,6 +226,27 @@ async fn resolve_lyrics(
     // "error fetching lyrics" instead of a clean NotFound.
     let cleaned_title = clean_title(&track.title);
     let cleaned_artist = clean_artist(&track.artist);
+
+    // Mashups / bootlegs / fan edits don't exist on any canonical lyric
+    // source (LRCLib, SimpMusic, NetEase) — only their constituent songs
+    // do. Falling through to those sources means we end up matching a
+    // single song's lyrics against the mashup audio, producing
+    // confidently-wrong out-of-sync output (the "Twista x Wetter (SW
+    // Mashup)" case Wes hit returned Twista's "Wetter" lyrics, which
+    // drift several minutes off the actual mashup playback). No lyrics
+    // beats wrong lyrics. Detection is intentionally conservative —
+    // only the explicit fan-creation keywords, not heuristic " x " /
+    // " vs " separators (which appear in legit song titles like
+    // "Romeo x Juliet").
+    if looks_like_mashup(&track.title) {
+        return Outcome {
+            cached: CachedLyrics::NotFound,
+            source: "mashup-skip".into(),
+            persist: false,
+            errors: Vec::new(),
+        };
+    }
+
     let mut errors: Vec<String> = Vec::new();
     // Did at least one source authoritatively reply "no match" (vs erroring)?
     // If yes, we treat the overall result as NotFound even when other sources
@@ -615,6 +636,26 @@ fn strip_youtube_noise(title: &str) -> String {
     s.trim().to_string()
 }
 
+/// Detect fan mashups / bootlegs / DJ edits that don't exist on canonical
+/// lyric sources. Conservative: only flags titles containing explicit
+/// fan-creation keywords. " x " / " vs " / " versus " are NOT included
+/// because they appear in plenty of legit released tracks ("Romeo x
+/// Juliet", "Spy vs Spy", "Smith Vs Mills"). False negatives — letting
+/// an ambiguous title through to the normal resolver — are acceptable
+/// since the scoring threshold there will reject weak matches. False
+/// positives — refusing to resolve a real song — are not, since the
+/// user gets nothing instead of correct lyrics.
+fn looks_like_mashup(title: &str) -> bool {
+    let lower = title.to_lowercase();
+    // Exact-substring checks (no regex needed). Keep this list short and
+    // unambiguous — anything that's basically only used by fan uploaders.
+    lower.contains("mashup")
+        || lower.contains("bootleg")
+        || lower.contains("fan edit")
+        || lower.contains("flip edit")
+        || lower.contains("dj edit")
+}
+
 /// Lowercase + collapse common Unicode punctuation that LRCLib uploaders use
 /// inconsistently into ASCII equivalents. Two different uploads of the same
 /// song routinely use different apostrophe flavors (`'` ASCII vs `'` U+2019
@@ -834,7 +875,6 @@ struct SimpMusicWrapper {
 #[derive(Deserialize, Debug, Clone)]
 struct SimpMusicRecord {
     #[serde(rename = "songTitle", default)]
-    #[allow(dead_code)]
     song_title: String,
     #[serde(rename = "artistName", default)]
     artist_name: String,
@@ -872,7 +912,7 @@ async fn fetch_simpmusic(
     let parsed: SimpMusicWrapper =
         serde_json::from_str(&body).context("parse simpmusic json")?;
 
-    let chosen = pick_best_simpmusic(parsed.data, artist, duration_ms);
+    let chosen = pick_best_simpmusic(parsed.data, title, artist, duration_ms);
     let Some(rec) = chosen else {
         return Ok((CachedLyrics::NotFound, "simpmusic".into()));
     };
@@ -902,41 +942,111 @@ async fn fetch_simpmusic(
     Ok((CachedLyrics::NotFound, "simpmusic".into()))
 }
 
+/// Score-based picker mirroring `pick_best` for LRCLib. Previously this
+/// only filtered by artist + ±5s duration and IGNORED the title entirely,
+/// which meant SimpMusic's broad title search returned the first record
+/// within ±5s of the mashup audio's duration — for a "Twista x Wetter
+/// (SW Mashup)" video at 227s, that happened to be Twista's "Wetter" at
+/// 230s, and we surfaced its lyrics confidently misaligned against the
+/// mashup playback. Same scoring shape as LRCLib but with rich-sync as
+/// the highest-priority bonus since SimpMusic's edge is word-level
+/// timing data.
 fn pick_best_simpmusic(
-    mut records: Vec<SimpMusicRecord>,
+    records: Vec<SimpMusicRecord>,
+    title: &str,
     artist: &str,
     requested_duration_ms: u64,
 ) -> Option<SimpMusicRecord> {
+    let title_l = normalize_for_match(title);
+    let artist_l = normalize_for_match(artist);
     let requested_secs = (requested_duration_ms / 1000) as i64;
-    let artist_l = artist.trim().to_lowercase();
-    let tolerance: i64 = 5;
 
-    records.retain(|r| {
-        let r_artist = r.artist_name.trim().to_lowercase();
-        let artist_match = !artist_l.is_empty()
-            && (r_artist.contains(&artist_l) || artist_l.contains(&r_artist));
-        if !artist_match && !artist_l.is_empty() {
-            return false;
-        }
-        if requested_secs == 0 {
-            return true;
-        }
-        (r.duration_seconds - requested_secs).abs() <= tolerance
-    });
+    const THRESHOLD: i64 = 80;
 
-    // Prefer richSyncLyrics (word-level), then syncedLyrics (line), then plain.
-    records.sort_by_key(|r| {
-        if !r.rich_sync_lyrics.is_empty() {
-            0
-        } else if !r.synced_lyrics.is_empty() {
-            1
-        } else if !r.plain_lyric.is_empty() {
-            2
-        } else {
-            3
-        }
-    });
-    records.into_iter().next()
+    let mut scored: Vec<(i64, SimpMusicRecord)> = records
+        .into_iter()
+        .map(|r| {
+            let rec_title = normalize_for_match(&r.song_title);
+            let rec_artist = normalize_for_match(&r.artist_name);
+
+            // Title score — same shape as LRCLib's pick_best.
+            let title_score: i64 = if rec_title.is_empty() {
+                -1
+            } else if rec_title == title_l {
+                100
+            } else if rec_title.contains(&title_l) || title_l.contains(&rec_title) {
+                let shorter = rec_title.len().min(title_l.len()) as f64;
+                let longer = rec_title.len().max(title_l.len()) as f64;
+                let ratio = if longer > 0.0 { shorter / longer } else { 1.0 };
+                (60.0 + 30.0 * ratio) as i64
+            } else {
+                let user_tokens: std::collections::HashSet<&str> =
+                    title_l.split_whitespace().filter(|t| t.len() > 1).collect();
+                let rec_tokens: std::collections::HashSet<&str> =
+                    rec_title.split_whitespace().filter(|t| t.len() > 1).collect();
+                if user_tokens.is_empty() || rec_tokens.is_empty() {
+                    -1
+                } else {
+                    let shared = user_tokens.intersection(&rec_tokens).count();
+                    let min_set = user_tokens.len().min(rec_tokens.len());
+                    if shared == 0 {
+                        -1
+                    } else {
+                        let frac = shared as f64 / min_set as f64;
+                        (20.0 + 30.0 * frac) as i64
+                    }
+                }
+            };
+
+            if title_score < 0 {
+                return (-1_000, r);
+            }
+
+            let duration_score: i64 = if requested_secs == 0 || r.duration_seconds == 0 {
+                15
+            } else {
+                let diff = (r.duration_seconds - requested_secs).abs();
+                match diff {
+                    0..=5 => 30,
+                    6..=10 => 22,
+                    11..=20 => 12,
+                    21..=30 => 4,
+                    _ => -50,
+                }
+            };
+
+            let artist_score: i64 = if artist_l.is_empty() || rec_artist.is_empty() {
+                0
+            } else if rec_artist == artist_l {
+                20
+            } else if rec_artist.contains(&artist_l) || artist_l.contains(&rec_artist) {
+                10
+            } else {
+                0
+            };
+
+            // SimpMusic-specific lyric-quality bonus: rich (word-level)
+            // beats plain synced beats plain text. Stronger than LRCLib's
+            // synced bonus because SimpMusic's whole reason for being in
+            // the cascade is the rich timing data.
+            let lyric_bonus = if !r.rich_sync_lyrics.trim().is_empty() {
+                25
+            } else if !r.synced_lyrics.trim().is_empty() {
+                20
+            } else if !r.plain_lyric.trim().is_empty() {
+                5
+            } else {
+                0
+            };
+
+            let total = title_score + duration_score + artist_score + lyric_bonus;
+            (total, r)
+        })
+        .filter(|(score, _)| *score >= THRESHOLD)
+        .collect();
+
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.into_iter().next().map(|(_, r)| r)
 }
 
 // ─── NetEase fallback ──────────────────────────────────────────────────────

@@ -6,6 +6,19 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.10.20] - 2026-05-21
+
+### Fixed
+- **Mashups / bootlegs / fan edits no longer surface a constituent song's lyrics out of sync.** Fan-made YouTube mashups don't exist on LRCLib / SimpMusic / NetEase, but the songs they're built from do. Previously the resolver would happily match one of the source songs (e.g. "Twista x Wetter (SW Mashup)" returned Twista's actual "Wetter" lyrics) and surface those lyrics confidently misaligned against the mashup audio — feeding the user wrong-time output. Now the resolver runs a `looks_like_mashup` check upfront on the user-reported title; if the title contains explicit fan-creation keywords (`mashup`, `bootleg`, `fan edit`, `flip edit`, `dj edit`), the resolver short-circuits to NotFound and the overlay shows the normal "♪ no lyrics for X" status. Detection is intentionally conservative: " x " / " vs " / " versus " separators are NOT included because they appear in plenty of released tracks ("Romeo x Juliet", "Smith vs Mills"). False negatives are acceptable since the scoring threshold will reject weak matches downstream; false positives (refusing real songs) are not.
+- **SimpMusic now uses the same scoring framework as LRCLib.** Before this release, `pick_best_simpmusic` filtered by artist + ±5s duration and IGNORED title entirely — SimpMusic's broad title-search API returns whatever's plausibly related, and the picker was happy to pick a record by the user's artist within ±5s of the track length without checking that the actual title matched. For mashups specifically this meant whatever song happened to land near the runtime got picked. Now SimpMusic candidates score on the same axes as LRCLib: title 0-100 (exact / substring with length ratio / token overlap), duration -50 to +30, artist 0-20, plus a SimpMusic-specific lyric-quality bonus (richSync = +25, syncedLine = +20, plain = +5 — SimpMusic's reason for being in the cascade is rich word-level timing, so it gets the heavier weight).
+
+### Architecture / files
+- **`src-tauri/src/lyrics.rs`** — new `fn looks_like_mashup(title: &str) -> bool` near `clean_title`. New early-return branch at the top of `resolve_lyrics` (right after `clean_title` / `clean_artist`) that bypasses LRCLib / SimpMusic / NetEase entirely when the original SMTC title is a mashup. `SimpMusicRecord.song_title` lost its `#[allow(dead_code)]` since the new picker uses it. `pick_best_simpmusic` rewritten end to end to mirror `pick_best`'s scoring shape (THRESHOLD: i64 = 80, title 0-100, duration step-function -50..+30, artist 0-20, lyric_bonus 0-25). `fetch_simpmusic` updated to pass `title` into `pick_best_simpmusic`. User-Agent bumped to `hum/0.10.20`.
+
+### Diagnostic notes
+- The "Twista x Wetter (SW Mashup)" case: `looks_like_mashup` finds "mashup" in the lowercased title → returns true → `resolve_lyrics` returns NotFound immediately with `source: "mashup-skip"` and `persist: false`. No LRCLib / SimpMusic / NetEase calls fire. Overlay shows "♪ no lyrics for Twista Ft. Morgan Wallen - Dangerous x Wetter (SW Mashup)" — correct.
+- The list of mashup keywords is short on purpose. If real-world reports surface other patterns ("nightcore edit", "slowed + reverb", "tiktok edit"), they can be appended trivially without changing the surrounding logic. "Remix" is intentionally NOT in the list — many legit released tracks are titled "X (Remix)" and DO have LRCLib records (Madeon's "All My Friends (Remix)" etc.).
+
 ## [0.10.19] - 2026-05-21
 
 ### Changed
