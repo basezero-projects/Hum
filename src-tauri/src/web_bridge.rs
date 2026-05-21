@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+#![allow(dead_code)] // Removed in Task 8 when lyrics.rs starts consulting the bridge.
 //! Web-player bridge — fills in track metadata for browser-based players
 //! that don't expose `navigator.mediaSession.metadata` correctly to Windows
 //! SMTC. Pandora.com is the motivating case: SMTC gets the browser tab
@@ -19,7 +19,6 @@
 //! timestamp. Resolver treats values older than ~5s as stale.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -212,29 +211,79 @@ impl WebPlayerProbe for PandoraProbe {
 /// Spawn the bridge worker. The worker watches the SMTC snapshot and,
 /// when a probe matches, polls UIA every 2s. Idle (5s tick, zero UIA
 /// calls) when no probe matches.
-pub fn start(_app: AppHandle, _snapshot: SharedSnapshot, _shared: SharedWebBridge) {
-    tauri::async_runtime::spawn(async {
-        // Smoke test — log all Chrome windows whose title ends with
-        // "Now Playing on Pandora". Removed in Task 6.
-        eprintln!("[web_bridge] startup smoke test running");
-        let hwnds = find_chrome_windows(|t| t.ends_with("Now Playing on Pandora"));
-        eprintln!("[web_bridge] found {} Pandora-titled Chrome windows", hwnds.len());
-        for hwnd in &hwnds {
-            eprintln!("[web_bridge]   HWND = {hwnd:?}");
+pub fn start(app: AppHandle, snapshot: SharedSnapshot, shared: SharedWebBridge) {
+    tauri::async_runtime::spawn(async move {
+        eprintln!("[web_bridge] worker starting");
+        let mut last_emitted_title = String::new();
+
+        loop {
+            let (title, app_id) = {
+                let snap = snapshot.read().await;
+                let id = snap.source_app_id.clone().unwrap_or_default();
+                (snap.title.clone(), id)
+            };
+
+            let active_probe: Option<&'static dyn WebPlayerProbe> = PROBES
+                .iter()
+                .find(|p| p.detects(&title, &app_id))
+                .copied();
+
+            match active_probe {
+                Some(probe) => {
+                    let name = probe.name();
+                    let read_result = tokio::task::spawn_blocking(move || probe.read())
+                        .await;
+                    match read_result {
+                        Ok(Ok(Some(track))) => {
+                            let new_title = track.title.clone();
+                            {
+                                let mut w = shared.write().await;
+                                *w = Some(track);
+                            }
+                            if new_title != last_emitted_title {
+                                eprintln!(
+                                    "[web_bridge] probe={name} read title={new_title:?}, emitting web-bridge-updated"
+                                );
+                                last_emitted_title = new_title;
+                                // Dedicated event so SMTC's `track-changed`
+                                // semantics (payload = full CurrentTrack)
+                                // stay clean. lyrics::start subscribes to
+                                // both events; web-bridge-updated is just
+                                // a wake signal with `()` payload.
+                                let _ = app.emit("web-bridge-updated", ());
+                            }
+                        }
+                        Ok(Ok(None)) => {
+                            // Probe ran, found nothing — leave existing cache
+                            // alone. Resolver staleness check (5s) handles
+                            // expiration if subsequent reads also fail.
+                        }
+                        Ok(Err(e)) => {
+                            eprintln!("[web_bridge] probe={name} read error: {e:#}");
+                        }
+                        Err(join_err) => {
+                            eprintln!("[web_bridge] probe={name} spawn_blocking failed: {join_err:#}");
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+                None => {
+                    // No probe matches the current SMTC snapshot. Idle —
+                    // zero UIA calls fire. Wake periodically to re-check.
+                    if !last_emitted_title.is_empty() {
+                        // Just transitioned out of an active probe; clear the
+                        // stale cache so the resolver doesn't keep using
+                        // last-known Pandora data after the user switched
+                        // tabs to YouTube.
+                        *shared.write().await = None;
+                        last_emitted_title.clear();
+                        eprintln!("[web_bridge] no probe matches, cache cleared");
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
+            }
         }
     });
-}
-
-fn _silence_unused_app_emitter(app: &AppHandle) {
-    // Keeps the import live until Task 6 wires the emitter. Will be removed.
-    // AppHandle implements Emitter; we reference the trait bound here so the
-    // import survives until Task 6 uses it for real.
-    fn _assert_emitter<T: Emitter<tauri::Wry>>(_: &T) {}
-    _assert_emitter(app);
-}
-
-fn _silence_unused_duration() {
-    let _ = Duration::from_secs(1);
 }
 
 #[cfg(test)]
