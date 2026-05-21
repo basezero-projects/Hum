@@ -241,6 +241,28 @@ pub fn run() {
             );
             build_tray(&app_handle, initial_mode)?;
 
+            // Apply the persisted DWM backdrop before first paint so the OS
+            // compositor effect is in place when the overlay window renders.
+            #[cfg(windows)]
+            {
+                if let Some(overlay) = app.get_webview_window("overlay") {
+                    match overlay.hwnd() {
+                        Ok(raw_hwnd) => {
+                            // Tauri may bundle a different windows-crate version internally;
+                            // bridge via raw isize. Mirrors web_bridge.rs::PandoraProbe::read().
+                            let hwnd = windows::Win32::Foundation::HWND(raw_hwnd.0);
+                            let kind = app.state::<SharedSettings>().inner().blocking_read().window_backdrop;
+                            if let Err(e) = backdrop::apply_backdrop(hwnd, kind) {
+                                eprintln!("backdrop: apply_backdrop on startup failed: {e:?}");
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("backdrop: overlay.hwnd() failed: {e:?}");
+                        }
+                    }
+                }
+            }
+
             // Apply the loaded mode at startup so tray icon + tooltip + window
             // cursor flag + check items all line up before first paint.
             apply_mode(&app_handle, initial_mode);
