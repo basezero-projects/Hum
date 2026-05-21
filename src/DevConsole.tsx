@@ -201,8 +201,33 @@ export default function DevConsole() {
             </span>
           </div>
         ) : lyrics.status === "error" ? (
-          <div style={{ color: "#f87171" }}>
-            Error fetching lyrics (network or LRCLib down). Will retry on next track.
+          <div>
+            <div style={{ color: "#f87171", marginBottom: 8 }}>
+              Error fetching lyrics for{" "}
+              <span style={{ color: "#fff" }}>
+                {lyrics.track.title || "(no title)"}
+                {lyrics.track.artist ? ` — ${lyrics.track.artist}` : ""}
+              </span>
+              . Will retry on next track.
+            </div>
+            {lyrics.errors && lyrics.errors.length > 0 && (
+              <div
+                style={{
+                  fontSize: 11,
+                  fontFamily:
+                    "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+                  color: "#fca5a5",
+                  background: "#1a0d0d",
+                  border: "1px solid #3a1a1a",
+                  borderRadius: 4,
+                  padding: "8px 10px",
+                  whiteSpace: "pre-wrap",
+                  lineHeight: 1.5,
+                }}
+              >
+                {lyrics.errors.join("\n")}
+              </div>
+            )}
           </div>
         ) : lyrics.status === "instrumental" ? (
           <div style={{ color: "#aaa" }}>♪ instrumental</div>

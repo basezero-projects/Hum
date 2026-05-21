@@ -6,6 +6,29 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.10.3] - 2026-05-21
+
+### Fixed
+- **"♪ error fetching lyrics" no longer fires on YouTube tracks with auto-generated channel chrome.** The overlay's middle-line red error state was firing on YouTube Music / Topic-channel videos because LRCLib's `/api/search` endpoint returns HTTP 400 when given noisy query params (e.g. an artist like `"Foo Bar - Topic"` or a title containing characters its query parser rejects), and `try_search_lrclib` was treating ANY 4xx as a transient `Err` instead of a clean "no match." With three lyric sources cascading through `last_error.is_some()`, a single 400 from search was enough to push the resolver into `Outcome::error()` even when the other two sources cleanly returned `NotFound`. Two YouTube tracks in a row showing "error fetching lyrics" is the symptom; the fix is making `/api/search` 4xx behave like `/api/get` 4xx (return `Ok(empty)` instead of `Err`). Source: `src-tauri/src/lyrics.rs::try_search_lrclib` no longer calls `.error_for_status()?`.
+- **YouTube Topic-channel videos now resolve lyrics.** Previously the resolver hard-skipped any track with an empty artist field (`src-tauri/src/lyrics.rs:139-141`'s `if snap.artist.trim().is_empty() { continue; }`), which meant Topic channels — where YouTube ships song titles with no artist metadata — silently kept showing the *previous* track's lyrics with no UI indication of the staleness. The skip is removed; an empty-artist track now flows into the resolver, which runs a title-only LRCLib `/api/search` (omitting the empty `artist_name` param) plus SimpMusic + NetEase (both already tolerate empty artist in their pick-best filters). The result either lands a lyric or surfaces an honest "no lyrics for X" instead of stale lyrics.
+- **Artist noise is now stripped before fetching.** New `clean_artist()` regex strips trailing ` - Topic`, ` VEVO`, ` - Official Artist Channel`, ` - Official`, ` (Official Artist Channel)`, ` (Official)`, ` [Topic]`, plus dangling dashes/whitespace. Mirrors the existing `clean_title` cleaner (which strips parenthesised noise like `(Official Music Video)`, `[Lyrics]`, `(Audio)`, `(feat. X)`, remaster/live/acoustic markers). Interior text is intentionally untouched so legitimate hyphenated band names ("Crosby, Stills, Nash & Young", "Earth, Wind & Fire") are not corrupted. Applied once at the top of `resolve_lyrics` so all three sources see the cleaned strings.
+
+### Added
+- **Dev console now shows the actual per-source error when lyric fetch fails.** Open the dev console (system tray → "Show / Hide dev console") → the **LYRICS** section. When status is `error`, a red monospace box renders beneath the existing error message, listing one line per failed source: `lrclib: /api/search returned 502`, `simpmusic: connection timed out`, `netease: dns failure for music.163.com`, etc. Each entry is the wrapped `anyhow` chain captured during `resolve_lyrics`. Implementation: new `errors: Vec<String>` field on the `CurrentLyrics` struct (Rust) and `errors?: string[]` on the matching TS type, flowing from `Outcome::error(errors)` → `apply_outcome` → emitted `lyrics-state` / `lyrics-not-found` events. Cleared on each new track to avoid stale entries leaking between fetches.
+
+### Architecture / files
+- **`src-tauri/src/lyrics.rs`** — main file. `try_search_lrclib` no longer panics on 4xx (explicit `is_client_error()` → `Ok(Vec::new())`); also now omits `artist_name` param entirely when artist is blank so LRCLib doesn't see an empty-string param. `try_get_lrclib` now early-returns `Ok(None)` on blank artist (no point firing a doomed exact-match against blank metadata when search runs in parallel anyway). New `artist_cleaner()` static regex + `clean_artist()` helper, structured like the existing `cleaner()` + `clean_title()`. New `errors: Vec<String>` field on `CurrentLyrics` (Rust struct, serde-default + skip-if-empty) and `Outcome` (resolver internal). `Outcome::error(errors)` takes the collected per-source error list. `resolve_lyrics` now collects errors instead of overwriting a single `Option<String>`. `apply_outcome` writes `s.errors = out.errors`. The track-changed worker's "Mark fetching" block now sets `errors: vec![]` so stale errors from a previous track don't leak into the dev console. The empty-artist skip in the worker loop is removed (now handled by the resolver itself). User-Agent bumped to `hum/0.10.3`.
+- **`src/types.ts`** — `CurrentLyrics` gains `errors?: string[]`.
+- **`src/DevConsole.tsx`** — the `status === "error"` branch now renders a red monospace box listing `lyrics.errors` (when present). Plain text join, one error per line, no truncation. Background `#1a0d0d`, border `#3a1a1a`, text `#fca5a5` to keep it visually distinct from the existing error message.
+- **Not changed:** `fetch_simpmusic` and `fetch_netease` already handled 4xx correctly (their `if status.is_client_error()` branches return `Ok((NotFound, source))`). Their pick-best functions already skip artist filtering when the artist string is empty. No changes needed there.
+
+### Diagnostic path for future "error fetching lyrics" reports
+1. Open the dev console (tray → "Show / Hide dev console").
+2. Replay the track that errored.
+3. The red monospace box under the LYRICS section will show the exact per-source failure (lrclib / simpmusic / netease + the wrapped reqwest error).
+4. If all three say "no match" rather than network errors → the metadata cleaning isn't catching that case; extend `clean_title` or `clean_artist`.
+5. If one says network error and the others succeed → that source is having a bad day; the overlay still resolved correctly via the other two.
+
 ## [0.10.2] - 2026-05-21
 
 ### Changed

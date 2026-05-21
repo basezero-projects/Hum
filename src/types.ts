@@ -70,6 +70,10 @@ export type CurrentLyrics = {
   plain: string | null;
   /** Per-line translation (currently only NetEase Chinese tlyric). */
   translation: LyricLine[] | null;
+  /** Per-source failure strings populated only when status === "error".
+   *  Each entry is prefixed with the source name, e.g.
+   *  `"lrclib: /api/search failed: connection reset"`. */
+  errors?: string[];
   track: {
     title: string;
     artist: string;
