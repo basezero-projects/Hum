@@ -205,6 +205,10 @@ pub fn run() {
                     art_state.clone(),
                     smtc_active.clone(),
                 );
+                let shared_bridge: web_bridge::SharedWebBridge =
+                    std::sync::Arc::new(tokio::sync::RwLock::new(None));
+                app.manage(shared_bridge.clone());
+                web_bridge::start(app.handle().clone(), snap.clone(), shared_bridge);
             }
             #[cfg(not(windows))]
             {

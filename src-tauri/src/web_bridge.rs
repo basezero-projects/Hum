@@ -24,6 +24,12 @@ use std::time::Duration;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::RwLock;
+use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+use windows::Win32::System::ProcessStatus::GetModuleBaseNameW;
+use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+use windows::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+};
 
 use crate::smtc::SharedSnapshot;
 
@@ -72,6 +78,84 @@ pub fn any_probe_detects(smtc_title: &str, smtc_app_id: &str) -> bool {
 /// entries in this slice.
 static PROBES: &[&dyn WebPlayerProbe] = &[&PandoraProbe];
 
+/// Enumerate top-level Chrome windows whose title matches `predicate`.
+/// Returns the `HWND` of each match. Used by probes to find the right
+/// Chromium window when multiple tabs / multiple Chrome windows are open.
+///
+/// Multi-process Chrome: UIA queries against the top-level window handle
+/// reach into whichever renderer process is hosting that window's content,
+/// so we don't need to chase the per-tab child processes ourselves.
+fn find_chrome_windows<F: Fn(&str) -> bool>(predicate: F) -> Vec<HWND> {
+    struct Ctx<'a> {
+        predicate: &'a dyn Fn(&str) -> bool,
+        hits: Vec<HWND>,
+    }
+
+    let mut ctx = Ctx {
+        predicate: &predicate,
+        hits: Vec::new(),
+    };
+
+    unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        // SAFETY: lparam was set to a valid &mut Ctx by the EnumWindows
+        // caller. The reference outlives the synchronous EnumWindows call.
+        let ctx = unsafe { &mut *(lparam.0 as *mut Ctx) };
+
+        if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
+            return BOOL(1); // skip hidden, keep enumerating
+        }
+
+        let title = read_window_title(hwnd);
+        if title.is_empty() || !(ctx.predicate)(&title) {
+            return BOOL(1);
+        }
+
+        let process_name = read_process_name_for_window(hwnd);
+        if process_name.eq_ignore_ascii_case("chrome.exe") {
+            ctx.hits.push(hwnd);
+        }
+        BOOL(1)
+    }
+
+    let ctx_ptr: *mut Ctx = &mut ctx;
+    let _ = unsafe { EnumWindows(Some(enum_proc), LPARAM(ctx_ptr as isize)) };
+
+    ctx.hits
+}
+
+fn read_window_title(hwnd: HWND) -> String {
+    let mut buf = [0u16; 512];
+    // GetWindowTextW returns the number of characters copied, NOT
+    // including the null terminator. A return of 0 means either an
+    // empty title or an error — either way we treat as empty.
+    let n = unsafe { GetWindowTextW(hwnd, &mut buf) };
+    if n <= 0 {
+        return String::new();
+    }
+    String::from_utf16_lossy(&buf[..n as usize])
+}
+
+fn read_process_name_for_window(hwnd: HWND) -> String {
+    let mut pid: u32 = 0;
+    let _ = unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    if pid == 0 {
+        return String::new();
+    }
+    let handle = match unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) } {
+        Ok(h) => h,
+        Err(_) => return String::new(),
+    };
+    let mut name_buf = [0u16; 260];
+    let n = unsafe { GetModuleBaseNameW(handle, None, &mut name_buf) };
+    // Close the handle explicitly to avoid leaking on every window we enumerate.
+    let _ = unsafe { windows::Win32::Foundation::CloseHandle(handle) };
+    if n == 0 {
+        String::new()
+    } else {
+        String::from_utf16_lossy(&name_buf[..n as usize])
+    }
+}
+
 // PandoraProbe lives in this same module — see Task 4.
 struct PandoraProbe;
 
@@ -105,7 +189,16 @@ impl WebPlayerProbe for PandoraProbe {
 /// when a probe matches, polls UIA every 2s. Idle (5s tick, zero UIA
 /// calls) when no probe matches.
 pub fn start(_app: AppHandle, _snapshot: SharedSnapshot, _shared: SharedWebBridge) {
-    // Filled in in Task 6.
+    tauri::async_runtime::spawn(async {
+        // Smoke test — log all Chrome windows whose title ends with
+        // "Now Playing on Pandora". Removed in Task 6.
+        eprintln!("[web_bridge] startup smoke test running");
+        let hwnds = find_chrome_windows(|t| t.ends_with("Now Playing on Pandora"));
+        eprintln!("[web_bridge] found {} Pandora-titled Chrome windows", hwnds.len());
+        for hwnd in &hwnds {
+            eprintln!("[web_bridge]   HWND = {hwnd:?}");
+        }
+    });
 }
 
 fn _silence_unused_app_emitter(app: &AppHandle) {
