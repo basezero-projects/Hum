@@ -65,16 +65,17 @@ export default function Overlay() {
   // Inner row element ref — drives the auto-resize of the window's
   // height to match content. No empty space inside the window.
   const [innerRowEl, setInnerRowEl] = useState<HTMLDivElement | null>(null);
-  // Raw screen-behind-the-window luminance from contrast.rs's screen-
-  // capture worker (0..1, null until the first sample arrives). Used as
-  // ONE input to the composited overlay-surface luminance below — when
-  // the overlay has its own blurred-bg or opaque user-bg painted on top,
-  // the screen luminance is mostly irrelevant for what the user actually
-  // sees through the overlay's surface.
-  const [screenLuminance, setScreenLuminance] = useState<number | null>(null);
+  // Raw screen-behind-the-window color sample from contrast.rs's screen-
+  // capture worker. Null until the first sample arrives. Carries RGB so
+  // we can compute both luminance AND saturation downstream — a tan/gold
+  // surface is luminance-light but saturation-tinted, and we want white
+  // text there, not the dark text a pure-luminance threshold would pick.
+  const [screenColor, setScreenColor] = useState<
+    { r: number; g: number; b: number } | null
+  >(null);
   // Final boolean: is the surface UNDER the lyric text visually light?
   // Drives the auto-contrast text-color flip. Computed each render from
-  // (screenLuminance, blur-bg, tint color, user bg color, bg opacity),
+  // (screenColor, blur-bg, tint color, user bg color, bg opacity),
   // then debounced through hysteresis to avoid flickering when the
   // surface luminance hovers near the 0.5 threshold (dynamic videos
   // behind a transparent overlay are the classic culprit).
@@ -272,11 +273,11 @@ export default function Overlay() {
       listen<{ luminance: number; r: number; g: number; b: number }>(
         "bg-luminance",
         (e) => {
-          // Just stash the raw value. Compositing with blur/tint/user-bg
-          // and the hysteresis pass run downstream in a useEffect so the
+          // Stash the raw sample. Compositing with blur/tint/user-bg and
+          // the hysteresis pass run downstream in a useEffect so the
           // final decision reflects what the user actually sees on the
           // overlay's own surface, not just the screen behind.
-          setScreenLuminance(e.payload.luminance);
+          setScreenColor({ r: e.payload.r, g: e.payload.g, b: e.payload.b });
         },
       ),
     ];
@@ -611,27 +612,33 @@ export default function Overlay() {
   // user actually sees a DARK surface (blur+brightness(0.62) is dark
   // for >95% of album arts) but the screen sample said "light, use
   // dark text" → unreadable dark-on-dark.
-  const surfaceLuminance = computeSurfaceLuminance({
-    screenLum: screenLuminance,
+  const surfaceColor = computeSurfaceColor({
+    screenColor,
     showBlurBg,
     tintColor,
     bgColor: effectiveBgColor,
     bgOpacityPct: effectiveOpacity,
   });
 
-  // Hysteresis around 0.5: light → dark requires drop below 0.45, dark
-  // → light requires rise above 0.55. Stops flickering when the
-  // composited luminance hovers near the threshold (e.g. mid-tone
-  // album art on a transparent overlay over a mid-gray desktop).
+  // "Lightness score" = luminance × (1 - saturation). White / light gray
+  // / pale-cream score high (saturation ≈ 0); tan, gold tint, saturated
+  // pastels score lower even at high luminance. Dark text only kicks in
+  // for the high-score case; otherwise white text wins (more readable
+  // over tinted bright surfaces — Wes called this out on a gold album-
+  // art tint where black-on-tan was hard to read).
+  //
+  // Hysteresis on the score so dynamic backgrounds don't flicker the
+  // text color. Threshold 0.60 with a 0.05 band each side.
+  const lightScore = surfaceColor ? lightnessScore(surfaceColor) : null;
   useEffect(() => {
-    if (surfaceLuminance === null) return;
+    if (lightScore === null) return;
     setSurfaceIsLight((prev) => {
-      if (prev === null) return surfaceLuminance > 0.5;
-      if (prev && surfaceLuminance < 0.45) return false;
-      if (!prev && surfaceLuminance > 0.55) return true;
+      if (prev === null) return lightScore > 0.60;
+      if (prev && lightScore < 0.55) return false;
+      if (!prev && lightScore > 0.65) return true;
       return prev;
     });
-  }, [surfaceLuminance]);
+  }, [lightScore]);
 
   // Outer frame for all layouts: full window, visual chrome, vertical centering
   // of the inner content. The inner row (3-line / single-line) OR the inner
@@ -1433,50 +1440,83 @@ function colorWithOpacity(color: string, opacityPct: number): string {
 //
 // Returns null when there's NO signal at all (no screen sample yet, no
 // blur, no opacity) — auto-contrast then stays neutral.
-function computeSurfaceLuminance(args: {
-  screenLum: number | null;
+function computeSurfaceColor(args: {
+  screenColor: { r: number; g: number; b: number } | null;
   showBlurBg: boolean;
   tintColor: { r: number; g: number; b: number } | null;
   bgColor: string;
   bgOpacityPct: number;
-}): number | null {
-  const { screenLum, showBlurBg, tintColor, bgColor, bgOpacityPct } = args;
+}): { r: number; g: number; b: number } | null {
+  const { screenColor, showBlurBg, tintColor, bgColor, bgOpacityPct } = args;
 
   // Layer 1: what's BEHIND the overlay (or what the blurred art replaces).
-  let bg: number | null = null;
+  let bg: { r: number; g: number; b: number } | null = null;
   if (showBlurBg && tintColor) {
-    // Blurred bg layer. Filter brightness(0.62) is applied in CSS, so
-    // multiply the dominant color's luminance by 0.62 to mirror it.
-    const rawTintLum =
-      (0.299 * tintColor.r + 0.587 * tintColor.g + 0.114 * tintColor.b) / 255;
-    bg = rawTintLum * 0.62;
-  } else if (screenLum !== null) {
-    bg = screenLum;
+    // Blurred bg layer. CSS filter brightness(0.62) is applied in CSS,
+    // so dim the dominant tint by the same multiplier.
+    bg = {
+      r: Math.round(tintColor.r * 0.62),
+      g: Math.round(tintColor.g * 0.62),
+      b: Math.round(tintColor.b * 0.62),
+    };
+  } else if (screenColor !== null) {
+    bg = screenColor;
   }
 
   // Layer 2: user bg_color painted on top at bg_opacity. Alpha-blends
   // toward the user color and away from whatever was behind.
   if (bgOpacityPct > 0) {
-    const userLum = hexLuminance(bgColor);
-    if (userLum !== null) {
+    const userColor = hexToRgb(bgColor);
+    if (userColor !== null) {
       const alpha = Math.min(1, Math.max(0, bgOpacityPct / 100));
-      bg = bg !== null ? userLum * alpha + bg * (1 - alpha) : userLum;
+      bg = bg !== null
+        ? {
+            r: Math.round(userColor.r * alpha + bg.r * (1 - alpha)),
+            g: Math.round(userColor.g * alpha + bg.g * (1 - alpha)),
+            b: Math.round(userColor.b * alpha + bg.b * (1 - alpha)),
+          }
+        : userColor;
     }
   }
 
   return bg;
 }
 
-// Perceived luminance of a #rrggbb hex color (0..1). Returns null for
-// invalid input rather than guessing a value.
-function hexLuminance(hex: string): number | null {
+// Per-component perceived-luminance weighting (Rec. 601). 0..1.
+function rgbLuminance(c: { r: number; g: number; b: number }): number {
+  return (0.299 * c.r + 0.587 * c.g + 0.114 * c.b) / 255;
+}
+
+// HSV saturation: (max - min) / max. Returns 0 for pure black/gray (where
+// max == min or max == 0). White is 0; tan/gold/saturated colors trend
+// toward 1.
+function rgbSaturationHsv(c: { r: number; g: number; b: number }): number {
+  const max = Math.max(c.r, c.g, c.b);
+  if (max === 0) return 0;
+  const min = Math.min(c.r, c.g, c.b);
+  return (max - min) / max;
+}
+
+// Single score combining luminance and lack-of-saturation. Drives the
+// "use dark text" decision. Pure white → 1.0; light gray → ~0.8; pale
+// cream → ~0.85; tan / gold tint → ~0.4; saturated colors → < 0.3.
+function lightnessScore(c: { r: number; g: number; b: number }): number {
+  return rgbLuminance(c) * (1 - rgbSaturationHsv(c));
+}
+
+// Parse a #rrggbb hex into RGB components. Returns null for malformed
+// input so callers can distinguish "no signal" from "looks black."
+function hexToRgb(
+  hex: string,
+): { r: number; g: number; b: number } | null {
   const m = /^#([0-9a-fA-F]{6})$/.exec(hex);
   if (!m) return null;
   const n = parseInt(m[1], 16);
-  const r = (n >> 16) & 0xff;
-  const g = (n >> 8) & 0xff;
-  const b = n & 0xff;
-  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return {
+    r: (n >> 16) & 0xff,
+    g: (n >> 8) & 0xff,
+    b: n & 0xff,
+  };
 }
 
 function mixHexWithRgb(

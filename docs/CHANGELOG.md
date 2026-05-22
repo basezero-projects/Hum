@@ -6,6 +6,16 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.11.8] - 2026-05-22
+
+### Fixed
+- **Lyric text no longer flips to black on tinted-but-bright surfaces.** Before, when the auto-contrast feature decided the surface under the lyrics was "light" it switched the text from white to black. The rule was a pure luminance check, so a tan / gold / pale-pastel tint coming from an album-art blurred background (e.g. Yellowcard, Nelly Furtado, anything with a warm cover) tripped the threshold even though black text on tan is genuinely hard to read. The text now stays white over tinted brights, and only flips to black on near-grayscale lights — pure white, light gray, pale cream, very faint pastels.
+
+  **Implementation:** The contrast worker (`src-tauri/src/contrast.rs`) was already emitting RGB along with luminance via the `bg-luminance` Tauri event, but the React side discarded the color components and used only luminance. Renamed the React state to `screenColor` and plumbed RGB through `computeSurfaceColor` (was `computeSurfaceLuminance`) so the final composited surface is an `{r,g,b}` object instead of a scalar. Derive both luminance (Rec. 601 weighted) and HSV saturation `(max - min) / max` from the composite, then compute a single `lightnessScore = luminance × (1 - saturation)`. Pure white scores 1.0; light gray ~0.8; tan / gold tints ~0.4; saturated colors < 0.3. Dark-text threshold is now `lightnessScore > 0.60`, with hysteresis at 0.55 / 0.65 to suppress flicker when dynamic backgrounds hover near the boundary.
+
+### Updated
+- **README source-compatibility table.** Replaced the vague "anything that registers with SMTC" line with a concrete table of confirmed-working sources (iTunes app, Spotify app + web, YouTube web, Pandora web) plus the semi-working Pandora desktop app entry with its known limitation. README's tech-stack table also gained rows for the Pandora-web and Pandora-desktop bridges.
+
 ## [0.11.7] - 2026-05-22
 
 ### Fixed
