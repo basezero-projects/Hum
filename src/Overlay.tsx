@@ -759,6 +759,9 @@ export default function Overlay() {
           <BlurredAlbumBg dataUrl={albumArt!.data_url} tintColor={bgRgba} />
         ) : null}
         {showArt && albumArt ? <AlbumArtBadge dataUrl={albumArt.data_url} onClick={openArtistPanel} /> : null}
+        {openArtistPanel && (!showArt || !albumArt) ? (
+          <ArtistInfoDot onClick={openArtistPanel} />
+        ) : null}
         {hasLines ? (
           lyrics!.lines.map((line, i) => (
             <LineRow
