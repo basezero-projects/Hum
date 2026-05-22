@@ -841,6 +841,23 @@ fn build_artist_info_from_cache(
     })
 }
 
+// ── Tauri commands ─────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_artist_info(
+    artist: String,
+    cache: tauri::State<'_, ArtistInfoCache>,
+) -> Result<ArtistInfo, String> {
+    cache.fetch(&artist).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn clear_artist_info_cache(
+    cache: tauri::State<'_, ArtistInfoCache>,
+) -> Result<(), String> {
+    cache.clear().await.map_err(|e| e.to_string())
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

@@ -60,6 +60,7 @@ use mode::{
 use settings::{
     get_settings, open_settings_window, reset_settings, update_settings, SharedSettings,
 };
+use artist_info::{ArtistInfoCache, clear_artist_info_cache, get_artist_info};
 
 #[tauri::command]
 async fn get_current_track(
@@ -194,6 +195,8 @@ pub fn run() {
             let streamer_enabled_at_start = loaded_settings.streamer_enabled;
             let streamer_port_at_start = loaded_settings.streamer_port;
             app.manage::<SharedSettings>(Arc::new(RwLock::new(loaded_settings)));
+                let artist_cache = ArtistInfoCache::new(app.handle().clone());
+                app.manage(artist_cache);
 
             #[cfg(windows)]
             {
@@ -378,6 +381,8 @@ pub fn run() {
             open_settings_window,
             set_update_indicator,
             set_update_banner_visible,
+            get_artist_info,
+            clear_artist_info_cache,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
