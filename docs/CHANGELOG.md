@@ -6,6 +6,20 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.11.2] - 2026-05-22
+
+### Added (dev-only, not shipped to users)
+- **`dump_uia` dev binary — discover UI Automation selectors for non-SMTC apps.** New stand-alone binary at `src-tauri/src/bin/dump_uia.rs` that prints the UIA tree of every visible top-level window whose title or process file name matches a needle (default `"pandora"`, case-insensitive substring). Used to find the AutomationId / Name / ClassName paths that hold the currently-playing track + artist inside apps that do not publish to Windows SMTC, so we can build a Layer-3 universal-tracking bridge that mirrors `web_bridge::PandoraProbe` for desktop targets.
+
+  Not part of the main `hum` binary. Run from `src-tauri/` with `cargo run --bin dump_uia` (pretty ASCII tree), `cargo run --bin dump_uia -- --json` (JSON array for grepping), or `cargo run --bin dump_uia -- spotify --raw` (custom needle + raw-view walker that shows every element including non-content shells). The default walker is the UIA control view, which matches the proven pattern in `web_bridge::PandoraProbe`. Per-element output includes `ControlType`, `LocalizedControlType` (when different), `Name`, `AutomationId`, `ClassName`, and the `ValuePattern` value where available. Hard caps at 20,000 nodes per window and depth 60.
+
+  Critical implementation detail: each matched window is re-anchored through `automation.element_from_handle(hwnd)` rather than walked from the desktop root. This fresh-from-HWND query is what wakes Chromium / WebView2 / XAML hosts to expose their renderer subtree to UIA — without it, Chromium-backed apps return a 14-node shell with the actual content hidden behind a single empty `Chrome_RenderWidgetHostHWND` element. Same pattern as the working `web_bridge.rs` probe.
+
+  No new dependencies — the `uiautomation = "0.25"` crate was already in `src-tauri/Cargo.toml` for the existing `web_bridge::PandoraProbe`. Cargo auto-discovers binaries in `src/bin/` so no manifest changes were needed.
+
+### Changed (no user-visible effect this release)
+- **Live Ticketmaster Discovery API key in place.** `TICKETMASTER_API_KEY` in `src-tauri/src/artist_info.rs` was populated with the live key from Wes's `SYVR-App` Ticketmaster developer account (originally landed as commit `ed23536` without a version bump in v0.11.1; documenting here for completeness). The artist-info panel's Upcoming Shows section now serves real tour data instead of empty / 401 responses. Free-tier limits: 5 requests per second, 5,000 requests per day per key.
+
 ## [0.11.1] - 2026-05-21
 
 ### Changed
