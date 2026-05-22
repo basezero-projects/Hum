@@ -38,6 +38,8 @@
 //! renders the now-playing block before any "Recently Played" / artist-bio /
 //! album-details Hyperlinks in document order.
 
+use std::sync::Mutex;
+
 use anyhow::anyhow;
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, IsWindowVisible};
@@ -45,6 +47,18 @@ use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, IsWindowVisible};
 use crate::web_bridge::{
     read_process_name_for_window, read_window_title, WebBridgeTrack, WebPlayerProbe,
 };
+
+/// Per-track playback-start timestamp. Pandora doesn't expose the seek bar
+/// to UI Automation, so we can't read the *real* current position — instead
+/// we record the unix-ms when each new track was first seen and report
+/// elapsed-since-start as the position. Wrong if the user pauses (we keep
+/// advancing while audio is silent), but correct in the common play-through
+/// case, which is enough to make the lyrics overlay scroll roughly in sync.
+///
+/// Stored as `Some(("Track Title — Artist", start_unix_ms))`. The key is
+/// the artist|title pair so a back-to-back replay of the same song resets
+/// to position 0.
+static TRACK_START: Mutex<Option<(String, i64)>> = Mutex::new(None);
 
 pub struct PandoraDesktopProbe;
 
@@ -94,12 +108,31 @@ impl WebPlayerProbe for PandoraDesktopProbe {
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or(0);
 
+            // Position = ms elapsed since this track first appeared in the
+            // UIA tree. New track → reset to 0 + record start time.
+            let track_key = format!("{title}|{artist}");
+            let position_ms = {
+                let mut guard = TRACK_START.lock().expect("TRACK_START mutex poisoned");
+                match guard.as_ref() {
+                    Some((prev_key, start_ms)) if prev_key == &track_key => {
+                        // Same track as last poll — report elapsed.
+                        (now_unix_ms - start_ms).max(0) as u64
+                    }
+                    _ => {
+                        // First sighting of this track (or a new one) — anchor.
+                        *guard = Some((track_key, now_unix_ms));
+                        0
+                    }
+                }
+            };
+
             return Ok(Some(WebBridgeTrack {
                 title,
                 artist,
                 album,
                 source: self.name().to_string(),
                 last_seen_unix_ms: now_unix_ms,
+                position_ms: Some(position_ms),
             }));
         }
 

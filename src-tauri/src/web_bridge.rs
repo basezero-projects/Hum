@@ -44,9 +44,64 @@ pub struct WebBridgeTrack {
     /// decide staleness — typically anything older than 5_000ms is treated
     /// as not-present.
     pub last_seen_unix_ms: i64,
+    /// Playback position when the probe last read. `None` when the probe
+    /// cannot determine position (e.g. the Chrome-side `PandoraProbe`
+    /// trusts SMTC's position because Chrome itself publishes timeline
+    /// data to SMTC). When `Some`, the lyrics resolver and
+    /// `get_current_track` blend this in over SMTC's stale position.
+    /// Interpretation matches `CurrentTrack.position_ms`: ms elapsed from
+    /// the track start, paired with `last_seen_unix_ms` for client-side
+    /// interpolation.
+    #[serde(default)]
+    pub position_ms: Option<u64>,
 }
 
 pub type SharedWebBridge = Arc<RwLock<Option<WebBridgeTrack>>>;
+
+/// Freshness window for bridge data, in ms. Bridge entries older than this
+/// are treated as not present.
+pub const BRIDGE_FRESHNESS_MS: i64 = 5_000;
+
+/// Mutate `snap` in place so its `title`/`artist`/`album` reflect a fresh
+/// bridge entry (if one exists), and — when the bridge probe supplied
+/// `position_ms` — its `position_ms`/`last_update_unix_ms`/`state` reflect
+/// bridge timing too. The lyrics resolver does the title/artist/album
+/// override already, but the snapshot itself (read by the
+/// `get_current_track` command and emitted in `timeline-changed` events)
+/// needs the same treatment so the *frontend* sees bridge-accurate
+/// playback position for non-SMTC apps like Pandora desktop.
+pub async fn blend_bridge_into_snapshot(
+    snap: &mut crate::smtc::CurrentTrack,
+    bridge: &SharedWebBridge,
+) {
+    let bridge_track = { bridge.read().await.clone() };
+    let Some(bt) = bridge_track else { return };
+
+    let now_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    if now_unix_ms - bt.last_seen_unix_ms >= BRIDGE_FRESHNESS_MS {
+        return;
+    }
+    if bt.title.trim().is_empty() {
+        return;
+    }
+
+    snap.title = bt.title;
+    snap.artist = bt.artist;
+    snap.album = bt.album;
+    if let Some(pos) = bt.position_ms {
+        snap.position_ms = pos;
+        snap.last_update_unix_ms = bt.last_seen_unix_ms;
+        // Probes that supply position only do so when the app is actively
+        // playing (Pandora desktop's read() returns None when no /TR
+        // Hyperlink is present, which covers ad breaks and the splash
+        // state). Force the snapshot's state to Playing so the frontend's
+        // interpolation advances.
+        snap.state = crate::smtc::PlaybackState::Playing;
+    }
+}
 
 /// A probe for one specific web player that doesn't expose Media Session
 /// metadata correctly. Probes are stateless — every method receives all
@@ -396,6 +451,10 @@ impl WebPlayerProbe for PandoraProbe {
                 album,
                 source: self.name().to_string(),
                 last_seen_unix_ms: now_unix_ms,
+                // Pandora-in-Chrome leaves position to SMTC — Chrome
+                // itself publishes timeline data, so SMTC's position is
+                // already correct for this case.
+                position_ms: None,
             }));
         }
 
@@ -447,9 +506,24 @@ pub fn start(app: AppHandle, snapshot: SharedSnapshot, shared: SharedWebBridge) 
                             let new_title = track.title.clone();
                             let art_title = track.title.clone();
                             let art_artist = track.artist.clone();
+                            let has_bridge_position = track.position_ms.is_some();
                             {
                                 let mut w = shared.write().await;
                                 *w = Some(track);
+                            }
+                            // Probes that supply their own position (e.g.
+                            // Pandora desktop, where SMTC publishes either
+                            // nothing or unrelated app data) need the
+                            // overlay to re-read from the snapshot every
+                            // tick so lyrics-line interpolation tracks the
+                            // bridge's position instead of SMTC's stale
+                            // timeline. Emit a synthesized timeline-changed
+                            // event after blending; the frontend already
+                            // wires this to applyTrack().
+                            if has_bridge_position {
+                                let mut blended = { snapshot.read().await.clone() };
+                                blend_bridge_into_snapshot(&mut blended, &shared).await;
+                                let _ = app.emit("timeline-changed", &blended);
                             }
                             if new_title != last_emitted_title {
                                 eprintln!(
@@ -598,12 +672,16 @@ mod tests {
     }
 
     #[test]
-    fn any_probe_detects_aggregates_correctly() {
-        assert!(any_probe_detects(
+    fn pandora_probe_detects_via_smtc_only() {
+        // PandoraProbe is the SMTC-gated probe — tested in isolation so the
+        // assertions don't depend on whether a desktop Pandora.exe is
+        // currently running (which would flip PandoraDesktopProbe).
+        let p = PandoraProbe;
+        assert!(p.detects(
             "Today's Hits Radio - Now Playing on Pandora",
             "Chrome.exe",
         ));
-        assert!(!any_probe_detects(
+        assert!(!p.detects(
             "Rick Astley - Never Gonna Give You Up",
             "Chrome.exe",
         ));

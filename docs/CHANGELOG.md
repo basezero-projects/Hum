@@ -6,6 +6,19 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.11.5] - 2026-05-22
+
+### Fixed
+- **Lyrics now scroll in sync when playing through the Pandora desktop app.** Follow-up to v0.11.4: the Pandora desktop bridge correctly identified the track + artist (so the album art and lyric-lookup were right), but the overlay's current-line indicator was jumping around because Hum was still reading playback position from Windows SMTC — which was stuck on whatever iTunes (or another app) last published. Pandora's seek bar does not surface to UI Automation at all, so Hum now estimates position by recording the unix-ms when each new Pandora track was first seen and reporting elapsed-since-start each subsequent poll. Lyrics now advance smoothly from the song's beginning. Pausing the Pandora app will still cause the lyrics to drift forward (Hum can't detect the pause because the seek bar is invisible to UI Automation); the drift resets on the next track change.
+
+  **Implementation:** Added `position_ms: Option<u64>` to `WebBridgeTrack`. Probes that can determine position (`PandoraDesktopProbe`) set it; probes that can rely on SMTC's position (`PandoraProbe` for Pandora-in-Chrome) leave it `None`. `pandora_desktop.rs` keeps a `Mutex<Option<(String, i64)>>` of `(track_key, start_unix_ms)` and computes `position_ms = now - start_ms` whenever it re-detects the same track; switching tracks resets the anchor to 0.
+
+  Made bridge data visible to the frontend in two new places:
+  - `get_current_track` Tauri command now blends bridge data into the snapshot before returning (was previously raw snapshot only) so the overlay's initial mount sees Pandora's track + position instead of SMTC's stale iTunes data.
+  - The `web_bridge` worker now emits `timeline-changed` events with a blended snapshot on every poll that produced position data, so the overlay re-syncs every 2 seconds while Pandora is playing.
+
+  Stopped SMTC's emits from yanking the frontend back to iTunes between bridge polls: every `app.emit("track-changed" / "timeline-changed" / "playback-state-changed", ...)` site in `smtc.rs` now goes through a new `emit_blended` helper that overrides the emit payload with fresh bridge data when present. SMTC still owns the snapshot's writeable fields when bridge is stale; the blend only kicks in for the 5-second freshness window after each bridge read. New helper `web_bridge::blend_bridge_into_snapshot` is the single source of truth for the override rules. Updated the `any_probe_detects_aggregates_correctly` unit test to test `PandoraProbe` in isolation since the aggregator's result now legitimately depends on whether `Pandora.exe` is currently running.
+
 ## [0.11.4] - 2026-05-22
 
 ### Added

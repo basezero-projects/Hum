@@ -70,9 +70,14 @@ use artist_window::{close_artist_panel_cmd, open_artist_panel_cmd, open_ticket_u
 #[tauri::command]
 async fn get_current_track(
     state: tauri::State<'_, SharedSnapshot>,
+    #[cfg(windows)] bridge: tauri::State<'_, crate::web_bridge::SharedWebBridge>,
 ) -> Result<CurrentTrack, String> {
-    let s = state.read().await;
-    Ok(s.clone())
+    let mut snap = state.read().await.clone();
+    #[cfg(windows)]
+    {
+        crate::web_bridge::blend_bridge_into_snapshot(&mut snap, &bridge).await;
+    }
+    Ok(snap)
 }
 
 #[tauri::command]

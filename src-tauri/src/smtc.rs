@@ -152,6 +152,20 @@ pub fn start(
     });
 }
 
+/// Emit a Tauri event with the snapshot fields overridden by any fresh
+/// web_bridge entry (Pandora desktop, etc.). Used in place of bare
+/// `app.emit("X", &snap)` so SMTC's own emits don't race against the
+/// bridge's emits — when Pandora desktop is publishing, iTunes' stale
+/// timeline-changed events would otherwise yank the frontend's track /
+/// position back to iTunes between bridge polls.
+async fn emit_blended(app: &AppHandle, event: &str, mut snap: CurrentTrack) {
+    use tauri::Manager;
+    if let Some(bridge_state) = app.try_state::<crate::web_bridge::SharedWebBridge>() {
+        crate::web_bridge::blend_bridge_into_snapshot(&mut snap, bridge_state.inner()).await;
+    }
+    let _ = app.emit(event, &snap);
+}
+
 async fn run(
     app: AppHandle,
     snapshot: SharedSnapshot,
@@ -235,10 +249,13 @@ async fn run(
                 } else {
                     // No active session — clear the snapshot and notify.
                     smtc_playing.store(false, Ordering::Relaxed);
-                    let mut snap = snapshot.write().await;
-                    *snap = CurrentTrack::default();
-                    let _ = app.emit("track-changed", &*snap);
-                    let _ = app.emit("playback-state-changed", &*snap);
+                    let emit_snap = {
+                        let mut snap = snapshot.write().await;
+                        *snap = CurrentTrack::default();
+                        snap.clone()
+                    };
+                    emit_blended(&app, "track-changed", emit_snap.clone()).await;
+                    emit_blended(&app, "playback-state-changed", emit_snap).await;
                     eprintln!("[smtc] no active session, snapshot cleared");
                 }
             }
@@ -251,13 +268,15 @@ async fn run(
                                 "[smtc] Msg::MediaChanged → title='{title}' artist='{artist}' album='{}' dur={}ms",
                                 track.album, track.duration_ms
                             );
-                            let mut snap = snapshot.write().await;
-                            snap.title = track.title;
-                            snap.artist = track.artist;
-                            snap.album = track.album;
-                            snap.duration_ms = track.duration_ms;
-                            let _ = app.emit("track-changed", &*snap);
-                            drop(snap);
+                            let emit_snap = {
+                                let mut snap = snapshot.write().await;
+                                snap.title = track.title;
+                                snap.artist = track.artist;
+                                snap.album = track.album;
+                                snap.duration_ms = track.duration_ms;
+                                snap.clone()
+                            };
+                            emit_blended(&app, "track-changed", emit_snap).await;
                             spawn_art_fetch(app.clone(), art.clone(), h.session.clone(), title, artist);
                         }
                         Err(e) => {
@@ -271,13 +290,16 @@ async fn run(
                 if let Some(ref h) = hooks {
                     match read_timeline(&h.session) {
                         Ok((position_ms, duration_ms, last_update)) => {
-                            let mut snap = snapshot.write().await;
-                            snap.position_ms = position_ms;
-                            if duration_ms > 0 {
-                                snap.duration_ms = duration_ms;
-                            }
-                            snap.last_update_unix_ms = last_update;
-                            let _ = app.emit("timeline-changed", &*snap);
+                            let emit_snap = {
+                                let mut snap = snapshot.write().await;
+                                snap.position_ms = position_ms;
+                                if duration_ms > 0 {
+                                    snap.duration_ms = duration_ms;
+                                }
+                                snap.last_update_unix_ms = last_update;
+                                snap.clone()
+                            };
+                            emit_blended(&app, "timeline-changed", emit_snap).await;
                         }
                         Err(e) => {
                             eprintln!("[smtc] Msg::TimelineChanged → read_timeline failed: {e:#}");
@@ -291,9 +313,12 @@ async fn run(
                         Ok(state) => {
                             eprintln!("[smtc] Msg::PlaybackChanged → state={state:?}");
                             smtc_playing.store(state == PlaybackState::Playing, Ordering::Relaxed);
-                            let mut snap = snapshot.write().await;
-                            snap.state = state;
-                            let _ = app.emit("playback-state-changed", &*snap);
+                            let emit_snap = {
+                                let mut snap = snapshot.write().await;
+                                snap.state = state;
+                                snap.clone()
+                            };
+                            emit_blended(&app, "playback-state-changed", emit_snap).await;
                         }
                         Err(e) => {
                             eprintln!("[smtc] Msg::PlaybackChanged → read_state failed: {e:#}");
@@ -373,15 +398,18 @@ async fn emit_full(
     }
 
     let (snap_title, snap_artist) = {
-        let snap = snapshot.read().await;
-        eprintln!(
-            "[smtc] emit_full → title='{}' artist='{}' state={:?} pos={}ms dur={}ms",
-            snap.title, snap.artist, snap.state, snap.position_ms, snap.duration_ms
-        );
-        let _ = app.emit("track-changed", &*snap);
-        let _ = app.emit("timeline-changed", &*snap);
-        let _ = app.emit("playback-state-changed", &*snap);
-        (snap.title.clone(), snap.artist.clone())
+        let emit_snap = {
+            let snap = snapshot.read().await;
+            eprintln!(
+                "[smtc] emit_full → title='{}' artist='{}' state={:?} pos={}ms dur={}ms",
+                snap.title, snap.artist, snap.state, snap.position_ms, snap.duration_ms
+            );
+            snap.clone()
+        };
+        emit_blended(app, "track-changed", emit_snap.clone()).await;
+        emit_blended(app, "timeline-changed", emit_snap.clone()).await;
+        emit_blended(app, "playback-state-changed", emit_snap.clone()).await;
+        (emit_snap.title.clone(), emit_snap.artist.clone())
     };
 
     if !snap_title.trim().is_empty() {
