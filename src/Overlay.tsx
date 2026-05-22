@@ -1698,7 +1698,10 @@ function statusLine(l: CurrentLyrics, t: CurrentTrack | null): string {
     case "error":
       return "♪ error fetching lyrics";
     case "ad":
-      return "♪ ad break";
+      if (l.promo) {
+        return `♪ Ad break — ${l.promo.product_name}: ${l.promo.tagline}`;
+      }
+      return "♪ Ad break — Brought to you by SYVR Studios";
     case "idle":
       return t?.title ? `♪ ${t.title}` : "♪";
     default:

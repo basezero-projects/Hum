@@ -73,6 +73,18 @@ export type ArtistInfo = {
   fetched_at_unix_ms: number;
 };
 
+export type Promo = {
+  id: string;
+  product_name: string;
+  tagline: string;
+  url: string;
+  icon_url: string | null;
+  weight: number;
+  active: boolean;
+  cta_text: string | null;
+  accent_color: string | null;
+};
+
 export type WordSpan = { time_ms: number; text: string };
 
 export type LyricLine = {
@@ -112,6 +124,8 @@ export type CurrentLyrics = {
     album: string;
     duration_ms: number;
   };
+  /** Populated when status === "ad". The rotation-picked promo to display. */
+  promo?: Promo | null;
 };
 
 export function fmtMs(ms: number) {

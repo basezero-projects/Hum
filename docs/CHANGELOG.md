@@ -6,6 +6,13 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.12.0-rc4] - 2026-05-22
+
+### Added (internal — promo data wired end-to-end, still no detection)
+- **Promo rotation engine fetches from `https://syvrstudios.com/hum/promos.json` on startup and every 6 hours.** Falls back to a disk cache at `%APPDATA%\com.syvr.hum\promos.json`, then to a bundled `default_promos.json`, then to a hardcoded SYVR Studios entry. Picked promo rides on the `CurrentLyrics` payload's new `promo` field whenever `status == Ad`. Cooldown state (last-shown id) lives in app-managed shared state. No detection yet; verified manually with a temporary force-ad hack on Spotify.
+
+  **Implementation:** New `PromoSource` trait + `SyvrRemoteSource` in `src-tauri/src/promos.rs`. Bootstrap is synchronous (reads disk before the event loop starts); refresh is a background tokio task. `tauri-plugin-store` not used — promos cache is a plain JSON file via `std::fs::write` because the existing store plugin's API is overkill for one file. `ad_break_outcome` in `lyrics.rs` is now async and consults the rotation engine. Promo type mirrored to `src/types.ts`.
+
 ## [0.12.0-rc3] - 2026-05-22
 
 ### Added (internal — no user-visible behavior yet)

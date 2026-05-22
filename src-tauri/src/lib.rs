@@ -235,6 +235,26 @@ pub fn run() {
                 let _ = &art_state;
                 lyrics::start(app.handle().clone(), lyrics_shared, snap);
             }
+            // Promo rotation: bootstrap from disk cache (or bundled fallback)
+            // synchronously so the first ad break of the session has something
+            // to show, then spawn the background refresh.
+            let cache_dir = app.path().app_config_dir()
+                .or_else(|_| app.path().app_data_dir())
+                .expect("app config or data dir must resolve");
+            let promo_source = std::sync::Arc::new(crate::promos::SyvrRemoteSource::new(cache_dir));
+            promo_source.bootstrap_load();
+            {
+                let src = promo_source.clone();
+                tauri::async_runtime::spawn(async move {
+                    src.run_refresh_loop().await;
+                });
+            }
+            app.manage(promo_source.clone());
+            // Shared "last shown" promo ID for cooldown across ad breaks.
+            app.manage(std::sync::Arc::new(tokio::sync::RwLock::new(
+                Option::<String>::None,
+            )) as std::sync::Arc<tokio::sync::RwLock<Option<String>>>);
+
             contrast::start(app.handle().clone());
 
             // Streamer / OBS browser-source HTTP server. Managed via the

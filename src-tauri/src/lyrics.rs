@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, Listener};
+use tauri::{AppHandle, Emitter, Listener, Manager};
 use tauri_plugin_store::StoreExt;
 use tokio::sync::{mpsc, RwLock};
 
@@ -89,6 +89,10 @@ pub struct CurrentLyrics {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<String>,
     pub track: TrackEcho,
+    /// When `status == Ad`, the rotation-picked promo to display. None
+    /// for every other status. Serialized as a sibling of `lines`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promo: Option<crate::promos::Promo>,
 }
 
 #[derive(Clone, Debug, Serialize, Default)]
@@ -167,7 +171,9 @@ pub fn start(
             // skip all network resolution and emit Status::Ad. The overlay
             // renders the SYVR promo card instead of lyrics.
             if snap.ad_active {
-                let outcome = ad_break_outcome(&snap);
+                let source: tauri::State<'_, std::sync::Arc<crate::promos::SyvrRemoteSource>> = app.state();
+                let last: tauri::State<'_, std::sync::Arc<tokio::sync::RwLock<Option<String>>>> = app.state();
+                let outcome = ad_break_outcome(&snap, source.inner(), last.inner()).await;
                 let key = outcome.track_key.clone();
                 if key != last_key {
                     last_key = key;
@@ -286,6 +292,7 @@ pub fn start(
                     translation: None,
                     errors: vec![],
                     track: track.clone(),
+                    promo: None,
                 };
                 emit_state(&app, &s);
             }
@@ -535,10 +542,21 @@ fn emit_state(app: &AppHandle, s: &CurrentLyrics) {
 }
 
 /// Build the `CurrentLyrics` payload emitted when the current snapshot
-/// indicates an ad break is playing. No network IO — purely synthesized
-/// from the snapshot. The frontend reads `status == Ad` and renders the
-/// SYVR promo card in place of the lyric rows.
-fn ad_break_outcome(snap: &crate::smtc::CurrentTrack) -> CurrentLyrics {
+/// indicates an ad break is playing. Picks a promo from the rotation engine
+/// and embeds it on the payload. The frontend reads `status == Ad` and
+/// renders the SYVR promo card in place of the lyric rows.
+async fn ad_break_outcome(
+    snap: &crate::smtc::CurrentTrack,
+    promo_source: &std::sync::Arc<crate::promos::SyvrRemoteSource>,
+    last_shown: &std::sync::Arc<tokio::sync::RwLock<Option<String>>>,
+) -> CurrentLyrics {
+    let pool = promo_source.promos_async().await;
+    let cooldown_id = { last_shown.read().await.clone() };
+    let picked = crate::promos::pick_next_promo(&pool, cooldown_id.as_deref()).cloned();
+    if let Some(ref p) = picked {
+        let mut w = last_shown.write().await;
+        *w = Some(p.id.clone());
+    }
     CurrentLyrics {
         track_key: format!("ad|{}|{}", snap.source_app_id.clone().unwrap_or_default(), snap.duration_ms),
         status: Status::Ad,
@@ -554,6 +572,7 @@ fn ad_break_outcome(snap: &crate::smtc::CurrentTrack) -> CurrentLyrics {
             album: String::new(),
             duration_ms: snap.duration_ms,
         },
+        promo: picked,
     }
 }
 
@@ -2096,23 +2115,31 @@ mod tests {
 #[cfg(test)]
 mod ad_short_circuit_tests {
     use super::*;
+    use crate::promos::SyvrRemoteSource;
 
-    #[test]
-    fn ad_active_skips_network_and_emits_ad_status() {
-        // Build a snapshot with ad_active = true.
+    #[tokio::test]
+    async fn ad_active_skips_network_and_emits_ad_status() {
         let mut snap = crate::smtc::CurrentTrack::default();
         snap.title = "Advertisement".into();
         snap.artist = "Spotify".into();
         snap.duration_ms = 30_000;
         snap.ad_active = true;
+        snap.source_app_id = Some("Spotify.exe".into());
 
-        // The resolver's short-circuit helper (introduced in this task)
-        // should produce a CurrentLyrics with status=Ad and empty lines,
-        // without doing any network IO.
-        let outcome = ad_break_outcome(&snap);
+        // Use a temp cache dir for the source so the test doesn't
+        // pollute the real %APPDATA%.
+        let tmp = std::env::temp_dir().join("hum-test-promos");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let source = std::sync::Arc::new(SyvrRemoteSource::new(tmp));
+        // Seed with bundled defaults asynchronously (bootstrap_load uses
+        // block_on which panics when called from inside a tokio runtime).
+        source.seed_with_defaults().await;
+        let last = std::sync::Arc::new(tokio::sync::RwLock::new(None));
+
+        let outcome = ad_break_outcome(&snap, &source, &last).await;
         assert_eq!(outcome.status, Status::Ad);
         assert!(outcome.lines.is_empty());
         assert_eq!(outcome.line_count, 0);
-        assert!(outcome.errors.is_empty());
+        assert!(outcome.promo.is_some(), "rotation should have picked something");
     }
 }
