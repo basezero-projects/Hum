@@ -17,6 +17,9 @@ mod smtc;
 mod web_bridge;
 
 #[cfg(windows)]
+mod pandora_desktop;
+
+#[cfg(windows)]
 mod backdrop;
 
 mod contrast;

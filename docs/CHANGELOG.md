@@ -6,6 +6,17 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.11.4] - 2026-05-22
+
+### Added
+- **Pandora desktop app is now a supported source.** Hum's overlay now shows the correct lyrics when you're playing music through the Microsoft Store Pandora app (the `Pandora.exe` Chromium-shelled desktop client), rather than incorrectly showing lyrics for whatever app last published to Windows SMTC (commonly iTunes, leaving the overlay stuck on stale tracks). No setting to enable — works automatically the moment Pandora.exe is open with a visible window and a track is playing. The overlay swaps to the new track within ~2 seconds of any Pandora track change.
+
+  **Why this needed a dedicated bridge:** Pandora's desktop app does not publish to Windows SMTC at all. Hum's pre-existing fallback chain (SMTC → Chrome `web_bridge` for Pandora-in-Chrome) didn't cover the desktop variant, and the SMTC-gated Chrome probe rejects it on the app-id check. The new bridge ignores SMTC entirely and gates on process enumeration instead.
+
+  **Implementation:** New `src-tauri/src/pandora_desktop.rs` registers `PandoraDesktopProbe` as the second entry in `web_bridge.rs::PROBES`. Its `detects()` enumerates visible top-level windows via Win32 `EnumWindows` looking for `process_name == "Pandora.exe"` (rather than reading SMTC). Its `read()` re-anchors the matched HWND through `automation.element_from_handle(hwnd)` to trigger Chromium's accessibility tree, then does a DFS preorder walk of the control-view subtree looking for `Hyperlink` elements whose `ValuePattern` URL starts with `https://www.pandora.com/artist/`. Classification by the URL's last path segment's two-character prefix: `TR` → track (use `Name` as title), `AR` → artist, `AL` → album. First hit of each kind wins (now-playing block renders before similar-artist Hyperlinks in document order). The `/artist/lyrics/...` "See All Lyrics" link is explicitly rejected so its `Name="See All Lyrics"` string never poisons the title field. Hard cap of 10,000 nodes per walk.
+
+  Sits naturally in the existing `web_bridge` poll loop — when active, writes `WebBridgeTrack { source: "pandora-desktop", ... }` to the shared cache every 2 seconds; the lyrics resolver's 5-second freshness window picks it up over SMTC's stale data. 10 unit tests cover the URL classifier (track / artist / album acceptance, lyrics-URL rejection, wrong-host rejection, unknown-prefix rejection, empty/malformed-ID rejection, trailing-slash tolerance).
+
 ## [0.11.3] - 2026-05-22
 
 ### Changed

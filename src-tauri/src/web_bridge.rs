@@ -75,8 +75,13 @@ pub fn any_probe_detects(smtc_title: &str, smtc_app_id: &str) -> bool {
 }
 
 /// Concrete probe registry. Build-time static — new probes ship as new
-/// entries in this slice.
-static PROBES: &[&dyn WebPlayerProbe] = &[&PandoraProbe];
+/// entries in this slice. Order matters: the poll loop picks the first
+/// probe whose `detects()` returns true, so SMTC-gated probes (the cheap
+/// path) come before process-enumeration probes.
+static PROBES: &[&dyn WebPlayerProbe] = &[
+    &PandoraProbe,
+    &crate::pandora_desktop::PandoraDesktopProbe,
+];
 
 /// Recognized Chromium-derived browser process names. UIA tree structure
 /// is identical across these, so any of them hosting a Pandora tab is a
@@ -143,7 +148,7 @@ fn find_chrome_windows<F: Fn(&str) -> bool>(predicate: F) -> Vec<HWND> {
     ctx.hits
 }
 
-fn read_window_title(hwnd: HWND) -> String {
+pub(crate) fn read_window_title(hwnd: HWND) -> String {
     let mut buf = [0u16; 512];
     // GetWindowTextW returns the number of characters copied, NOT
     // including the null terminator. A return of 0 means either an
@@ -155,7 +160,7 @@ fn read_window_title(hwnd: HWND) -> String {
     String::from_utf16_lossy(&buf[..n as usize])
 }
 
-fn read_process_name_for_window(hwnd: HWND) -> String {
+pub(crate) fn read_process_name_for_window(hwnd: HWND) -> String {
     let mut pid: u32 = 0;
     let _ = unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
     if pid == 0 {
