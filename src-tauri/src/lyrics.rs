@@ -162,6 +162,24 @@ pub fn start(
         while rx.recv().await.is_some() {
             let snap = { snapshot.read().await.clone() };
 
+            // Ad-break short-circuit. When the source is playing an ad
+            // (Spotify "Advertisement", Pandora ad interlude, YouTube ad roll),
+            // skip all network resolution and emit Status::Ad. The overlay
+            // renders the SYVR promo card instead of lyrics.
+            if snap.ad_active {
+                let outcome = ad_break_outcome(&snap);
+                let key = outcome.track_key.clone();
+                if key != last_key {
+                    last_key = key;
+                    {
+                        let mut s = shared.write().await;
+                        *s = outcome.clone();
+                    }
+                    let _ = app.emit("lyrics-loaded", &outcome);
+                }
+                continue;
+            }
+
             // Consult the web-player bridge. If a probe wrote real track info
             // within the staleness window (5s), use that. Otherwise fall back
             // to SMTC's snapshot. Pandora.com is the motivating case — SMTC
@@ -514,6 +532,29 @@ async fn apply_outcome(
 
 fn emit_state(app: &AppHandle, s: &CurrentLyrics) {
     let _ = app.emit("lyrics-state", s);
+}
+
+/// Build the `CurrentLyrics` payload emitted when the current snapshot
+/// indicates an ad break is playing. No network IO — purely synthesized
+/// from the snapshot. The frontend reads `status == Ad` and renders the
+/// SYVR promo card in place of the lyric rows.
+fn ad_break_outcome(snap: &crate::smtc::CurrentTrack) -> CurrentLyrics {
+    CurrentLyrics {
+        track_key: format!("ad|{}|{}", snap.source_app_id.clone().unwrap_or_default(), snap.duration_ms),
+        status: Status::Ad,
+        source: None,
+        line_count: 0,
+        lines: Vec::new(),
+        plain: None,
+        translation: None,
+        errors: Vec::new(),
+        track: TrackEcho {
+            title: String::new(),
+            artist: String::new(),
+            album: String::new(),
+            duration_ms: snap.duration_ms,
+        },
+    }
 }
 
 // ─── HTTP client ───────────────────────────────────────────────────────────
@@ -2049,5 +2090,29 @@ mod tests {
         let lines = parse_enhanced_lrc(s);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].time_ms, 1_000);
+    }
+}
+
+#[cfg(test)]
+mod ad_short_circuit_tests {
+    use super::*;
+
+    #[test]
+    fn ad_active_skips_network_and_emits_ad_status() {
+        // Build a snapshot with ad_active = true.
+        let mut snap = crate::smtc::CurrentTrack::default();
+        snap.title = "Advertisement".into();
+        snap.artist = "Spotify".into();
+        snap.duration_ms = 30_000;
+        snap.ad_active = true;
+
+        // The resolver's short-circuit helper (introduced in this task)
+        // should produce a CurrentLyrics with status=Ad and empty lines,
+        // without doing any network IO.
+        let outcome = ad_break_outcome(&snap);
+        assert_eq!(outcome.status, Status::Ad);
+        assert!(outcome.lines.is_empty());
+        assert_eq!(outcome.line_count, 0);
+        assert!(outcome.errors.is_empty());
     }
 }

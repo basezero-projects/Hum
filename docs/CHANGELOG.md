@@ -6,6 +6,13 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.12.0-rc2] - 2026-05-22
+
+### Added (internal plumbing — no user-visible behavior yet)
+- **Lyrics resolver short-circuits when ad_active is set.** When the snapshot has `ad_active = true`, the resolver emits a `CurrentLyrics` with `status = Ad`, empty lines, and zero network calls. No detector is wired up yet (that's Task 4+); this is the resolver-side path. Verified manually by forcing `ad_active = true` for Spotify and confirming the overlay's placeholder status line renders.
+
+  **Implementation:** New `ad_break_outcome(snap)` helper in `src-tauri/src/lyrics.rs` that synthesizes the payload. Wired into the resolver loop in `start()` ahead of the bridge consultation. Track-key namespaced as `ad|<app>|<duration>` so consecutive ads on the same source don't dedupe-skip.
+
 ## [0.12.0-rc1] - 2026-05-22
 
 ### Added (internal plumbing — no user-visible behavior yet)
