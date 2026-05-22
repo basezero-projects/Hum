@@ -28,7 +28,7 @@ tempfile = "3"
 regex = "1"
 urlencoding = "2"
 opener = "0.7"
-rand = "0.8"
+rand = "0.9"
 xcap = "0.9.4"
 tauri-plugin-window-state = "2.4.1"
 axum = { version = "0.8.9", features = ["tokio"] }

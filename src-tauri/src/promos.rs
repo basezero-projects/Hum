@@ -62,9 +62,8 @@ pub fn pick_next_promo<'a>(pool: &'a [Promo], last_shown_id: Option<&str>) -> Op
     };
 
     let total_weight: u32 = candidates.iter().map(|p| p.weight.max(1)).sum();
-    if total_weight == 0 { return Some(candidates[0]); }
 
-    let mut roll: u32 = rand::thread_rng().gen_range(0..total_weight);
+    let mut roll: u32 = rand::rng().random_range(0..total_weight);
     for p in candidates {
         let w = p.weight.max(1);
         if roll < w { return Some(p); }
