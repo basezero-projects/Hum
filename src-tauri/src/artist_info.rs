@@ -3,6 +3,12 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Manager};
+use tokio::sync::{Mutex, Notify};
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -113,10 +119,28 @@ pub(crate) fn strip_html(s: &str) -> String {
         .replace("&nbsp;", " ")
 }
 
-/// Stub — filled in by Task 6.
+/// Top-level entry point for callers that don't hold an ArtistInfoCache.
+/// Prefer ArtistInfoCache::fetch which adds caching + dedup.
 #[allow(dead_code)]
-pub async fn fetch_artist_info(_artist: &str) -> Result<ArtistInfo> {
-    todo!("implemented in Task 6")
+pub async fn fetch_artist_info(artist: &str) -> Result<ArtistInfo> {
+    let client = build_artist_info_http_client()?;
+    let now = now_unix_ms();
+    let (bio, similar, events, photo) = tokio::join!(
+        fetch_lastfm_bio(&client, artist),
+        fetch_lastfm_similar(&client, artist),
+        fetch_bandsintown_events(&client, artist),
+        fetch_theaudiodb_photo(&client, artist),
+    );
+    Ok(ArtistInfo {
+        name: artist.to_string(),
+        slug: slug_for_artist(artist),
+        bio,
+        photo_data_url: photo,
+        similar_artists: similar,
+        tour_dates: events,
+        mbid: None,
+        fetched_at_unix_ms: now,
+    })
 }
 
 // ── Last.fm ────────────────────────────────────────────────────────────────
@@ -508,6 +532,313 @@ pub(crate) async fn resolve_mbid_musicbrainz(
         .get("id")?
         .as_str()
         .map(|s| s.to_string())
+}
+
+// ── HTTP client ────────────────────────────────────────────────────────────
+
+/// Build a reqwest::Client with the User-Agent required by MusicBrainz TOS
+/// and a 10s timeout covering all artist-info requests.
+pub(crate) fn build_artist_info_http_client() -> Result<reqwest::Client> {
+    let client = reqwest::Client::builder()
+        .user_agent("hum/0.11.0 (https://github.com/basezero-projects/Hum; itswesl3y@gmail.com)")
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    Ok(client)
+}
+
+// ── Disk cache ─────────────────────────────────────────────────────────────
+
+/// On-disk structure per artist. Fields are individually timestamped so
+/// tour-dates can be refreshed without blowing away the bio/photo.
+#[allow(dead_code)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+struct CachedArtistData {
+    version: u32,
+    name: Option<String>,
+    slug: Option<String>,
+    bio: Option<ArtistBio>,
+    bio_fetched_at_unix_ms: Option<i64>,
+    photo_data_url: Option<String>,
+    photo_fetched_at_unix_ms: Option<i64>,
+    similar_artists: Option<Vec<String>>,
+    similar_fetched_at_unix_ms: Option<i64>,
+    tour_dates: Option<Vec<TourDate>>,
+    tour_dates_fetched_at_unix_ms: Option<i64>,
+    mbid: Option<String>,
+}
+
+#[allow(dead_code)]
+fn now_unix_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+#[allow(dead_code)]
+fn cache_dir(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("cache").join("artist"))
+}
+
+#[allow(dead_code)]
+fn cache_file_path(app: &AppHandle, slug: &str) -> Option<PathBuf> {
+    cache_dir(app).map(|d| d.join(format!("{slug}.json")))
+}
+
+#[allow(dead_code)]
+async fn read_cache_file(app: &AppHandle, slug: &str) -> Option<CachedArtistData> {
+    let path = cache_file_path(app, slug)?;
+    let bytes = tokio::fs::read(&path).await.ok()?;
+    let data: CachedArtistData = match serde_json::from_slice(&bytes) {
+        Ok(d) => d,
+        Err(e) => {
+            // Corrupted cache file. Per spec: delete the file, treat as a
+            // miss, log so it shows up if it ever happens in real-world use.
+            eprintln!(
+                "[artist_info] cache file {:?} corrupted ({}); deleting",
+                path, e
+            );
+            let _ = tokio::fs::remove_file(&path).await;
+            return None;
+        }
+    };
+    if data.version != 1 {
+        // Version mismatch — delete and treat as miss so the new version's
+        // shape lands on next fetch.
+        let _ = tokio::fs::remove_file(&path).await;
+        return None;
+    }
+    Some(data)
+}
+
+#[allow(dead_code)]
+async fn write_cache_file(app: &AppHandle, data: &CachedArtistData) -> Result<()> {
+    let slug = data.slug.as_deref().unwrap_or("unknown");
+    let path = cache_file_path(app, slug)
+        .ok_or_else(|| anyhow::anyhow!("could not resolve cache path"))?;
+    // Ensure directory exists.
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let json = serde_json::to_vec_pretty(data)?;
+    tokio::fs::write(&path, &json).await?;
+    Ok(())
+}
+
+// ── In-flight dedup + managed state ────────────────────────────────────────
+
+/// Tauri managed state for the artist-info fetch chain.
+/// `in_flight` maps artist slug → a `Notify` that fires when the pending
+/// fetch for that slug completes. A second caller for the same slug waits
+/// on the Notify instead of firing a duplicate request.
+#[allow(dead_code)]
+pub struct ArtistInfoCache {
+    in_flight: Arc<Mutex<HashMap<String, Arc<Notify>>>>,
+    app: AppHandle,
+}
+
+#[allow(dead_code)]
+impl ArtistInfoCache {
+    pub fn new(app: AppHandle) -> Self {
+        Self {
+            in_flight: Arc::new(Mutex::new(HashMap::new())),
+            app,
+        }
+    }
+
+    /// Fetch artist info. Returns cached data immediately when fresh.
+    /// Re-fetches only tour dates when they are stale (≥12h).
+    /// De-duplicates concurrent requests for the same slug via Notify.
+    pub async fn fetch(&self, artist: &str) -> Result<ArtistInfo> {
+        let slug = slug_for_artist(artist);
+        if slug.is_empty() {
+            return Err(anyhow::anyhow!("artist name produced empty slug"));
+        }
+
+        // Check if another task is already fetching this slug.
+        let notify = {
+            let mut map = self.in_flight.lock().await;
+            if let Some(existing) = map.get(&slug) {
+                let notify = existing.clone();
+                drop(map);
+                // Wait for the other fetch to complete, then read from cache.
+                notify.notified().await;
+                // Fall through to cache read below.
+                None
+            } else {
+                let notify = Arc::new(Notify::new());
+                map.insert(slug.clone(), notify.clone());
+                Some(notify)
+            }
+        };
+
+        // Always read cache after acquiring or waiting.
+        let now = now_unix_ms();
+        if let Some(cached) = read_cache_file(&self.app, &slug).await {
+            let tour_stale = cached
+                .tour_dates_fetched_at_unix_ms
+                .map(|t| tour_dates_stale(t, now))
+                .unwrap_or(true);
+
+            if notify.is_none() {
+                // We waited on another fetch; return the cache result.
+                return build_artist_info_from_cache(&cached, artist, &slug);
+            }
+
+            if !tour_stale {
+                // Fully fresh — release the in-flight slot and return.
+                let notify = notify.unwrap();
+                {
+                    let mut map = self.in_flight.lock().await;
+                    map.remove(&slug);
+                }
+                notify.notify_waiters();
+                return build_artist_info_from_cache(&cached, artist, &slug);
+            }
+
+            // Tour dates stale — refetch only events; keep everything else.
+            let client = build_artist_info_http_client()?;
+            let new_events = fetch_bandsintown_events(&client, artist).await;
+            let mut updated = cached.clone();
+            updated.tour_dates = Some(new_events);
+            updated.tour_dates_fetched_at_unix_ms = Some(now);
+            let _ = write_cache_file(&self.app, &updated).await;
+            let notify = notify.unwrap();
+            {
+                let mut map = self.in_flight.lock().await;
+                map.remove(&slug);
+            }
+            notify.notify_waiters();
+            return build_artist_info_from_cache(&updated, artist, &slug);
+        }
+
+        // Cache miss — full fetch.
+        let notify = notify.unwrap(); // We definitely hold the notify here.
+        let client = build_artist_info_http_client()?;
+
+        // Parallel fetch: bio, similar, events, photo.
+        let (bio_result, similar_result, events_result, photo_result) = tokio::join!(
+            fetch_lastfm_bio(&client, artist),
+            fetch_lastfm_similar(&client, artist),
+            fetch_bandsintown_events(&client, artist),
+            fetch_theaudiodb_photo(&client, artist),
+        );
+
+        // MusicBrainz fallback: only if Last.fm bio failed AND Bandsintown
+        // returned something (so we know the artist actually exists).
+        let (final_bio, mbid) = if bio_result.is_none() && !events_result.is_empty() {
+            let mbid_opt = resolve_mbid_musicbrainz(&client, artist).await;
+            if let Some(ref mbid_str) = mbid_opt {
+                // Retry Last.fm with the mbid.
+                let bio_retry = fetch_lastfm_bio_by_mbid(&client, mbid_str).await;
+                (bio_retry, mbid_opt)
+            } else {
+                (None, None)
+            }
+        } else {
+            (bio_result, None)
+        };
+
+        let data = CachedArtistData {
+            version: 1,
+            name: Some(artist.to_string()),
+            slug: Some(slug.clone()),
+            bio: final_bio,
+            bio_fetched_at_unix_ms: Some(now),
+            photo_data_url: photo_result,
+            photo_fetched_at_unix_ms: Some(now),
+            similar_artists: Some(similar_result),
+            similar_fetched_at_unix_ms: Some(now),
+            tour_dates: Some(events_result),
+            tour_dates_fetched_at_unix_ms: Some(now),
+            mbid,
+        };
+
+        let _ = write_cache_file(&self.app, &data).await;
+
+        {
+            let mut map = self.in_flight.lock().await;
+            map.remove(&slug);
+        }
+        notify.notify_waiters();
+
+        build_artist_info_from_cache(&data, artist, &slug)
+    }
+
+    /// Wipe the entire artist cache directory.
+    pub async fn clear(&self) -> Result<()> {
+        if let Some(dir) = cache_dir(&self.app) {
+            if dir.exists() {
+                tokio::fs::remove_dir_all(&dir).await?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Retry Last.fm artist.getInfo using an mbid instead of artist name.
+#[allow(dead_code)]
+async fn fetch_lastfm_bio_by_mbid(
+    client: &reqwest::Client,
+    mbid: &str,
+) -> Option<ArtistBio> {
+    let url = reqwest::Url::parse_with_params(
+        LASTFM_BASE,
+        &[
+            ("method", "artist.getInfo"),
+            ("mbid", mbid),
+            ("api_key", LASTFM_API_KEY),
+            ("format", "json"),
+        ],
+    )
+    .ok()?;
+    let resp = client.get(url).send().await.ok()?;
+    let body: serde_json::Value = resp.json().await.ok()?;
+    if body.get("error").is_some() {
+        return None;
+    }
+    let artist_obj = body.get("artist")?;
+    let raw_bio = artist_obj
+        .get("bio")?
+        .get("summary")?
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    let lastfm_url = artist_obj
+        .get("url")?
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    if lastfm_url.is_empty() { return None; }
+    let mut bio_text = strip_html(&raw_bio);
+    if bio_text.len() > 1500 {
+        let cutoff = bio_text[..1500].rfind(['.', '?', '!']).map(|i| i + 1).unwrap_or(1500);
+        bio_text.truncate(cutoff);
+        bio_text = bio_text.trim_end().to_string();
+    }
+    if bio_text.is_empty() { return None; }
+    Some(ArtistBio { text: bio_text, lastfm_url })
+}
+
+#[allow(dead_code)]
+fn build_artist_info_from_cache(
+    data: &CachedArtistData,
+    artist: &str,
+    slug: &str,
+) -> Result<ArtistInfo> {
+    Ok(ArtistInfo {
+        name: data.name.clone().unwrap_or_else(|| artist.to_string()),
+        slug: data.slug.clone().unwrap_or_else(|| slug.to_string()),
+        bio: data.bio.clone(),
+        photo_data_url: data.photo_data_url.clone(),
+        similar_artists: data.similar_artists.clone().unwrap_or_default(),
+        tour_dates: data.tour_dates.clone().unwrap_or_default(),
+        mbid: data.mbid.clone(),
+        fetched_at_unix_ms: data
+            .bio_fetched_at_unix_ms
+            .or(data.tour_dates_fetched_at_unix_ms)
+            .unwrap_or(0),
+    })
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────
