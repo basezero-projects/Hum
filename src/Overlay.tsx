@@ -520,6 +520,10 @@ export default function Overlay() {
     ? "rgba(212, 175, 55, 0.85)"
     : "transparent";
 
+  const openArtistPanel = settings.show_artist_info_panel && mode !== "ghost"
+    ? () => { invoke("open_artist_panel_cmd").catch(() => {}); }
+    : undefined;
+
   const layoutMode: LayoutMode = settings.layout_mode;
   // Auto-contrast override: when the toggle is on AND we have a luminance
   // read for the OVERLAY SURFACE (not the screen behind — see the
@@ -715,7 +719,7 @@ export default function Overlay() {
         ) : null}
         <div {...dragProps} style={innerRowStyle}>
           {showArt && albumArt ? (
-            <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} dragRegion={isEdit} />
+            <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} dragRegion={isEdit} onClick={openArtistPanel} />
           ) : null}
           <div {...dragProps} ref={setLyricsColEl} style={lyricsColStyle}>
             <LineRow
@@ -747,7 +751,7 @@ export default function Overlay() {
         {showBlurBg ? (
           <BlurredAlbumBg dataUrl={albumArt!.data_url} tintColor={bgRgba} />
         ) : null}
-        {showArt && albumArt ? <AlbumArtBadge dataUrl={albumArt.data_url} /> : null}
+        {showArt && albumArt ? <AlbumArtBadge dataUrl={albumArt.data_url} onClick={openArtistPanel} /> : null}
         {hasLines ? (
           lyrics!.lines.map((line, i) => (
             <LineRow
@@ -788,9 +792,12 @@ export default function Overlay() {
       <NudgeBanner banner={nudgeBanner} />
       <div {...dragProps} ref={setInnerRowEl} style={outerStackStyle}>
         <UpdateBanner state={updateState} onInstall={installUpdate} />
+        {openArtistPanel && (!showArt || !albumArt) ? (
+          <ArtistInfoDot onClick={openArtistPanel} />
+        ) : null}
         <div {...dragProps} style={innerRowStyle}>
           {showArt && albumArt ? (
-            <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} dragRegion={isEdit} />
+            <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} dragRegion={isEdit} onClick={openArtistPanel} />
           ) : null}
           <div {...dragProps} ref={setLyricsColEl} style={lyricsColStyle}>
           <LineRow text={prev?.text} kind="prev" dragRegion={isEdit} settings={settingsForRender} textShadow={effectiveTextShadow} />
@@ -937,6 +944,57 @@ function UpdateBanner({
   );
 }
 
+// Fallback "•••" affordance shown top-right when album art is not displayed.
+// Mirrors UpdateBanner geometry — 9×9 dot, hover expands label, same anchor.
+function ArtistInfoDot({ onClick }: { onClick: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <div
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onClick={onClick}
+      style={{
+        alignSelf: "flex-start",
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        cursor: "pointer",
+        userSelect: "none",
+        padding: "2px 4px",
+        borderRadius: 4,
+      }}
+    >
+      <span
+        style={{
+          display: "inline-block",
+          width: 9,
+          height: 9,
+          borderRadius: "50%",
+          background: "#d4af37",
+          opacity: 0.7,
+          boxShadow: "0 0 5px rgba(212,175,55,0.5)",
+          flexShrink: 0,
+        }}
+      />
+      <span
+        style={{
+          fontSize: 11,
+          letterSpacing: 0.3,
+          color: "rgba(234,234,234,0.85)",
+          fontWeight: 500,
+          overflow: "hidden",
+          whiteSpace: "nowrap",
+          transition: "opacity 180ms ease, max-width 220ms ease",
+          opacity: hover ? 1 : 0,
+          maxWidth: hover ? 120 : 0,
+        }}
+      >
+        Artist info
+      </span>
+    </div>
+  );
+}
+
 // Brief 1.5s indicator showing the current lyric-offset nudge value when
 // the user presses Ctrl+Alt+[ / Ctrl+Alt+]. Auto-fades out via a timer
 // so it doesn't sit on top of the lyrics permanently.
@@ -1031,7 +1089,9 @@ function BlurredAlbumBg({
   );
 }
 
-function AlbumArtBadge({ dataUrl }: { dataUrl: string }) {
+function AlbumArtBadge({ dataUrl, onClick }: { dataUrl: string; onClick?: () => void }) {
+  const [hover, setHover] = useState(false);
+  const isClickable = !!onClick;
   // Used by full-page layout — small absolute-positioned thumbnail in the
   // corner since side-by-side would conflict with the scrolling column.
   return (
@@ -1039,6 +1099,9 @@ function AlbumArtBadge({ dataUrl }: { dataUrl: string }) {
       src={dataUrl}
       alt=""
       draggable={false}
+      onClick={(e) => { if (isClickable) { e.stopPropagation(); onClick(); } }}
+      onMouseEnter={() => isClickable && setHover(true)}
+      onMouseLeave={() => isClickable && setHover(false)}
       style={{
         position: "absolute",
         top: 8,
@@ -1049,7 +1112,10 @@ function AlbumArtBadge({ dataUrl }: { dataUrl: string }) {
         objectFit: "cover",
         boxShadow: "0 2px 8px rgba(0,0,0,0.6)",
         opacity: 0.9,
-        pointerEvents: "none",
+        pointerEvents: isClickable ? "auto" : "none",
+        cursor: isClickable ? "pointer" : "default",
+        outline: isClickable && hover ? "1.5px solid rgba(212,175,55,0.5)" : "none",
+        outlineOffset: 2,
       }}
     />
   );
@@ -1069,22 +1135,39 @@ function AlbumArtSide({
   dataUrl,
   size,
   dragRegion,
+  onClick,
 }: {
   dataUrl: string;
   size: number;
   dragRegion: boolean;
+  onClick?: () => void;
 }) {
+  const [hover, setHover] = useState(false);
   // Floor at 40 so a tiny font doesn't shrink the art to a sliver.
   const px = Math.max(40, size);
   const drag = dragRegion ? { "data-tauri-drag-region": true } : {};
+  const isClickable = !!onClick;
+
   return (
     <div
       {...drag}
+      onClick={(e) => {
+        if (isClickable) {
+          e.stopPropagation();
+          onClick();
+        }
+      }}
+      onMouseEnter={() => isClickable && setHover(true)}
+      onMouseLeave={() => isClickable && setHover(false)}
       style={{
         width: px,
         height: px,
         flexShrink: 0,
         position: "relative",
+        cursor: isClickable ? "pointer" : "default",
+        outline: isClickable && hover ? "1.5px solid rgba(212,175,55,0.5)" : "none",
+        outlineOffset: 2,
+        borderRadius: 6,
       }}
     >
       <img
