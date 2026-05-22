@@ -65,7 +65,7 @@ pub async fn open_artist_panel(app: AppHandle) -> Result<()> {
         crate::lyrics::clean_artist(&track.artist)
     };
 
-    let _ = app.listen("track-changed", move |event| {
+    let listener_id = app.listen("track-changed", move |event| {
         // Parse the new track's artist from the event payload.
         if let Ok(track) = serde_json::from_str::<serde_json::Value>(event.payload()) {
             let new_artist = track
@@ -78,6 +78,15 @@ pub async fn open_artist_panel(app: AppHandle) -> Result<()> {
                     let _ = w.close();
                 }
             }
+        }
+    });
+
+    // Unregister the track-changed listener when the panel window is destroyed
+    // so multiple open/close cycles don't accumulate stale listeners.
+    let app_for_destroy = app.clone();
+    window.on_window_event(move |evt| {
+        if matches!(evt, tauri::WindowEvent::Destroyed) {
+            app_for_destroy.unlisten(listener_id);
         }
     });
 
