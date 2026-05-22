@@ -6,6 +6,13 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.12.0-rc6] - 2026-05-22
+
+### Added
+- **Spotify ad-break detection.** Spotify's free tier ad breaks now automatically trigger the SYVR promo card. Detection runs entirely off SMTC metadata heuristics with zero new permissions, processes, or APIs. Fires when the source is Spotify (matched on `source_app_id` containing `spotify`) AND one of: title is `Advertisement` or `Spotify` (case-insensitive); artist is `Spotify` with non-empty title; OR both title and artist are empty while Playing (rare but observed for cold-started sessions). Real Spotify songs (`title = "Mr. Brightside"`, etc.) are never matched. Spotify Premium users never see ads and never trigger this path.
+
+  **Implementation:** New `is_spotify_ad` helper in `src-tauri/src/smtc.rs`. Called from `emit_blended` before the tier-1 priority check so the flag rides on the snapshot regardless of state. Nine unit tests cover positive matches (Advertisement / Spotify title, Spotify artist, empty-while-playing, AUMID), negatives (real song, paused empty, non-Spotify source), and case-insensitivity. Manual live verification skipped — no Spotify Free available; heuristics verified independently via unit tests.
+
 ## [0.12.0-rc5] - 2026-05-22
 
 ### Added

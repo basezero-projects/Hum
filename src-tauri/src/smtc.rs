@@ -79,6 +79,37 @@ pub struct CurrentTrack {
 
 pub type SharedSnapshot = Arc<RwLock<CurrentTrack>>;
 
+/// Heuristic detector for Spotify ad breaks via SMTC metadata patterns.
+///
+/// Spotify keeps publishing track metadata during ads, just with telltale
+/// patterns:
+/// - title == "Advertisement" (the most explicit case)
+/// - title == "Spotify" (Spotify rotates "Spotify" through this slot too)
+/// - artist == "Spotify" with a non-empty title (ad copy in the title slot)
+/// - empty title + empty artist while Playing (rare but observed)
+///
+/// All matches require the source to be Spotify (matched on `source_app_id`
+/// containing "spotify" case-insensitively).
+pub(crate) fn is_spotify_ad(t: &CurrentTrack) -> bool {
+    let src = t.source_app_id.as_deref().unwrap_or("").to_lowercase();
+    if !src.contains("spotify") {
+        return false;
+    }
+
+    let title = t.title.trim();
+    let artist = t.artist.trim();
+
+    if title.eq_ignore_ascii_case("Advertisement") { return true; }
+    if title.eq_ignore_ascii_case("Spotify") { return true; }
+    if artist.eq_ignore_ascii_case("Spotify") && !title.is_empty() { return true; }
+
+    if title.is_empty() && artist.is_empty() && t.state == PlaybackState::Playing {
+        return true;
+    }
+
+    false
+}
+
 /// Last emitted album-art payload, kept so the frontend can `invoke`
 /// `get_current_album_art` on mount and pick up the art that fired BEFORE
 /// its `listen("album-art-loaded", …)` subscription completed. Without
@@ -175,6 +206,13 @@ pub fn start(
 /// `PandoraProbe` (Chrome) case.
 async fn emit_blended(app: &AppHandle, event: &str, mut snap: CurrentTrack) {
     use tauri::Manager;
+
+    // Spotify ad detection runs before the tier-1 priority check so that
+    // the ad_active flag rides on the snapshot regardless of playback state.
+    if is_spotify_ad(&snap) {
+        snap.ad_active = true;
+    }
+
     // Tier 1: SMTC has a real actively-playing session (Spotify / iTunes /
     // YouTube via Chrome / etc.). Real publishers always beat the bridge's
     // estimated position. Emit raw and skip the bridge entirely so a paused
@@ -1000,6 +1038,76 @@ fn read_timeline(session: &GlobalSystemMediaTransportControlsSession) -> Result<
 fn read_state(session: &GlobalSystemMediaTransportControlsSession) -> Result<PlaybackState> {
     let info = session.GetPlaybackInfo()?;
     Ok(info.PlaybackStatus()?.into())
+}
+
+#[cfg(test)]
+mod is_spotify_ad_tests {
+    use super::*;
+
+    fn snap_with(title: &str, artist: &str, app_id: &str, state: PlaybackState) -> CurrentTrack {
+        let mut t = CurrentTrack::default();
+        t.title = title.into();
+        t.artist = artist.into();
+        t.state = state;
+        t.source_app_id = if app_id.is_empty() { None } else { Some(app_id.into()) };
+        t
+    }
+
+    #[test]
+    fn non_spotify_source_never_ad() {
+        let t = snap_with("Advertisement", "Spotify", "Chrome.exe", PlaybackState::Playing);
+        assert!(!is_spotify_ad(&t));
+    }
+
+    #[test]
+    fn spotify_title_advertisement_matches() {
+        let t = snap_with("Advertisement", "", "Spotify.exe", PlaybackState::Playing);
+        assert!(is_spotify_ad(&t));
+    }
+
+    #[test]
+    fn spotify_title_advertisement_case_insensitive() {
+        let t = snap_with("advertisement", "", "Spotify.exe", PlaybackState::Playing);
+        assert!(is_spotify_ad(&t));
+    }
+
+    #[test]
+    fn spotify_title_literal_spotify_matches() {
+        let t = snap_with("Spotify", "", "Spotify.exe", PlaybackState::Playing);
+        assert!(is_spotify_ad(&t));
+    }
+
+    #[test]
+    fn spotify_artist_field_spotify_with_nonempty_title_matches() {
+        // Spotify sometimes sets artist="Spotify" and title=<some ad copy>.
+        let t = snap_with("Try Premium Free", "Spotify", "Spotify.exe", PlaybackState::Playing);
+        assert!(is_spotify_ad(&t));
+    }
+
+    #[test]
+    fn spotify_real_song_never_ad() {
+        let t = snap_with("Mr. Brightside", "The Killers", "Spotify.exe", PlaybackState::Playing);
+        assert!(!is_spotify_ad(&t));
+    }
+
+    #[test]
+    fn spotify_aumid_format_also_matches() {
+        // Spotify also appears as AUMID `SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify`.
+        let t = snap_with("Advertisement", "", "SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify", PlaybackState::Playing);
+        assert!(is_spotify_ad(&t));
+    }
+
+    #[test]
+    fn spotify_empty_title_and_artist_while_playing_matches() {
+        let t = snap_with("", "", "Spotify.exe", PlaybackState::Playing);
+        assert!(is_spotify_ad(&t));
+    }
+
+    #[test]
+    fn spotify_empty_while_paused_not_ad() {
+        let t = snap_with("", "", "Spotify.exe", PlaybackState::Paused);
+        assert!(!is_spotify_ad(&t));
+    }
 }
 
 #[cfg(test)]
