@@ -6,6 +6,13 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.11.10] - 2026-05-22
+
+### Fixed
+- **Overlay window can no longer be dragged so small it clips the lyrics or the new right-side metadata column.** Before this release the overlay window had no enforced minimum dimensions, so dragging the resize edges aggressively could shrink the window past the point where the lyric text fit (only the current line would show, prev/next clipped off) or where the right-side metadata column from v0.11.9 fit (only the time readout visible, artist line + source badge cropped off the right edge). The window now refuses to shrink past **520 × 110** logical pixels, which is enough room for the three-line lyric stack at default font size plus the metadata column's artist line, progress bar, and source badge with breathing room. Drag-resize past that point simply stops; the window holds at the minimum.
+
+  **Implementation:** Added `"minWidth": 520, "minHeight": 110` to the `overlay` window block in `src-tauri/tauri.conf.json`. Mirrors the settings window's existing min-size pattern (lines 44-45 of the same file).
+
 ## [0.11.9] - 2026-05-22
 
 ### Added
