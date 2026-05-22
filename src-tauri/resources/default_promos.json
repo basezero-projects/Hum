@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "promos": [
+    {
+      "id": "syvr-studios",
+      "product_name": "SYVR Studios",
+      "tagline": "Tools and apps from the makers of Hum.",
+      "url": "https://syvrstudios.com",
+      "weight": 1,
+      "active": true
+    }
+  ]
+}

@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.12.0-rc3] - 2026-05-22
+
+### Added (internal — no user-visible behavior yet)
+- **Promo rotation engine + bundled default promos.** New `src-tauri/src/promos.rs` module defines the `Promo` schema (id, product_name, tagline, url, optional icon_url / weight / active / cta_text / accent_color) and the `pick_next_promo` helper. Weighted-random selection with last-shown cooldown that gracefully degrades when only one active promo exists. Bundled `src-tauri/resources/default_promos.json` ships with one SYVR Studios fallback entry. No fetch, no UI integration yet — those land in Tasks 4 and 5.
+
 ## [0.12.0-rc2] - 2026-05-22
 
 ### Added (internal plumbing — no user-visible behavior yet)

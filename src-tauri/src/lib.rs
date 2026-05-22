@@ -25,6 +25,7 @@ mod backdrop;
 mod contrast;
 mod lyrics;
 mod mode;
+mod promos;
 mod settings;
 mod streamer;
 mod artist_info;
