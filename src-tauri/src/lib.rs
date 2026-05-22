@@ -25,6 +25,7 @@ mod mode;
 mod settings;
 mod streamer;
 mod artist_info;
+mod artist_window;
 
 #[cfg(windows)]
 use smtc::{AlbumArtPayload, CurrentTrack, SharedAlbumArt, SharedSnapshot};
@@ -61,6 +62,7 @@ use settings::{
     get_settings, open_settings_window, reset_settings, update_settings, SharedSettings,
 };
 use artist_info::{ArtistInfoCache, clear_artist_info_cache, get_artist_info};
+use artist_window::{close_artist_panel_cmd, open_artist_panel_cmd};
 
 #[tauri::command]
 async fn get_current_track(
@@ -383,6 +385,8 @@ pub fn run() {
             set_update_banner_visible,
             get_artist_info,
             clear_artist_info_cache,
+            open_artist_panel_cmd,
+            close_artist_panel_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
