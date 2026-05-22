@@ -6,6 +6,19 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.11.3] - 2026-05-22
+
+### Changed
+- **Artist bio now sourced from Wikipedia instead of Last.fm.** In the artist-info panel, the bio section (below the photo and artist name, above the Upcoming Shows section) now shows Wikipedia's encyclopedic summary for the artist rather than Last.fm's user-contributed biography. The prose style changes: Wikipedia bios are encyclopedic and factual ("X is an American rapper from Y, known for Z") rather than the more casual tone Last.fm bios could have. Bio text is still capped at 1,500 characters, trimmed to the last sentence boundary. The "Read more" link at the bottom of the bio section now reads **"Read more on Wikipedia →"** and opens the artist's Wikipedia article instead of their Last.fm profile page.
+
+- **"Similar artists" section removed.** The gold "Similar to {artist1}, {artist2}, ..." line that appeared between the Bio and Upcoming Shows sections is gone. Wikipedia has no equivalent endpoint, so the section has been removed entirely. Users who want similar-artist discovery should use Spotify's radio/mix features or Last.fm directly.
+
+- **Footer attribution updated.** The attribution row at the very bottom of the artist-info panel now reads **"Powered by Ticketmaster · Wikipedia · TheAudioDB"** (was "· Last.fm ·"). The Wikipedia name links to `https://wikipedia.org`.
+
+  **Why:** Last.fm permanently WAF-blocked the account used to register an API key, so the bio section could never be activated at ship. Wikipedia's REST API requires no authentication and no API key — a `User-Agent` header is sufficient per their TOS.
+
+  **Technical:** New `fetch_wikipedia_bio` in `src-tauri/src/artist_info.rs` calls `https://en.wikipedia.org/api/rest_v1/page/summary/{artist}`. Accepts pages only when `type == "standard"` and the `description` field (e.g. "American rapper", "English rock band") contains at least one music-relevance keyword (musician, singer, rapper, songwriter, band, group, dj, producer, composer, musical, music, vocalist, guitarist, drummer, bassist, pianist, rock, pop, hip hop, hip-hop, country, jazz, metal, indie, electronic, r&b, soul, folk). If the direct lookup fails the gate, retries with disambiguator suffixes in order: `(musician)`, `(singer)`, `(rapper)`, `(band)`, `(rock band)`, `(group)`. Removed `fetch_lastfm_bio`, `fetch_lastfm_similar`, `fetch_lastfm_bio_by_mbid`, `resolve_mbid_musicbrainz`, and the MusicBrainz mbid-retry orchestration block. `ArtistBio.lastfm_url` renamed to `ArtistBio.wikipedia_url` in Rust and TypeScript. `ArtistInfo.similar_artists` and `ArtistInfo.mbid` fields removed from the public struct, cache struct, and TypeScript types.
+
 ## [0.11.2] - 2026-05-22
 
 ### Added (dev-only, not shipped to users)

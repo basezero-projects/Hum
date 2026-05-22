@@ -1,5 +1,5 @@
-//! Artist-info fetch chain: Last.fm bio + similar, Ticketmaster events,
-//! TheAudioDB photo, MusicBrainz mbid fallback. Disk cache + in-flight dedup.
+//! Artist-info fetch chain: Wikipedia bio, Ticketmaster events,
+//! TheAudioDB photo. Disk cache + in-flight dedup.
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -18,16 +18,14 @@ pub struct ArtistInfo {
     pub slug: String,
     pub bio: Option<ArtistBio>,
     pub photo_data_url: Option<String>,
-    pub similar_artists: Vec<String>,
     pub tour_dates: Vec<TourDate>,
-    pub mbid: Option<String>,
     pub fetched_at_unix_ms: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ArtistBio {
     pub text: String,
-    pub lastfm_url: String,
+    pub wikipedia_url: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -100,34 +98,14 @@ pub(crate) fn tour_dates_stale(fetched_at_unix_ms: i64, now_unix_ms: i64) -> boo
     (now_unix_ms - fetched_at_unix_ms) >= TWELVE_HOURS_MS
 }
 
-/// Strip HTML tags from a string, keeping tag content.
-/// Handles `<a href="...">text</a>`, `<b>text</b>`, etc.
-#[allow(dead_code)]
-pub(crate) fn strip_html(s: &str) -> String {
-    use regex::Regex;
-    use std::sync::OnceLock;
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"<[^>]+>").expect("strip_html regex"));
-    // Decode common HTML entities after stripping tags.
-    let stripped = re.replace_all(s, "");
-    stripped
-        .replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&nbsp;", " ")
-}
-
 /// Top-level entry point for callers that don't hold an ArtistInfoCache.
 /// Prefer ArtistInfoCache::fetch which adds caching + dedup.
 #[allow(dead_code)]
 pub async fn fetch_artist_info(artist: &str) -> Result<ArtistInfo> {
     let client = build_artist_info_http_client()?;
     let now = now_unix_ms();
-    let (bio, similar, events, photo) = tokio::join!(
-        fetch_lastfm_bio(&client, artist),
-        fetch_lastfm_similar(&client, artist),
+    let (bio, events, photo) = tokio::join!(
+        fetch_wikipedia_bio(&client, artist),
         fetch_ticketmaster_events(&client, artist),
         fetch_theaudiodb_photo(&client, artist),
     );
@@ -136,137 +114,135 @@ pub async fn fetch_artist_info(artist: &str) -> Result<ArtistInfo> {
         slug: slug_for_artist(artist),
         bio,
         photo_data_url: photo,
-        similar_artists: similar,
         tour_dates: events,
-        mbid: None,
         fetched_at_unix_ms: now,
     })
 }
 
-// ── Last.fm ────────────────────────────────────────────────────────────────
+// ── Wikipedia ─────────────────────────────────────────────────────────────
 
-/// Register a free API account at https://www.last.fm/api before public release.
-/// Embedding a static key is the documented intended use (rate-limit identifier,
-/// not an auth secret).
-#[allow(dead_code)]
-const LASTFM_API_KEY: &str = "PLACEHOLDER_REPLACE_BEFORE_LAUNCH";
-#[allow(dead_code)]
-const LASTFM_BASE: &str = "https://ws.audioscrobbler.com/2.0/";
+/// Music-relevance keywords used to gate Wikipedia results.
+/// The description field (e.g. "American rapper", "English rock band") must
+/// contain at least one of these substrings (case-insensitive) for the page
+/// to be accepted as a music artist bio.
+const MUSIC_KEYWORDS: &[&str] = &[
+    "musician", "singer", "rapper", "songwriter", "band", "group",
+    "dj", "producer", "composer", "musical", "music", "vocalist",
+    "guitarist", "drummer", "bassist", "pianist",
+    "rock", "pop", "hip hop", "hip-hop", "country", "jazz", "metal",
+    "indie", "electronic", "r&b", "soul", "folk",
+];
 
-/// Fetch artist bio from Last.fm artist.getInfo.
-/// Returns None on artist-not-found (error 6), network failure, or missing fields.
-#[allow(dead_code)]
-pub(crate) async fn fetch_lastfm_bio(
-    client: &reqwest::Client,
-    artist: &str,
-) -> Option<ArtistBio> {
-    let url = reqwest::Url::parse_with_params(
-        LASTFM_BASE,
-        &[
-            ("method", "artist.getInfo"),
-            ("artist", artist),
-            ("api_key", LASTFM_API_KEY),
-            ("format", "json"),
-        ],
-    )
-    .ok()?;
+/// Disambiguator suffixes tried in order when the direct lookup fails the
+/// music-relevance gate or returns a non-standard page type.
+const WIKIPEDIA_SUFFIXES: &[&str] = &[
+    "musician", "singer", "rapper", "band", "rock band", "group",
+];
 
-    let resp = client.get(url).send().await.ok()?;
-    let body: serde_json::Value = resp.json().await.ok()?;
-
-    // Error 6 = artist not found; error 26 = suspended key. Both → None.
-    if body.get("error").is_some() {
-        eprintln!(
-            "[artist_info] lastfm getInfo error: {}",
-            body.get("message")
-                .and_then(|m| m.as_str())
-                .unwrap_or("unknown")
-        );
-        return None;
-    }
-
-    let artist_obj = body.get("artist")?;
-    let raw_bio = artist_obj
-        .get("bio")?
-        .get("summary")?
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    let lastfm_url = artist_obj
-        .get("url")?
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-
-    if lastfm_url.is_empty() {
-        return None;
-    }
-
-    let mut bio_text = strip_html(&raw_bio);
-
-    // Truncate to last sentence boundary before 1500 chars.
-    if bio_text.len() > 1500 {
-        // Find last period, ?, or ! before position 1500.
-        let cutoff = bio_text[..1500]
+/// Truncate bio text to the last sentence boundary before 1500 chars.
+/// Mirrors the existing Last.fm truncation logic.
+fn truncate_bio(mut text: String) -> String {
+    if text.len() > 1500 {
+        let cutoff = text[..1500]
             .rfind(['.', '?', '!'])
             .map(|i| i + 1)
             .unwrap_or(1500);
-        bio_text.truncate(cutoff);
-        bio_text = bio_text.trim_end().to_string();
+        text.truncate(cutoff);
+        text = text.trim_end().to_string();
+        if text.is_empty() {
+            // No sentence boundary found — hard truncate with ellipsis.
+            text = text[..1500.min(text.len())].to_string();
+            text.push('…');
+        }
     }
-
-    if bio_text.is_empty() {
-        return None;
-    }
-
-    Some(ArtistBio { text: bio_text, lastfm_url })
+    text
 }
 
-/// Fetch similar artists from Last.fm artist.getSimilar (top 8).
-/// Returns an empty Vec on any failure.
-#[allow(dead_code)]
-pub(crate) async fn fetch_lastfm_similar(
+/// Return true if the description passes the music-relevance gate.
+fn is_music_relevant(description: &str) -> bool {
+    let lower = description.to_lowercase();
+    MUSIC_KEYWORDS.iter().any(|kw| lower.contains(kw))
+}
+
+/// Parse a Wikipedia REST summary JSON body into an `ArtistBio`.
+/// Returns `Some` only when type == "standard", extract is non-empty,
+/// and the description passes the music-relevance gate.
+fn parse_wikipedia_summary(body: &serde_json::Value) -> Option<ArtistBio> {
+    let page_type = body.get("type")?.as_str()?;
+    if page_type != "standard" {
+        return None;
+    }
+    let extract = body.get("extract")?.as_str()?;
+    if extract.is_empty() {
+        return None;
+    }
+    let description = body
+        .get("description")
+        .and_then(|d| d.as_str())
+        .unwrap_or("");
+    if !is_music_relevant(description) {
+        return None;
+    }
+    let wikipedia_url = body
+        .get("content_urls")
+        .and_then(|u| u.get("desktop"))
+        .and_then(|d| d.get("page"))
+        .and_then(|p| p.as_str())
+        .unwrap_or("")
+        .to_string();
+    if wikipedia_url.is_empty() {
+        return None;
+    }
+    let text = truncate_bio(extract.to_string());
+    if text.is_empty() {
+        return None;
+    }
+    Some(ArtistBio { text, wikipedia_url })
+}
+
+/// Fetch artist bio from the Wikipedia REST API.
+///
+/// 1. Tries a direct lookup by artist name.
+/// 2. If that fails the music-relevance gate (or returns a non-standard page),
+///    retries with disambiguation suffixes: (musician), (singer), (rapper),
+///    (band), (rock band), (group).
+/// 3. Returns `None` if all attempts fail.
+pub(crate) async fn fetch_wikipedia_bio(
     client: &reqwest::Client,
     artist: &str,
-) -> Vec<String> {
-    let url = match reqwest::Url::parse_with_params(
-        LASTFM_BASE,
-        &[
-            ("method", "artist.getSimilar"),
-            ("artist", artist),
-            ("api_key", LASTFM_API_KEY),
-            ("limit", "8"),
-            ("format", "json"),
-        ],
-    ) {
-        Ok(u) => u,
-        Err(_) => return vec![],
-    };
-
-    let resp = match client.get(url).send().await {
-        Ok(r) => r,
-        Err(_) => return vec![],
-    };
-    let body: serde_json::Value = match resp.json().await {
-        Ok(b) => b,
-        Err(_) => return vec![],
-    };
-
-    if body.get("error").is_some() {
-        return vec![];
+) -> Option<ArtistBio> {
+    // Direct lookup.
+    let encoded = urlencoding::encode(artist);
+    let url = format!(
+        "https://en.wikipedia.org/api/rest_v1/page/summary/{}",
+        encoded
+    );
+    if let Ok(resp) = client.get(&url).send().await {
+        if let Ok(body) = resp.json::<serde_json::Value>().await {
+            if let Some(bio) = parse_wikipedia_summary(&body) {
+                return Some(bio);
+            }
+        }
     }
 
-    body.get("similarartists")
-        .and_then(|sa| sa.get("artist"))
-        .and_then(|arr| arr.as_array())
-        .map(|artists| {
-            artists
-                .iter()
-                .filter_map(|a| a.get("name")?.as_str().map(|s| s.to_string()))
-                .take(8)
-                .collect()
-        })
-        .unwrap_or_default()
+    // Disambiguator suffix fallback.
+    for suffix in WIKIPEDIA_SUFFIXES {
+        let title = format!("{} ({})", artist, suffix);
+        let encoded_title = urlencoding::encode(&title);
+        let suffix_url = format!(
+            "https://en.wikipedia.org/api/rest_v1/page/summary/{}",
+            encoded_title
+        );
+        if let Ok(resp) = client.get(&suffix_url).send().await {
+            if let Ok(body) = resp.json::<serde_json::Value>().await {
+                if let Some(bio) = parse_wikipedia_summary(&body) {
+                    return Some(bio);
+                }
+            }
+        }
+    }
+
+    None
 }
 
 // ── Ticketmaster Discovery ─────────────────────────────────────────────────
@@ -545,54 +521,13 @@ pub(crate) async fn fetch_theaudiodb_photo(
     Some(format!("data:image/jpeg;base64,{b64}"))
 }
 
-// ── MusicBrainz ────────────────────────────────────────────────────────────
-
-/// Resolve a MusicBrainz artist ID (mbid) by name.
-/// Only invoked on the Last.fm fallback path (error 6 + Bandsintown hit).
-/// MusicBrainz TOS requires a User-Agent with contact info; the HTTP client
-/// built in Task 6 sets that header. Returns None on any failure.
-#[allow(dead_code)]
-pub(crate) async fn resolve_mbid_musicbrainz(
-    client: &reqwest::Client,
-    artist: &str,
-) -> Option<String> {
-    let query = format!("artist:{}", urlencoding::encode(artist));
-    let url = reqwest::Url::parse_with_params(
-        "https://musicbrainz.org/ws/2/artist",
-        &[("query", query.as_str()), ("limit", "1"), ("fmt", "json")],
-    )
-    .ok()?;
-
-    let resp = match client.get(url).send().await {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("[artist_info] musicbrainz fetch failed: {e}");
-            return None;
-        }
-    };
-    let body: serde_json::Value = match resp.json().await {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("[artist_info] musicbrainz JSON parse failed: {e}");
-            return None;
-        }
-    };
-
-    body.get("artists")?
-        .as_array()?
-        .first()?
-        .get("id")?
-        .as_str()
-        .map(|s| s.to_string())
-}
-
 // ── HTTP client ────────────────────────────────────────────────────────────
 
 /// Build a reqwest::Client with the User-Agent required by MusicBrainz TOS
 /// and a 10s timeout covering all artist-info requests.
 pub(crate) fn build_artist_info_http_client() -> Result<reqwest::Client> {
     let client = reqwest::Client::builder()
-        .user_agent("hum/0.11.1 (https://github.com/basezero-projects/Hum; itswesl3y@gmail.com)")
+        .user_agent("hum/0.11.3 (https://github.com/basezero-projects/Hum; itswesl3y@gmail.com)")
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
     Ok(client)
@@ -612,11 +547,8 @@ struct CachedArtistData {
     bio_fetched_at_unix_ms: Option<i64>,
     photo_data_url: Option<String>,
     photo_fetched_at_unix_ms: Option<i64>,
-    similar_artists: Option<Vec<String>>,
-    similar_fetched_at_unix_ms: Option<i64>,
     tour_dates: Option<Vec<TourDate>>,
     tour_dates_fetched_at_unix_ms: Option<i64>,
-    mbid: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -775,42 +707,23 @@ impl ArtistInfoCache {
         };
         let client = build_artist_info_http_client()?;
 
-        // Parallel fetch: bio, similar, events, photo.
-        let (bio_result, similar_result, events_result, photo_result) = tokio::join!(
-            fetch_lastfm_bio(&client, artist),
-            fetch_lastfm_similar(&client, artist),
+        // Parallel fetch: bio, events, photo.
+        let (bio_result, events_result, photo_result) = tokio::join!(
+            fetch_wikipedia_bio(&client, artist),
             fetch_ticketmaster_events(&client, artist),
             fetch_theaudiodb_photo(&client, artist),
         );
-
-        // MusicBrainz fallback: only if Last.fm bio failed AND Ticketmaster
-        // returned something (so we know the artist actually exists).
-        let (final_bio, mbid) = if bio_result.is_none() && !events_result.is_empty() {
-            let mbid_opt = resolve_mbid_musicbrainz(&client, artist).await;
-            if let Some(ref mbid_str) = mbid_opt {
-                // Retry Last.fm with the mbid.
-                let bio_retry = fetch_lastfm_bio_by_mbid(&client, mbid_str).await;
-                (bio_retry, mbid_opt)
-            } else {
-                (None, None)
-            }
-        } else {
-            (bio_result, None)
-        };
 
         let data = CachedArtistData {
             version: 1,
             name: Some(artist.to_string()),
             slug: Some(slug.clone()),
-            bio: final_bio,
+            bio: bio_result,
             bio_fetched_at_unix_ms: Some(now),
             photo_data_url: photo_result,
             photo_fetched_at_unix_ms: Some(now),
-            similar_artists: Some(similar_result),
-            similar_fetched_at_unix_ms: Some(now),
             tour_dates: Some(events_result),
             tour_dates_fetched_at_unix_ms: Some(now),
-            mbid,
         };
 
         let _ = write_cache_file(&self.app, &data).await;
@@ -835,50 +748,6 @@ impl ArtistInfoCache {
     }
 }
 
-/// Retry Last.fm artist.getInfo using an mbid instead of artist name.
-#[allow(dead_code)]
-async fn fetch_lastfm_bio_by_mbid(
-    client: &reqwest::Client,
-    mbid: &str,
-) -> Option<ArtistBio> {
-    let url = reqwest::Url::parse_with_params(
-        LASTFM_BASE,
-        &[
-            ("method", "artist.getInfo"),
-            ("mbid", mbid),
-            ("api_key", LASTFM_API_KEY),
-            ("format", "json"),
-        ],
-    )
-    .ok()?;
-    let resp = client.get(url).send().await.ok()?;
-    let body: serde_json::Value = resp.json().await.ok()?;
-    if body.get("error").is_some() {
-        return None;
-    }
-    let artist_obj = body.get("artist")?;
-    let raw_bio = artist_obj
-        .get("bio")?
-        .get("summary")?
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    let lastfm_url = artist_obj
-        .get("url")?
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-    if lastfm_url.is_empty() { return None; }
-    let mut bio_text = strip_html(&raw_bio);
-    if bio_text.len() > 1500 {
-        let cutoff = bio_text[..1500].rfind(['.', '?', '!']).map(|i| i + 1).unwrap_or(1500);
-        bio_text.truncate(cutoff);
-        bio_text = bio_text.trim_end().to_string();
-    }
-    if bio_text.is_empty() { return None; }
-    Some(ArtistBio { text: bio_text, lastfm_url })
-}
-
 #[allow(dead_code)]
 fn build_artist_info_from_cache(
     data: &CachedArtistData,
@@ -890,9 +759,7 @@ fn build_artist_info_from_cache(
         slug: data.slug.clone().unwrap_or_else(|| slug.to_string()),
         bio: data.bio.clone(),
         photo_data_url: data.photo_data_url.clone(),
-        similar_artists: data.similar_artists.clone().unwrap_or_default(),
         tour_dates: data.tour_dates.clone().unwrap_or_default(),
-        mbid: data.mbid.clone(),
         fetched_at_unix_ms: data
             .bio_fetched_at_unix_ms
             .or(data.tour_dates_fetched_at_unix_ms)
@@ -985,31 +852,6 @@ mod tests {
         let fetched = now - (12 * 3600 * 1000);
         // Exactly at the boundary → stale (>=).
         assert!(tour_dates_stale(fetched, now));
-    }
-
-    #[test]
-    fn strip_html_plain() {
-        assert_eq!(strip_html("plain"), "plain");
-    }
-
-    #[test]
-    fn strip_html_anchor() {
-        assert_eq!(strip_html("<a href='x'>link</a>"), "link");
-    }
-
-    #[test]
-    fn strip_html_bold() {
-        assert_eq!(strip_html("text with <b>bold</b>"), "text with bold");
-    }
-
-    #[test]
-    fn strip_html_entities() {
-        assert_eq!(strip_html("rock &amp; roll"), "rock & roll");
-    }
-
-    #[test]
-    fn strip_html_empty() {
-        assert_eq!(strip_html(""), "");
     }
 
     // ── Ticketmaster parser tests ──────────────────────────────────────────
@@ -1132,5 +974,162 @@ mod tests {
         let event = make_tm_event("Shaggy", "2026-03-05", Some("20:00:00"), "postponed", "https://www.ticketmaster.com/event/abc");
         let result = parse_ticketmaster_event(&event, "Shaggy").unwrap();
         assert_eq!(result.status, TicketStatus::SoldOut);
+    }
+
+    // ── Wikipedia helpers tests ────────────────────────────────────────────
+
+    fn make_wiki_summary(
+        page_type: &str,
+        extract: &str,
+        description: &str,
+        desktop_url: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "type": page_type,
+            "extract": extract,
+            "description": description,
+            "content_urls": {
+                "desktop": {
+                    "page": desktop_url
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn wiki_parse_successful_direct_hit() {
+        let body = make_wiki_summary(
+            "standard",
+            "Shaggy is a Jamaican-American reggae fusion singer and deejay.",
+            "Jamaican-American singer",
+            "https://en.wikipedia.org/wiki/Shaggy_(musician)",
+        );
+        let result = parse_wikipedia_summary(&body);
+        assert!(result.is_some(), "should parse a valid music summary");
+        let bio = result.unwrap();
+        assert_eq!(bio.wikipedia_url, "https://en.wikipedia.org/wiki/Shaggy_(musician)");
+        assert!(bio.text.contains("Shaggy"));
+    }
+
+    #[test]
+    fn wiki_parse_rejects_non_music_description() {
+        // Description "American politician" has no music keywords.
+        let body = make_wiki_summary(
+            "standard",
+            "John Doe is an American politician who served in Congress.",
+            "American politician",
+            "https://en.wikipedia.org/wiki/John_Doe",
+        );
+        let result = parse_wikipedia_summary(&body);
+        assert!(result.is_none(), "should reject non-music description");
+    }
+
+    #[test]
+    fn wiki_parse_rejects_disambiguation_page() {
+        // type == "disambiguation" should always be rejected regardless of description.
+        let body = make_wiki_summary(
+            "disambiguation",
+            "Shaggy may refer to several things.",
+            "American singer",
+            "https://en.wikipedia.org/wiki/Shaggy",
+        );
+        let result = parse_wikipedia_summary(&body);
+        assert!(result.is_none(), "disambiguation page should be rejected");
+    }
+
+    #[test]
+    fn wiki_parse_rejects_missing_extract() {
+        let body = serde_json::json!({
+            "type": "standard",
+            "extract": "",
+            "description": "American rock band",
+            "content_urls": {
+                "desktop": { "page": "https://en.wikipedia.org/wiki/Foo" }
+            }
+        });
+        let result = parse_wikipedia_summary(&body);
+        assert!(result.is_none(), "empty extract should be rejected");
+    }
+
+    #[test]
+    fn wiki_suffix_fallback_simulation() {
+        // Direct lookup: disambiguation. Suffix "(musician)": standard + music.
+        let disambig = make_wiki_summary(
+            "disambiguation",
+            "Artist may refer to:",
+            "English singer",
+            "https://en.wikipedia.org/wiki/Artist",
+        );
+        let suffix_hit = make_wiki_summary(
+            "standard",
+            "Artist is an English pop singer born in London.",
+            "English singer",
+            "https://en.wikipedia.org/wiki/Artist_(musician)",
+        );
+
+        // Direct = rejected (disambiguation).
+        assert!(parse_wikipedia_summary(&disambig).is_none());
+        // Suffix hit = accepted.
+        let result = parse_wikipedia_summary(&suffix_hit);
+        assert!(result.is_some(), "suffix fallback body should be accepted");
+        assert_eq!(
+            result.unwrap().wikipedia_url,
+            "https://en.wikipedia.org/wiki/Artist_(musician)"
+        );
+    }
+
+    #[test]
+    fn wiki_all_attempts_fail_returns_none() {
+        // A page with type "no-extract" and irrelevant description — simulate all
+        // attempts returning this body. parse_wikipedia_summary should return None.
+        let body = make_wiki_summary(
+            "no-extract",
+            "Some content that cannot be extracted.",
+            "city in France",
+            "https://en.wikipedia.org/wiki/City",
+        );
+        // Simulate all attempts (direct + all suffixes) returning the same body.
+        for _ in 0..=WIKIPEDIA_SUFFIXES.len() {
+            assert!(parse_wikipedia_summary(&body).is_none());
+        }
+    }
+
+    #[test]
+    fn wiki_truncation_at_sentence_boundary() {
+        // Build a 2000-char extract with a sentence boundary before 1500 chars.
+        let sentence_a = "This artist is a famous musician. "; // 34 chars
+        let sentence_b = "B".repeat(1500 - sentence_a.len()); // fills to ~1500
+        let sentence_b = format!("{}.", sentence_b); // ends with '.'
+        let padding = "C".repeat(500); // push total past 1500
+        let full_extract = format!("{}{}{}", sentence_a, sentence_b, padding);
+        assert!(full_extract.len() > 1500);
+
+        let truncated = truncate_bio(full_extract.clone());
+        // Must be ≤ 1500 chars.
+        assert!(truncated.len() <= 1500, "truncated bio should be ≤ 1500 chars");
+        // Must end at a sentence boundary (last char is '.').
+        assert!(
+            truncated.ends_with('.'),
+            "truncated bio should end at a sentence boundary"
+        );
+        // Must not contain the padding characters.
+        assert!(!truncated.contains('C'), "truncated bio should not include padding past cutoff");
+    }
+
+    #[test]
+    fn wiki_is_music_relevant_positive() {
+        assert!(is_music_relevant("American rapper"));
+        assert!(is_music_relevant("English rock band"));
+        assert!(is_music_relevant("Jamaican-American singer"));
+        assert!(is_music_relevant("Canadian songwriter"));
+        assert!(is_music_relevant("electronic music producer"));
+    }
+
+    #[test]
+    fn wiki_is_music_relevant_negative() {
+        assert!(!is_music_relevant("city in France"));
+        assert!(!is_music_relevant("American politician"));
+        assert!(!is_music_relevant("fictional character"));
+        assert!(!is_music_relevant("German automobile manufacturer"));
     }
 }

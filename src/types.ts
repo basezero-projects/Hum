@@ -60,7 +60,7 @@ export type TourDate = {
 
 export type ArtistBio = {
   text: string;
-  lastfm_url: string;
+  wikipedia_url: string;
 };
 
 export type ArtistInfo = {
@@ -68,9 +68,7 @@ export type ArtistInfo = {
   slug: string;
   bio: ArtistBio | null;
   photo_data_url: string | null;
-  similar_artists: string[];
   tour_dates: TourDate[];
-  mbid: string | null;
   fetched_at_unix_ms: number;
 };
 

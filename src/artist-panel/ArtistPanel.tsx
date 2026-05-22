@@ -229,20 +229,10 @@ export default function ArtistPanel() {
                   {info.bio.text}
                 </p>
                 <div style={{ marginTop: 6 }}>
-                  <ExternalLink url={info.bio.lastfm_url} onOpen={openUrl}>
-                    Read more on Last.fm →
+                  <ExternalLink url={info.bio.wikipedia_url} onOpen={openUrl}>
+                    Read more on Wikipedia →
                   </ExternalLink>
                 </div>
-              </section>
-            )}
-
-            {/* Similar artists */}
-            {info.similar_artists.length > 0 && (
-              <section style={{ marginBottom: 16 }}>
-                <SectionLabel>Similar to</SectionLabel>
-                <p style={{ margin: 0, color: DIM, fontSize: 12.5, lineHeight: 1.6 }}>
-                  {info.similar_artists.join(", ")}
-                </p>
               </section>
             )}
 
@@ -273,7 +263,7 @@ export default function ArtistPanel() {
         <span>Powered by</span>
         <FooterLink url="https://www.ticketmaster.com" onOpen={openUrl}>Ticketmaster</FooterLink>
         <span>·</span>
-        <FooterLink url="https://last.fm" onOpen={openUrl}>Last.fm</FooterLink>
+        <FooterLink url="https://wikipedia.org" onOpen={openUrl}>Wikipedia</FooterLink>
         <span>·</span>
         <FooterLink url="https://www.theaudiodb.com" onOpen={openUrl}>TheAudioDB</FooterLink>
       </div>
