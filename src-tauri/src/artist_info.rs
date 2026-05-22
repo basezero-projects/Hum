@@ -245,6 +245,164 @@ pub(crate) async fn fetch_lastfm_similar(
         .unwrap_or_default()
 }
 
+// ── Bandsintown ────────────────────────────────────────────────────────────
+
+/// Placeholder. Wes registers at https://bandsintown.com/partners before
+/// public release and replaces this with the live partner app_id.
+#[allow(dead_code)]
+const BANDSINTOWN_APP_ID: &str = "hum-dev";
+
+/// Fetch upcoming events from Bandsintown.
+/// Returns events sorted by date ascending. Returns empty Vec on any failure.
+#[allow(dead_code)]
+pub(crate) async fn fetch_bandsintown_events(
+    client: &reqwest::Client,
+    artist: &str,
+) -> Vec<TourDate> {
+    // Artist name goes in the URL path, not as a query param.
+    let encoded = urlencoding::encode(artist);
+    let url_str = format!(
+        "https://rest.bandsintown.com/artists/{}/events?app_id={}",
+        encoded, BANDSINTOWN_APP_ID
+    );
+    let url = match reqwest::Url::parse(&url_str) {
+        Ok(u) => u,
+        Err(_) => return vec![],
+    };
+
+    let resp = match client.get(url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[artist_info] bandsintown fetch failed: {e}");
+            return vec![];
+        }
+    };
+
+    let events: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[artist_info] bandsintown JSON parse failed: {e}");
+            return vec![];
+        }
+    };
+
+    let arr = match events.as_array() {
+        Some(a) => a,
+        None => return vec![],
+    };
+
+    let mut dates: Vec<TourDate> = arr
+        .iter()
+        .filter_map(parse_bandsintown_event)
+        .collect();
+
+    // Sort ascending by date.
+    dates.sort_by_key(|d| d.date_unix_ms);
+    dates
+}
+
+fn parse_bandsintown_event(event: &serde_json::Value) -> Option<TourDate> {
+    // datetime: ISO8601, e.g. "2026-03-05T20:00:00" (no timezone offset).
+    let datetime_str = event.get("datetime")?.as_str()?;
+    let date_unix_ms = parse_iso8601_to_unix_ms(datetime_str)?;
+
+    let venue = event.get("venue")?;
+    let city = venue
+        .get("city")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let region = venue
+        .get("region")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let country = venue
+        .get("country")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let venue_name = venue
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // Find the first "Tickets" offer.
+    let mut ticket_url: Option<String> = None;
+    let mut status = TicketStatus::Available;
+    if let Some(offers) = event.get("offers").and_then(|o| o.as_array()) {
+        for offer in offers {
+            let offer_type = offer.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            if offer_type.eq_ignore_ascii_case("Tickets") {
+                if let Some(url) = offer.get("url").and_then(|u| u.as_str()) {
+                    if !url.is_empty() {
+                        ticket_url = Some(url.to_string());
+                    }
+                }
+                let offer_status = offer
+                    .get("status")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("available");
+                status = if offer_status.eq_ignore_ascii_case("available") {
+                    TicketStatus::Available
+                } else {
+                    TicketStatus::SoldOut
+                };
+                break;
+            }
+        }
+    }
+
+    Some(TourDate {
+        date_unix_ms,
+        city,
+        region,
+        country,
+        venue: venue_name,
+        ticket_url,
+        status,
+    })
+}
+
+/// Parse Bandsintown ISO8601 datetime string to Unix milliseconds.
+/// Input format: "2026-03-05T20:00:00" (no timezone; treat as UTC for sorting purposes).
+fn parse_iso8601_to_unix_ms(s: &str) -> Option<i64> {
+    // Split at 'T' and parse manually: "2026-03-05" and "20:00:00".
+    let (date_part, time_part) = s.split_once('T')?;
+    let mut date_parts = date_part.split('-');
+    let year: i64 = date_parts.next()?.parse().ok()?;
+    let month: i64 = date_parts.next()?.parse().ok()?;
+    let day: i64 = date_parts.next()?.parse().ok()?;
+    let mut time_parts = time_part.split(':');
+    let hour: i64 = time_parts.next()?.parse().ok()?;
+    let min: i64 = time_parts.next()?.parse().ok()?;
+    let sec_str = time_parts.next().unwrap_or("0");
+    let sec: i64 = sec_str.split('.').next()?.parse().ok()?;
+
+    // Days from epoch (1970-01-01). Use the proleptic Gregorian formula.
+    // This is accurate for dates in the 2020s–2030s range we actually see.
+    let days = days_from_epoch(year, month, day)?;
+    let secs = days * 86400 + hour * 3600 + min * 60 + sec;
+    Some(secs * 1000)
+}
+
+fn days_from_epoch(year: i64, month: i64, day: i64) -> Option<i64> {
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    // Days in each month (non-leap).
+    let days_in_month = [0i64, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    let mut days: i64 = (year - 1970) * 365 + (year - 1969) / 4 - (year - 1901) / 100 + (year - 1601) / 400;
+    for m in 1..month {
+        days += days_in_month[m as usize];
+        if m == 2 && is_leap { days += 1; }
+    }
+    days += day - 1;
+    Some(days)
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

@@ -26,6 +26,7 @@ reqwest = { version = "0.13", features = ["json", "cookies"] }
 base64 = "0.22"
 tempfile = "3"
 regex = "1"
+urlencoding = "2"
 xcap = "0.9.4"
 tauri-plugin-window-state = "2.4.1"
 axum = { version = "0.8.9", features = ["tokio"] }
