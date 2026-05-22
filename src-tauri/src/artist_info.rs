@@ -713,7 +713,14 @@ impl ArtistInfoCache {
         }
 
         // Cache miss — full fetch.
-        let notify = notify.unwrap(); // We definitely hold the notify here.
+        // Guard: if notify is None we were a waiter, not the original fetcher.
+        // The original fetch already ran but its cache write must have failed
+        // (disk full, permission error, etc.). Return an error so the panel
+        // shows the "Couldn't load artist info / Retry" state rather than
+        // panicking on the unwrap below.
+        let Some(notify) = notify else {
+            return Err(anyhow::anyhow!("upstream fetch failed; cache empty after wait"));
+        };
         let client = build_artist_info_http_client()?;
 
         // Parallel fetch: bio, similar, events, photo.
