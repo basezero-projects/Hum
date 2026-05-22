@@ -249,6 +249,30 @@ export default function SettingsView() {
         </Hint>
       </Section>
 
+      <Section title="Artist info panel">
+        <Toggle
+          label="Show artist info panel"
+          checked={s.show_artist_info_panel}
+          onChange={(v) => update("show_artist_info_panel", v)}
+        />
+        <Hint>
+          Click album art (or the dot in the top corner when art is off) to view
+          artist bio, similar artists, and upcoming tour dates with ticket links.
+        </Hint>
+        <Row label="Cache">
+          <button
+            onClick={() =>
+              invoke("clear_artist_info_cache")
+                .then(() => alert("Artist info cache cleared."))
+                .catch((e: unknown) => alert(`Failed: ${e}`))
+            }
+            style={dangerButtonStyle}
+          >
+            Clear artist info cache
+          </button>
+        </Row>
+      </Section>
+
       <Section title="OBS / Streamer">
         <Toggle
           label="Expose lyrics as a browser source"
