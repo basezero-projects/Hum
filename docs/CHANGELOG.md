@@ -6,6 +6,13 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.12.0-rc5] - 2026-05-22
+
+### Added
+- **SYVR promo card replaces the lyric area during ad breaks** (still no real detection — pending Tasks 6-8). When `lyrics.status === "ad"`, the prev / cur / next lyric rows in the three-line and single-line layouts (or the scrolling column in full-page) are swapped out for a stacked card showing: a small `Brought to you by SYVR Studios` supertitle, an optional 32×32 product icon, the product name (same size as the current lyric), a dim tagline, and a clickable CTA (defaults to `Learn more →`). The card is fully clickable in locked/ghost modes — opens the promo's URL in the default browser via the new `tauri-plugin-opener`. In edit mode the card is a drag region instead. Right-side metadata column behavior: the Artist · Song · Album line is hidden during ads; the source badge swaps to an amber `AD BREAK` chip with the same shape as the existing source badges; the progress bar + time readout stays so users can see how much of the ad is left.
+
+  **Implementation:** New `PromoCard` and `AdBreakChip` components in `src/Overlay.tsx`. `MetadataColumn` gained an `adActive: boolean` prop wired from `track.ad_active`. Added `tauri-plugin-opener` (Rust + JS sides) plus `opener:default` / `opener:allow-open-url` capabilities. PromoCard renders in all three layouts (`three_line` stacked, `single_line` inline-collapsed, `full_page` centered stacked).
+
 ## [0.12.0-rc4] - 2026-05-22
 
 ### Added (internal — promo data wired end-to-end, still no detection)

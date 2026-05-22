@@ -4,12 +4,14 @@ import { listen } from "@tauri-apps/api/event";
 import { check as checkForUpdate, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
   CurrentLyrics,
   CurrentTrack,
   LayoutMode,
   LyricLine,
   OverlayMode,
+  Promo,
   Settings,
   TextAlign,
   WordSpan,
@@ -759,17 +761,31 @@ export default function Overlay() {
             <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} dragRegion={isEdit} onClick={openArtistPanel} />
           ) : null}
           <div {...dragProps} ref={setLyricsColEl} style={lyricsColStyle}>
-            <LineRow
-              text={middleText}
-              kind="cur"
-              dragRegion={isEdit}
-              settings={settingsForRender}
-              karaoke={curKaraoke}
-              textShadow={effectiveTextShadow}
-            />
-            {translationText ? (
-              <TranslationRow text={translationText} settings={settingsForRender} textShadow={effectiveTextShadow} />
-            ) : null}
+            {lyrics?.status === "ad" ? (
+              <PromoCard
+                promo={lyrics.promo ?? null}
+                textColor={effectiveTextColor}
+                textColorDim={effectiveTextColorDim}
+                textShadow={effectiveTextShadow}
+                scaledFontSize={settingsForRender.font_size_px}
+                layoutMode={layoutMode}
+                dragRegion={isEdit}
+              />
+            ) : (
+              <>
+                <LineRow
+                  text={middleText}
+                  kind="cur"
+                  dragRegion={isEdit}
+                  settings={settingsForRender}
+                  karaoke={curKaraoke}
+                  textShadow={effectiveTextShadow}
+                />
+                {translationText ? (
+                  <TranslationRow text={translationText} settings={settingsForRender} textShadow={effectiveTextShadow} />
+                ) : null}
+              </>
+            )}
           </div>
           {track ? (
             <MetadataColumn
@@ -780,6 +796,7 @@ export default function Overlay() {
               source={null}
               alignRight
               dragRegion={isEdit}
+              adActive={track.ad_active}
             />
           ) : null}
         </div>
@@ -803,7 +820,17 @@ export default function Overlay() {
         {openArtistPanel && (!showArt || !albumArt) ? (
           <ArtistInfoDot onClick={openArtistPanel} />
         ) : null}
-        {hasLines ? (
+        {lyrics?.status === "ad" ? (
+          <PromoCard
+            promo={lyrics.promo ?? null}
+            textColor={effectiveTextColor}
+            textColorDim={effectiveTextColorDim}
+            textShadow={effectiveTextShadow}
+            scaledFontSize={settingsForRender.font_size_px}
+            layoutMode={layoutMode}
+            dragRegion={isEdit}
+          />
+        ) : hasLines ? (
           lyrics!.lines.map((line, i) => (
             <LineRow
               key={i}
@@ -851,19 +878,33 @@ export default function Overlay() {
             <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} dragRegion={isEdit} onClick={openArtistPanel} />
           ) : null}
           <div {...dragProps} ref={setLyricsColEl} style={lyricsColStyle}>
-          <LineRow text={prev?.text} kind="prev" dragRegion={isEdit} settings={settingsForRender} textShadow={effectiveTextShadow} />
-          <LineRow
-            text={middleText}
-            kind="cur"
-            dragRegion={isEdit}
-            settings={settingsForRender}
-            karaoke={curKaraoke}
-            textShadow={effectiveTextShadow}
-          />
-          {translationText ? (
-            <TranslationRow text={translationText} settings={settingsForRender} textShadow={effectiveTextShadow} />
+          {lyrics?.status === "ad" ? (
+            <PromoCard
+              promo={lyrics.promo ?? null}
+              textColor={effectiveTextColor}
+              textColorDim={effectiveTextColorDim}
+              textShadow={effectiveTextShadow}
+              scaledFontSize={settingsForRender.font_size_px}
+              layoutMode={layoutMode}
+              dragRegion={isEdit}
+            />
           ) : (
-            <LineRow text={next?.text} kind="next" dragRegion={isEdit} settings={settingsForRender} textShadow={effectiveTextShadow} />
+            <>
+              <LineRow text={prev?.text} kind="prev" dragRegion={isEdit} settings={settingsForRender} textShadow={effectiveTextShadow} />
+              <LineRow
+                text={middleText}
+                kind="cur"
+                dragRegion={isEdit}
+                settings={settingsForRender}
+                karaoke={curKaraoke}
+                textShadow={effectiveTextShadow}
+              />
+              {translationText ? (
+                <TranslationRow text={translationText} settings={settingsForRender} textShadow={effectiveTextShadow} />
+              ) : (
+                <LineRow text={next?.text} kind="next" dragRegion={isEdit} settings={settingsForRender} textShadow={effectiveTextShadow} />
+              )}
+            </>
           )}
           </div>
           {track ? (
@@ -875,6 +916,7 @@ export default function Overlay() {
               source={null}
               alignRight
               dragRegion={isEdit}
+              adActive={track.ad_active}
             />
           ) : null}
         </div>
@@ -1057,6 +1099,182 @@ function ArtistInfoDot({ onClick }: { onClick: () => void }) {
   );
 }
 
+// Promo card rendered in place of the lyric rows during an ad break.
+// Three-line / full-page layout: supertitle / [icon + product name + tagline] / CTA.
+// In single_line layout it collapses to one inline row.
+function PromoCard({
+  promo,
+  textColor,
+  textColorDim,
+  textShadow,
+  scaledFontSize,
+  layoutMode,
+  dragRegion,
+}: {
+  promo: Promo | null | undefined;
+  textColor: string;
+  textColorDim: string;
+  textShadow: string;
+  scaledFontSize: number;
+  layoutMode: LayoutMode;
+  dragRegion: boolean;
+}) {
+  const accent = promo?.accent_color ?? "#d4af37";
+  const cta = promo?.cta_text ?? "Learn more →";
+  const productName = promo?.product_name ?? "SYVR Studios";
+  const tagline = promo?.tagline ?? "Tools and apps from the makers of Hum.";
+  const url = promo?.url ?? "https://syvrstudios.com";
+  const iconUrl = promo?.icon_url ?? null;
+
+  const handleClick = (e: React.MouseEvent) => {
+    if (dragRegion) return;
+    e.stopPropagation();
+    openUrl(url).catch(() => {});
+  };
+  const drag = dragRegion ? { "data-tauri-drag-region": true } : {};
+
+  if (layoutMode === "single_line") {
+    return (
+      <div
+        {...drag}
+        onClick={handleClick}
+        style={{
+          display: "flex",
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 10,
+          cursor: dragRegion ? "move" : "pointer",
+          maxWidth: "92vw",
+          overflow: "hidden",
+        }}
+      >
+        {iconUrl ? (
+          <img
+            src={iconUrl}
+            alt=""
+            draggable={false}
+            style={{ width: 28, height: 28, borderRadius: 4, flexShrink: 0, pointerEvents: "none" }}
+            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+          />
+        ) : null}
+        <span style={{
+          fontSize: scaledFontSize,
+          color: textColor,
+          textShadow,
+          fontWeight: 600,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}>
+          {productName}
+        </span>
+        <span style={{ fontSize: scaledFontSize * 0.65, color: textColorDim, textShadow, opacity: 0.85 }}>·</span>
+        <span style={{
+          fontSize: scaledFontSize * 0.65,
+          color: textColorDim,
+          textShadow,
+          opacity: 0.85,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}>
+          {tagline}
+        </span>
+        <span style={{ fontSize: scaledFontSize * 0.65, color: accent, textShadow, marginLeft: 6, whiteSpace: "nowrap" }}>
+          {cta}
+        </span>
+      </div>
+    );
+  }
+
+  // three_line + full_page: stacked card.
+  return (
+    <div
+      {...drag}
+      onClick={handleClick}
+      className="hum-line-in"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 2,
+        cursor: dragRegion ? "move" : "pointer",
+        maxWidth: "92vw",
+        overflow: "hidden",
+      }}
+    >
+      <div style={{
+        fontSize: Math.max(9, scaledFontSize * 0.38),
+        color: textColorDim,
+        textShadow,
+        opacity: 0.7,
+        letterSpacing: 0.4,
+        textTransform: "uppercase",
+        whiteSpace: "nowrap",
+      }}>
+        Brought to you by SYVR Studios
+      </div>
+      <div style={{
+        display: "flex",
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 10,
+      }}>
+        {iconUrl ? (
+          <img
+            src={iconUrl}
+            alt=""
+            draggable={false}
+            style={{ width: 32, height: 32, borderRadius: 4, flexShrink: 0, pointerEvents: "none" }}
+            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+          />
+        ) : null}
+        <div style={{
+          display: "flex",
+          flexDirection: "column",
+          minWidth: 0,
+          flex: 1,
+        }}>
+          <div style={{
+            fontSize: scaledFontSize,
+            color: textColor,
+            textShadow,
+            fontWeight: 600,
+            lineHeight: 1.15,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}>
+            {productName}
+          </div>
+          <div style={{
+            fontSize: scaledFontSize * 0.55,
+            color: textColorDim,
+            textShadow,
+            opacity: 0.85,
+            lineHeight: 1.2,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}>
+            {tagline}
+          </div>
+        </div>
+      </div>
+      <div style={{
+        fontSize: scaledFontSize * 0.6,
+        color: accent,
+        textShadow,
+        marginTop: 2,
+        textDecoration: "underline",
+        textUnderlineOffset: 2,
+        whiteSpace: "nowrap",
+      }}>
+        {cta}
+      </div>
+    </div>
+  );
+}
+
 // Right-side metadata column shown to the right of the lyrics in
 // three_line + single_line layouts. Stacks three small read-only widgets:
 //   1. Artist · Song · Album text line (top, dim, ellipsis on overflow)
@@ -1072,6 +1290,7 @@ function MetadataColumn({
   source,
   alignRight,
   dragRegion,
+  adActive,
 }: {
   track: CurrentTrack;
   textColor: string;
@@ -1083,6 +1302,7 @@ function MetadataColumn({
   source: string | null;
   alignRight: boolean;
   dragRegion: boolean;
+  adActive: boolean;
 }) {
   const hasMeta =
     !!(track.title || track.artist || track.album);
@@ -1116,7 +1336,8 @@ function MetadataColumn({
         marginLeft: 14,
       }}
     >
-      {metaText ? (
+      {/* Artist line: hidden during ads so it doesn't clash with the promo card */}
+      {!adActive && metaText ? (
         <div
           title={metaText}
           style={{
@@ -1143,12 +1364,16 @@ function MetadataColumn({
           textShadow={textShadow}
         />
       ) : null}
-      <SourceBadge
-        appId={track.source_app_id}
-        overrideLabel={source}
-        textColorDim={textColorDim}
-        textShadow={textShadow}
-      />
+      {adActive ? (
+        <AdBreakChip textShadow={textShadow} />
+      ) : (
+        <SourceBadge
+          appId={track.source_app_id}
+          overrideLabel={source}
+          textColorDim={textColorDim}
+          textShadow={textShadow}
+        />
+      )}
     </div>
   );
 }
@@ -1268,6 +1493,31 @@ function SourceBadge({
       }}
     >
       {label}
+    </div>
+  );
+}
+
+function AdBreakChip({ textShadow }: { textShadow: string }) {
+  return (
+    <div
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        padding: "1px 6px",
+        borderRadius: 8,
+        fontSize: 9.5,
+        letterSpacing: 0.6,
+        textTransform: "uppercase",
+        color: "rgba(212, 175, 55, 0.95)",
+        textShadow,
+        background: "rgba(212, 175, 55, 0.12)",
+        border: "1px solid rgba(212, 175, 55, 0.5)",
+        opacity: 0.95,
+        whiteSpace: "nowrap",
+      }}
+    >
+      Ad Break
     </div>
   );
 }
@@ -1697,11 +1947,6 @@ function statusLine(l: CurrentLyrics, t: CurrentTrack | null): string {
       return "♪ unsynced lyrics (no per-line timing)";
     case "error":
       return "♪ error fetching lyrics";
-    case "ad":
-      if (l.promo) {
-        return `♪ Ad break — ${l.promo.product_name}: ${l.promo.tagline}`;
-      }
-      return "♪ Ad break — Brought to you by SYVR Studios";
     case "idle":
       return t?.title ? `♪ ${t.title}` : "♪";
     default:

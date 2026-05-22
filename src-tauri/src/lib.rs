@@ -169,6 +169,7 @@ pub fn run() {
     let mode_state: SharedMode = Arc::new(AtomicU8::new(OverlayMode::default() as u8));
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_store::Builder::new().build())
