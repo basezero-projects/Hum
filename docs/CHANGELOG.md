@@ -6,6 +6,22 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.11.9] - 2026-05-22
+
+### Added
+- **Right-side metadata column shows track info, progress, and source app.** The previously-empty area to the right of the lyric text in the 3-line and single-line layouts now stacks three small read-only widgets, vertically centered, right-aligned, in the current dim text color. The dim color follows the auto-contrast flip the same way the lyric color does — it's the same `text_color_dim` setting used for the prev / next dim rows.
+
+  **What appears, top to bottom:**
+  1. **Artist · Song · Album** line. ~11px, dim, single-line with ellipsis if the joined string overflows. Hovering the line shows the full text as a tooltip via `title` attribute. Empty fields are skipped, so "Artist · Song" renders cleanly when the SMTC source doesn't publish an album.
+  2. **Progress bar + time readout.** A 160px-wide row showing `m:ss` current position on the left and `m:ss` total duration on the right (10px, tabular-nums), with a 2px-tall track underneath them. The filled portion uses the active lyric color at 85% opacity; the empty portion is `rgba(127,127,127,0.35)`. Position interpolates client-side against wall time every 500 ms while playing (Windows SMTC only pushes timeline updates every 2 s, so the bar would otherwise jump in 2-second steps), and freezes at the reported position when paused / stopped. The ticker only runs while `state == "playing"`, so a paused / closed app doesn't pay for a wake every half-second.
+  3. **Source badge.** A small uppercase pill (9.5px, letter-spaced, rounded) showing which app the metadata is coming from. Possible values include: `SPOTIFY`, `PANDORA`, `ITUNES`, `APPLE MUSIC`, `YOUTUBE MUSIC`, `TIDAL`, `AMAZON MUSIC`, `DEEZER`, `VLC`, `FOOBAR2000`, `MUSICBEE`, `WINAMP`, `WINDOWS MEDIA`, `GROOVE`, `CHROME`, `EDGE`, `FIREFOX`, `BRAVE`, `OPERA`, `ARC`, `ZEN`. Unrecognized app IDs fall back to a best-effort capitalized basename (`.exe` stripped, AUMID `Publisher.AppName_hash` simplified to `AppName`). The badge hides entirely when there's no `source_app_id` rather than showing a raw path.
+
+  **Layout behavior:** The new column sits inside the same flex row as the lyrics, with `flex-shrink: 0` and `max-width: 38ch`, so a long Artist · Song · Album doesn't push the lyrics to nothing. The lyrics column still takes its remaining flex space — when lyric text is short, the empty space between the lyric end and the metadata column is the layout's natural gap; when lyric text is long, it ellipsis-truncates first (preserving the metadata column's full width). In edit mode the metadata column is also a `data-tauri-drag-region`, so the user can grab the window from the new area too.
+
+  **Layouts touched:** `three_line` (default) and `single_line`. `full_page` is unchanged this release — it has no "right side" since the lyrics scroll vertically through the whole window.
+
+  **Implementation:** New `MetadataColumn`, `ProgressBar`, `SourceBadge` components and a `sourceLabel(appId, override)` helper in `src/Overlay.tsx`. New `progressTick` state + a `useState`-bound `setInterval(500ms)` whose only job is to force a re-render while `track.state === "playing"` — the bar itself computes interpolated position inline at render from `track.position_ms + (Date.now() - track.last_update_unix_ms)`. The `fmtMs` helper was already exported from `src/types.ts` (it powers the lyrics-fetching status line) and is reused here for the `m:ss` formatting. Bridge-source override prop (`source`) is plumbed through but currently passed `null` everywhere — surfacing the bridge label ("pandora-web" / "pandora-desktop") through to the badge requires a Rust change to add a `bridge_source` field on `CurrentTrack`, which is deferred to a follow-up. For now the badge reflects the OS-reported app (so Pandora-in-Chrome shows `CHROME`, Pandora desktop shows `PANDORA` via its package name).
+
 ## [0.11.8] - 2026-05-22
 
 ### Fixed

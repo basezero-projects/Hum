@@ -14,6 +14,7 @@ import type {
   TextAlign,
   WordSpan,
 } from "./types";
+import { fmtMs } from "./types";
 
 const DEFAULT_SETTINGS: Settings = {
   last_mode: "edit",
@@ -101,6 +102,15 @@ export default function Overlay() {
     | { phase: "ready"; version: string }
     | { phase: "error"; message: string }
   >({ phase: "idle" });
+  // Coarse re-render trigger for the progress bar / time readout.
+  // Position interpolation is computed in render from
+  // `track.position_ms + (Date.now() - track.last_update_unix_ms)` while
+  // playing; this counter just causes a re-render twice a second so the
+  // bar visibly advances between server-pushed `timeline-changed` ticks
+  // (which arrive every 2 s and would otherwise leave the bar frozen).
+  // The value itself is never read — only the state change triggers
+  // re-render — so we don't destructure it.
+  const [, setProgressTick] = useState<number>(0);
 
   // Refs hold the hot-loop data so the rAF closure stays stable across
   // re-renders. Events update these AND the React state.
@@ -321,6 +331,19 @@ export default function Overlay() {
     window.addEventListener("resize", handler);
     return () => window.removeEventListener("resize", handler);
   }, []);
+
+  // 500ms progress-bar repaint. Cheap because the bar reads
+  // `track.position_ms + Date.now()-last_update` inline at render and only
+  // the metadata column subtree re-renders meaningfully. Stops the tick
+  // when nothing's playing so a paused/closed app doesn't cost a wake
+  // every half-second indefinitely.
+  useEffect(() => {
+    if (!track || track.state !== "playing") return;
+    const id = window.setInterval(() => {
+      setProgressTick((n) => (n + 1) | 0);
+    }, 500);
+    return () => window.clearInterval(id);
+  }, [track?.state, track?.last_update_unix_ms]);
 
   // updateStateRef so the tray-event listener (single closure created
   // on mount) can read the latest state without re-subscribing every
@@ -748,6 +771,17 @@ export default function Overlay() {
               <TranslationRow text={translationText} settings={settingsForRender} textShadow={effectiveTextShadow} />
             ) : null}
           </div>
+          {track ? (
+            <MetadataColumn
+              track={track}
+              textColor={effectiveTextColor}
+              textColorDim={effectiveTextColorDim}
+              textShadow={effectiveTextShadow}
+              source={null}
+              alignRight
+              dragRegion={isEdit}
+            />
+          ) : null}
         </div>
       </div>
     );
@@ -832,6 +866,17 @@ export default function Overlay() {
             <LineRow text={next?.text} kind="next" dragRegion={isEdit} settings={settingsForRender} textShadow={effectiveTextShadow} />
           )}
           </div>
+          {track ? (
+            <MetadataColumn
+              track={track}
+              textColor={effectiveTextColor}
+              textColorDim={effectiveTextColorDim}
+              textShadow={effectiveTextShadow}
+              source={null}
+              alignRight
+              dragRegion={isEdit}
+            />
+          ) : null}
         </div>
       </div>
     </div>
@@ -1010,6 +1055,272 @@ function ArtistInfoDot({ onClick }: { onClick: () => void }) {
       </span>
     </div>
   );
+}
+
+// Right-side metadata column shown to the right of the lyrics in
+// three_line + single_line layouts. Stacks three small read-only widgets:
+//   1. Artist · Song · Album text line (top, dim, ellipsis on overflow)
+//   2. Interpolated progress bar with `m:ss / m:ss` time readout (middle)
+//   3. Source badge — short label of which app the metadata is coming
+//      from (bottom, e.g. "Spotify", "Chrome", "Pandora")
+// All driven entirely by data already on the snapshot — no Rust changes.
+function MetadataColumn({
+  track,
+  textColor,
+  textColorDim,
+  textShadow,
+  source,
+  alignRight,
+  dragRegion,
+}: {
+  track: CurrentTrack;
+  textColor: string;
+  textColorDim: string;
+  textShadow: string;
+  // Optional override: when set, prefer this label over source_app_id
+  // (e.g. lyrics resolver knows the bridge surfaced "pandora-web" but
+  // the OS still says "Chrome.exe"). Falsy → fall back to source_app_id.
+  source: string | null;
+  alignRight: boolean;
+  dragRegion: boolean;
+}) {
+  const hasMeta =
+    !!(track.title || track.artist || track.album);
+  const hasDuration = track.duration_ms > 0;
+  if (!hasMeta && !hasDuration) return null;
+  const metaParts = [track.artist, track.title, track.album]
+    .map((s) => (s || "").trim())
+    .filter((s) => s.length > 0);
+  const metaText = metaParts.join(" · ");
+  const drag = dragRegion ? { "data-tauri-drag-region": true } : {};
+
+  return (
+    <div
+      {...drag}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: alignRight ? "flex-end" : "flex-start",
+        justifyContent: "center",
+        gap: 4,
+        flexShrink: 0,
+        // Cap width so a really long Artist · Song · Album doesn't push
+        // the lyrics column to nothing. ~38ch is enough for "Artist Name
+        // · Song Title · Album Name" without being a wall.
+        maxWidth: "38ch",
+        minWidth: 0,
+        // Self-applied gap so the column always has breathing room from
+        // the lyrics column regardless of whether the row's flex `gap`
+        // is set (the row's gap is only 14 when album art is showing —
+        // 0 otherwise — and would otherwise sit flush against the lyrics).
+        marginLeft: 14,
+      }}
+    >
+      {metaText ? (
+        <div
+          title={metaText}
+          style={{
+            fontSize: 11,
+            letterSpacing: 0.3,
+            color: textColorDim,
+            textShadow,
+            opacity: 0.85,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            maxWidth: "100%",
+            textAlign: alignRight ? "right" : "left",
+          }}
+        >
+          {metaText}
+        </div>
+      ) : null}
+      {hasDuration ? (
+        <ProgressBar
+          track={track}
+          textColor={textColor}
+          textColorDim={textColorDim}
+          textShadow={textShadow}
+        />
+      ) : null}
+      <SourceBadge
+        appId={track.source_app_id}
+        overrideLabel={source}
+        textColorDim={textColorDim}
+        textShadow={textShadow}
+      />
+    </div>
+  );
+}
+
+// Interpolates `track.position_ms` against wall time while playing so the
+// bar visibly advances between server-pushed `timeline-changed` ticks
+// (which arrive every 2 s). Re-renders every 500 ms via the parent's
+// progressTick state — no internal timer here.
+function ProgressBar({
+  track,
+  textColor,
+  textColorDim,
+  textShadow,
+}: {
+  track: CurrentTrack;
+  textColor: string;
+  textColorDim: string;
+  textShadow: string;
+}) {
+  const duration = Math.max(0, track.duration_ms);
+  // Wall-clock interpolation while playing; freeze at the reported
+  // position when paused / stopped / etc. so the bar doesn't keep
+  // creeping forward after a pause.
+  let pos = track.position_ms;
+  if (track.state === "playing") {
+    pos = track.position_ms + Math.max(0, Date.now() - track.last_update_unix_ms);
+  }
+  pos = Math.max(0, Math.min(duration || pos, pos));
+  const pct = duration > 0 ? Math.min(1, pos / duration) : 0;
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "stretch",
+        gap: 3,
+        width: 160,
+        maxWidth: "100%",
+      }}
+    >
+      <div
+        style={{
+          fontSize: 10,
+          color: textColorDim,
+          textShadow,
+          fontVariantNumeric: "tabular-nums",
+          letterSpacing: 0.4,
+          opacity: 0.85,
+          display: "flex",
+          justifyContent: "space-between",
+        }}
+      >
+        <span>{fmtMs(pos)}</span>
+        <span>{fmtMs(duration)}</span>
+      </div>
+      <div
+        style={{
+          position: "relative",
+          height: 2,
+          width: "100%",
+          background: "rgba(127,127,127,0.35)",
+          borderRadius: 1,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            bottom: 0,
+            width: `${(pct * 100).toFixed(2)}%`,
+            background: textColor,
+            opacity: 0.85,
+            transition: "width 480ms linear",
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+// Small "where is this playing from" chip. Maps a Windows SMTC app ID
+// (usually a .exe or a UWP package family name) to a short human label.
+// Bridge-resolved tracks (Pandora web/desktop) pass an explicit override.
+function SourceBadge({
+  appId,
+  overrideLabel,
+  textColorDim,
+  textShadow,
+}: {
+  appId: string | null;
+  overrideLabel: string | null;
+  textColorDim: string;
+  textShadow: string;
+}) {
+  const label = sourceLabel(appId, overrideLabel);
+  if (!label) return null;
+  return (
+    <div
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        padding: "1px 6px",
+        borderRadius: 8,
+        fontSize: 9.5,
+        letterSpacing: 0.6,
+        textTransform: "uppercase",
+        color: textColorDim,
+        textShadow,
+        background: "rgba(127,127,127,0.18)",
+        border: "1px solid rgba(127,127,127,0.25)",
+        opacity: 0.85,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </div>
+  );
+}
+
+// Maps SMTC's `source_app_id` (varies wildly: `Spotify.exe`,
+// `chrome.exe`, AUMIDs like `SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify`,
+// MS Store package family names for Pandora desktop, etc.) to a short
+// display label. Returns null when there's nothing recognizable — the
+// badge hides entirely rather than showing a raw path.
+function sourceLabel(appId: string | null, override: string | null): string | null {
+  // Bridge label wins outright when it's surfaced (e.g. "pandora-web" /
+  // "pandora-desktop" — the lyrics resolver knows the bridge identified
+  // the song even though the OS reports Chrome.exe).
+  if (override) {
+    const o = override.toLowerCase();
+    if (o.includes("pandora")) return "Pandora";
+    if (o.includes("youtube")) return "YouTube";
+    if (o.includes("spotify")) return "Spotify";
+    if (o.includes("itunes") || o.includes("apple")) return "Apple Music";
+  }
+  if (!appId) return null;
+  const a = appId.toLowerCase();
+  if (a.includes("spotify")) return "Spotify";
+  if (a.includes("pandora")) return "Pandora";
+  if (a.includes("itunes")) return "iTunes";
+  // Apple Music app on Windows reports as "AppleInc.AppleMusicWin_..." AUMID.
+  if (a.includes("applemusic") || a.includes("apple.music")) return "Apple Music";
+  if (a.includes("youtubemusic") || a.includes("youtube music")) return "YouTube Music";
+  if (a.includes("tidal")) return "Tidal";
+  if (a.includes("amazonmusic") || a.includes("amazon music")) return "Amazon Music";
+  if (a.includes("deezer")) return "Deezer";
+  if (a.includes("vlc")) return "VLC";
+  if (a.includes("foobar")) return "foobar2000";
+  if (a.includes("musicbee")) return "MusicBee";
+  if (a.includes("winamp")) return "Winamp";
+  if (a.includes("wmplayer") || a.includes("windowsmedia")) return "Windows Media";
+  if (a.includes("groove")) return "Groove";
+  if (a.endsWith("chrome.exe") || a.includes("chrome")) return "Chrome";
+  if (a.endsWith("msedge.exe") || a.includes("edge")) return "Edge";
+  if (a.endsWith("firefox.exe") || a.includes("firefox")) return "Firefox";
+  if (a.endsWith("brave.exe") || a.includes("brave")) return "Brave";
+  if (a.includes("opera")) return "Opera";
+  if (a.includes("arc")) return "Arc";
+  if (a.includes("zen")) return "Zen";
+  // Last resort: take the basename, strip .exe, capitalize first char.
+  const last = appId.split(/[\\/]/).pop() ?? appId;
+  const stripped = last.replace(/\.exe$/i, "").trim();
+  if (!stripped) return null;
+  // AUMID format usually has `Publisher.AppName_hash!Entry`; pull AppName.
+  const aumid = /^[^.]+\.([^_!]+)/.exec(stripped);
+  const name = (aumid?.[1] ?? stripped).slice(0, 14);
+  if (!name) return null;
+  return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 // Brief 1.5s indicator showing the current lyric-offset nudge value when
