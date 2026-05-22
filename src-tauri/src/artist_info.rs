@@ -403,6 +403,72 @@ fn days_from_epoch(year: i64, month: i64, day: i64) -> Option<i64> {
     Some(days)
 }
 
+// ── TheAudioDB ─────────────────────────────────────────────────────────────
+
+/// TheAudioDB free tier uses the public test key "2".
+/// Documented at https://www.theaudiodb.com/api_guide.php
+#[allow(dead_code)]
+const THEAUDIODB_BASE: &str = "https://www.theaudiodb.com/api/v1/json/2/search.php";
+
+/// Fetch artist thumbnail from TheAudioDB and return as `data:image/jpeg;base64,...`.
+/// Returns None on any failure.
+#[allow(dead_code)]
+pub(crate) async fn fetch_theaudiodb_photo(
+    client: &reqwest::Client,
+    artist: &str,
+) -> Option<String> {
+    use base64::Engine;
+
+    let url = reqwest::Url::parse_with_params(THEAUDIODB_BASE, &[("s", artist)]).ok()?;
+
+    let resp = match client.get(url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[artist_info] theaudiodb search failed: {e}");
+            return None;
+        }
+    };
+    let body: serde_json::Value = match resp.json().await {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("[artist_info] theaudiodb JSON parse failed: {e}");
+            return None;
+        }
+    };
+
+    let thumb_url = body
+        .get("artists")?
+        .as_array()?
+        .first()?
+        .get("strArtistThumb")?
+        .as_str()?;
+
+    if thumb_url.is_empty() {
+        return None;
+    }
+
+    let bytes = match client.get(thumb_url).send().await {
+        Ok(r) => match r.bytes().await {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("[artist_info] theaudiodb image bytes failed: {e}");
+                return None;
+            }
+        },
+        Err(e) => {
+            eprintln!("[artist_info] theaudiodb image fetch failed: {e}");
+            return None;
+        }
+    };
+
+    if bytes.is_empty() {
+        return None;
+    }
+
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Some(format!("data:image/jpeg;base64,{b64}"))
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
