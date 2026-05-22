@@ -1,4 +1,4 @@
-//! Artist-info fetch chain: Last.fm bio + similar, Bandsintown events,
+//! Artist-info fetch chain: Last.fm bio + similar, Ticketmaster events,
 //! TheAudioDB photo, MusicBrainz mbid fallback. Disk cache + in-flight dedup.
 
 use anyhow::Result;
@@ -128,7 +128,7 @@ pub async fn fetch_artist_info(artist: &str) -> Result<ArtistInfo> {
     let (bio, similar, events, photo) = tokio::join!(
         fetch_lastfm_bio(&client, artist),
         fetch_lastfm_similar(&client, artist),
-        fetch_bandsintown_events(&client, artist),
+        fetch_ticketmaster_events(&client, artist),
         fetch_theaudiodb_photo(&client, artist),
     );
     Ok(ArtistInfo {
@@ -269,27 +269,51 @@ pub(crate) async fn fetch_lastfm_similar(
         .unwrap_or_default()
 }
 
-// ── Bandsintown ────────────────────────────────────────────────────────────
+// ── Ticketmaster Discovery ─────────────────────────────────────────────────
 
-/// Placeholder. Wes registers at https://bandsintown.com/partners before
-/// public release and replaces this with the live partner app_id.
+/// Placeholder. Wes signs up at https://developer-acct.ticketmaster.com/user/register
+/// and replaces this with the live API key. Free tier: 5 req/sec, 5K req/day.
 #[allow(dead_code)]
-const BANDSINTOWN_APP_ID: &str = "hum-dev";
+const TICKETMASTER_API_KEY: &str = "PLACEHOLDER_REPLACE_BEFORE_LAUNCH";
+#[allow(dead_code)]
+const TICKETMASTER_DISCOVERY_BASE: &str =
+    "https://app.ticketmaster.com/discovery/v2/events.json";
 
-/// Fetch upcoming events from Bandsintown.
-/// Returns events sorted by date ascending. Returns empty Vec on any failure.
+/// Impact (impact.com) affiliate URL prefix template. Wes signs up at
+/// https://impact.com, joins the Ticketmaster brand, and gets a tracking
+/// link template. Until set, ticket URLs route through Ticketmaster
+/// directly without affiliate credit. Format expected:
+/// `https://{subdomain}.go.impact.com/c/{publisher-id}/{campaign-id}/`
+/// then append the URL-encoded target.
 #[allow(dead_code)]
-pub(crate) async fn fetch_bandsintown_events(
+const IMPACT_AFFILIATE_PREFIX: Option<&str> = None;
+
+fn wrap_with_impact_affiliate(url: &str) -> String {
+    match IMPACT_AFFILIATE_PREFIX {
+        Some(prefix) => format!("{}{}", prefix, urlencoding::encode(url)),
+        None => url.to_string(),
+    }
+}
+
+/// Fetch upcoming events for an artist from Ticketmaster Discovery API.
+/// Returns events sorted by date ascending, validated against the requested
+/// artist name (case-insensitive primary-attraction match). Empty Vec on
+/// any failure or no-match.
+#[allow(dead_code)]
+pub(crate) async fn fetch_ticketmaster_events(
     client: &reqwest::Client,
     artist: &str,
 ) -> Vec<TourDate> {
-    // Artist name goes in the URL path, not as a query param.
-    let encoded = urlencoding::encode(artist);
-    let url_str = format!(
-        "https://rest.bandsintown.com/artists/{}/events?app_id={}",
-        encoded, BANDSINTOWN_APP_ID
-    );
-    let url = match reqwest::Url::parse(&url_str) {
+    let url = match reqwest::Url::parse_with_params(
+        TICKETMASTER_DISCOVERY_BASE,
+        &[
+            ("apikey", TICKETMASTER_API_KEY),
+            ("keyword", artist),
+            ("classificationName", "music"),
+            ("size", "50"),
+            ("sort", "date,asc"),
+        ],
+    ) {
         Ok(u) => u,
         Err(_) => return vec![],
     };
@@ -297,86 +321,113 @@ pub(crate) async fn fetch_bandsintown_events(
     let resp = match client.get(url).send().await {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[artist_info] bandsintown fetch failed: {e}");
+            eprintln!("[artist_info] ticketmaster fetch failed: {e}");
             return vec![];
         }
     };
 
-    let events: serde_json::Value = match resp.json().await {
-        Ok(v) => v,
+    let body: serde_json::Value = match resp.json().await {
+        Ok(b) => b,
         Err(e) => {
-            eprintln!("[artist_info] bandsintown JSON parse failed: {e}");
+            eprintln!("[artist_info] ticketmaster JSON parse failed: {e}");
             return vec![];
         }
     };
 
-    let arr = match events.as_array() {
-        Some(a) => a,
+    let events = match body
+        .get("_embedded")
+        .and_then(|e| e.get("events"))
+        .and_then(|e| e.as_array())
+    {
+        Some(arr) => arr,
         None => return vec![],
     };
 
-    let mut dates: Vec<TourDate> = arr
+    let mut dates: Vec<TourDate> = events
         .iter()
-        .filter_map(parse_bandsintown_event)
+        .filter_map(|event| parse_ticketmaster_event(event, artist))
         .collect();
 
-    // Sort ascending by date.
     dates.sort_by_key(|d| d.date_unix_ms);
     dates
 }
 
-fn parse_bandsintown_event(event: &serde_json::Value) -> Option<TourDate> {
-    // datetime: ISO8601, e.g. "2026-03-05T20:00:00" (no timezone offset).
-    let datetime_str = event.get("datetime")?.as_str()?;
-    let date_unix_ms = parse_iso8601_to_unix_ms(datetime_str)?;
+fn parse_ticketmaster_event(event: &serde_json::Value, requested_artist: &str) -> Option<TourDate> {
+    // Validate: primary attraction must match requested artist (case-insensitive).
+    let primary_attraction = event
+        .get("_embedded")
+        .and_then(|e| e.get("attractions"))
+        .and_then(|a| a.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|a| a.get("name"))
+        .and_then(|n| n.as_str())
+        .unwrap_or("");
 
-    let venue = event.get("venue")?;
+    if !primary_attraction.eq_ignore_ascii_case(requested_artist) {
+        return None;
+    }
+
+    // Date: combine localDate + localTime, parse via existing helper.
+    let start = event.get("dates")?.get("start")?;
+    let local_date = start.get("localDate")?.as_str()?;
+    let local_time = start
+        .get("localTime")
+        .and_then(|t| t.as_str())
+        .unwrap_or("00:00:00");
+    let combined = format!("{}T{}", local_date, local_time);
+    let date_unix_ms = parse_iso8601_to_unix_ms(&combined)?;
+
+    // Venue + location.
+    let venue = event
+        .get("_embedded")
+        .and_then(|e| e.get("venues"))
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first());
+
     let city = venue
-        .get("city")
-        .and_then(|v| v.as_str())
+        .and_then(|v| v.get("city"))
+        .and_then(|c| c.get("name"))
+        .and_then(|n| n.as_str())
         .unwrap_or("")
         .to_string();
     let region = venue
-        .get("region")
-        .and_then(|v| v.as_str())
+        .and_then(|v| v.get("state"))
+        .and_then(|s| s.get("stateCode"))
+        .and_then(|sc| sc.as_str())
         .unwrap_or("")
         .to_string();
     let country = venue
-        .get("country")
-        .and_then(|v| v.as_str())
+        .and_then(|v| v.get("country"))
+        .and_then(|c| c.get("countryCode"))
+        .and_then(|cc| cc.as_str())
         .unwrap_or("")
         .to_string();
     let venue_name = venue
-        .get("name")
-        .and_then(|v| v.as_str())
+        .and_then(|v| v.get("name"))
+        .and_then(|n| n.as_str())
         .unwrap_or("")
         .to_string();
 
-    // Find the first "Tickets" offer.
-    let mut ticket_url: Option<String> = None;
-    let mut status = TicketStatus::Available;
-    if let Some(offers) = event.get("offers").and_then(|o| o.as_array()) {
-        for offer in offers {
-            let offer_type = offer.get("type").and_then(|t| t.as_str()).unwrap_or("");
-            if offer_type.eq_ignore_ascii_case("Tickets") {
-                if let Some(url) = offer.get("url").and_then(|u| u.as_str()) {
-                    if !url.is_empty() {
-                        ticket_url = Some(url.to_string());
-                    }
-                }
-                let offer_status = offer
-                    .get("status")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("available");
-                status = if offer_status.eq_ignore_ascii_case("available") {
-                    TicketStatus::Available
-                } else {
-                    TicketStatus::SoldOut
-                };
-                break;
-            }
-        }
-    }
+    // Ticket URL: wrap with Impact affiliate prefix (no-op until configured).
+    let raw_url = event.get("url").and_then(|u| u.as_str()).unwrap_or("");
+    let ticket_url = if raw_url.is_empty() {
+        None
+    } else {
+        Some(wrap_with_impact_affiliate(raw_url))
+    };
+
+    // Status mapping. Anything but "onsale" treated as SoldOut for UX simplicity.
+    let status_code = event
+        .get("dates")
+        .and_then(|d| d.get("status"))
+        .and_then(|s| s.get("code"))
+        .and_then(|c| c.as_str())
+        .unwrap_or("onsale");
+    let status = if status_code.eq_ignore_ascii_case("onsale") {
+        TicketStatus::Available
+    } else {
+        TicketStatus::SoldOut
+    };
 
     Some(TourDate {
         date_unix_ms,
@@ -389,7 +440,7 @@ fn parse_bandsintown_event(event: &serde_json::Value) -> Option<TourDate> {
     })
 }
 
-/// Parse Bandsintown ISO8601 datetime string to Unix milliseconds.
+/// Parse ISO8601 datetime string to Unix milliseconds.
 /// Input format: "2026-03-05T20:00:00" (no timezone; treat as UTC for sorting purposes).
 fn parse_iso8601_to_unix_ms(s: &str) -> Option<i64> {
     // Split at 'T' and parse manually: "2026-03-05" and "20:00:00".
@@ -540,7 +591,7 @@ pub(crate) async fn resolve_mbid_musicbrainz(
 /// and a 10s timeout covering all artist-info requests.
 pub(crate) fn build_artist_info_http_client() -> Result<reqwest::Client> {
     let client = reqwest::Client::builder()
-        .user_agent("hum/0.11.0 (https://github.com/basezero-projects/Hum; itswesl3y@gmail.com)")
+        .user_agent("hum/0.11.1 (https://github.com/basezero-projects/Hum; itswesl3y@gmail.com)")
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
     Ok(client)
@@ -698,7 +749,7 @@ impl ArtistInfoCache {
 
             // Tour dates stale — refetch only events; keep everything else.
             let client = build_artist_info_http_client()?;
-            let new_events = fetch_bandsintown_events(&client, artist).await;
+            let new_events = fetch_ticketmaster_events(&client, artist).await;
             let mut updated = cached.clone();
             updated.tour_dates = Some(new_events);
             updated.tour_dates_fetched_at_unix_ms = Some(now);
@@ -727,11 +778,11 @@ impl ArtistInfoCache {
         let (bio_result, similar_result, events_result, photo_result) = tokio::join!(
             fetch_lastfm_bio(&client, artist),
             fetch_lastfm_similar(&client, artist),
-            fetch_bandsintown_events(&client, artist),
+            fetch_ticketmaster_events(&client, artist),
             fetch_theaudiodb_photo(&client, artist),
         );
 
-        // MusicBrainz fallback: only if Last.fm bio failed AND Bandsintown
+        // MusicBrainz fallback: only if Last.fm bio failed AND Ticketmaster
         // returned something (so we know the artist actually exists).
         let (final_bio, mbid) = if bio_result.is_none() && !events_result.is_empty() {
             let mbid_opt = resolve_mbid_musicbrainz(&client, artist).await;
@@ -958,5 +1009,127 @@ mod tests {
     #[test]
     fn strip_html_empty() {
         assert_eq!(strip_html(""), "");
+    }
+
+    // ── Ticketmaster parser tests ──────────────────────────────────────────
+
+    fn make_tm_event(attraction: &str, local_date: &str, local_time: Option<&str>, status: &str, url: &str) -> serde_json::Value {
+        serde_json::json!({
+            "name": format!("{} at Venue", attraction),
+            "url": url,
+            "dates": {
+                "start": {
+                    "localDate": local_date,
+                    "localTime": local_time.unwrap_or("20:00:00")
+                },
+                "status": { "code": status }
+            },
+            "_embedded": {
+                "attractions": [{ "name": attraction }],
+                "venues": [{
+                    "name": "Mission Ballroom",
+                    "city": { "name": "Denver" },
+                    "state": { "stateCode": "CO" },
+                    "country": { "countryCode": "US", "name": "United States Of America" }
+                }]
+            }
+        })
+    }
+
+    #[test]
+    fn tm_parse_accepts_case_insensitive_match() {
+        let event = make_tm_event("Shaggy", "2026-03-05", Some("20:00:00"), "onsale", "https://www.ticketmaster.com/event/abc");
+        let result = parse_ticketmaster_event(&event, "shaggy");
+        assert!(result.is_some(), "should match case-insensitively");
+    }
+
+    #[test]
+    fn tm_parse_rejects_non_matching_artist() {
+        let event = make_tm_event("Shaggy", "2026-03-05", Some("20:00:00"), "onsale", "https://www.ticketmaster.com/event/abc");
+        let result = parse_ticketmaster_event(&event, "Bob Marley");
+        assert!(result.is_none(), "should reject mismatched artist");
+    }
+
+    #[test]
+    fn tm_parse_missing_local_time_defaults_midnight() {
+        // Event without localTime — should default to 00:00:00 and still parse.
+        let event = serde_json::json!({
+            "name": "Shaggy at Venue",
+            "url": "https://www.ticketmaster.com/event/abc",
+            "dates": {
+                "start": { "localDate": "2026-03-05" },
+                "status": { "code": "onsale" }
+            },
+            "_embedded": {
+                "attractions": [{ "name": "Shaggy" }],
+                "venues": [{
+                    "name": "Mission Ballroom",
+                    "city": { "name": "Denver" },
+                    "state": { "stateCode": "CO" },
+                    "country": { "countryCode": "US" }
+                }]
+            }
+        });
+        let result = parse_ticketmaster_event(&event, "Shaggy");
+        assert!(result.is_some());
+        let tour_date = result.unwrap();
+        // 2026-03-05T00:00:00 UTC → verify date is parseable (non-zero ms).
+        assert!(tour_date.date_unix_ms > 0);
+    }
+
+    #[test]
+    fn tm_parse_missing_venue_returns_empty_strings() {
+        // Event with no _embedded.venues — should still return Some with empty location.
+        let event = serde_json::json!({
+            "name": "Shaggy at Venue",
+            "url": "https://www.ticketmaster.com/event/abc",
+            "dates": {
+                "start": { "localDate": "2026-03-05", "localTime": "20:00:00" },
+                "status": { "code": "onsale" }
+            },
+            "_embedded": {
+                "attractions": [{ "name": "Shaggy" }],
+                "venues": []
+            }
+        });
+        let result = parse_ticketmaster_event(&event, "Shaggy");
+        assert!(result.is_some());
+        let tour_date = result.unwrap();
+        assert_eq!(tour_date.city, "");
+        assert_eq!(tour_date.venue, "");
+    }
+
+    #[test]
+    fn tm_wrap_affiliate_noop_when_none() {
+        let url = "https://www.ticketmaster.com/event/abc123";
+        assert_eq!(wrap_with_impact_affiliate(url), url);
+    }
+
+    #[test]
+    fn tm_status_onsale_available() {
+        let event = make_tm_event("Shaggy", "2026-03-05", Some("20:00:00"), "onsale", "https://www.ticketmaster.com/event/abc");
+        let result = parse_ticketmaster_event(&event, "Shaggy").unwrap();
+        assert_eq!(result.status, TicketStatus::Available);
+    }
+
+    #[test]
+    fn tm_status_cancelled_soldsout() {
+        let event = make_tm_event("Shaggy", "2026-03-05", Some("20:00:00"), "cancelled", "https://www.ticketmaster.com/event/abc");
+        let result = parse_ticketmaster_event(&event, "Shaggy").unwrap();
+        assert_eq!(result.status, TicketStatus::SoldOut);
+    }
+
+    #[test]
+    fn tm_status_offsale_soldsout() {
+        let event = make_tm_event("Shaggy", "2026-03-05", Some("20:00:00"), "offsale", "https://www.ticketmaster.com/event/abc");
+        let result = parse_ticketmaster_event(&event, "Shaggy").unwrap();
+        assert_eq!(result.status, TicketStatus::SoldOut);
+    }
+
+    #[test]
+    fn tm_status_postponed_soldsout() {
+        let event = make_tm_event("Shaggy", "2026-03-05", Some("20:00:00"), "postponed", "https://www.ticketmaster.com/event/abc");
+        let result = parse_ticketmaster_event(&event, "Shaggy").unwrap();
+        assert_eq!(result.status, TicketStatus::SoldOut);
     }
 }
