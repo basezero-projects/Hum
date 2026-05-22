@@ -130,6 +130,38 @@ fn compute_panel_position(app: &AppHandle) -> Result<(i32, i32)> {
 
 // ── Tauri commands ─────────────────────────────────────────────────────────
 
+/// Allowed URL hosts for ticket / artist links. Defends against cache-poisoning
+/// with malformed or malicious URLs.
+const TICKET_URL_WHITELIST: &[&str] = &[
+    "bandsintown.com",
+    "www.bandsintown.com",
+    "ticketmaster.com",
+    "www.ticketmaster.com",
+    "seatgeek.com",
+    "www.seatgeek.com",
+    "axs.com",
+    "www.axs.com",
+    "livenation.com",
+    "www.livenation.com",
+    "last.fm",
+    "www.last.fm",
+    "theaudiodb.com",
+    "www.theaudiodb.com",
+    "musicbrainz.org",
+    "www.musicbrainz.org",
+];
+
+#[tauri::command]
+pub fn open_ticket_url(url: String) -> Result<(), String> {
+    // Parse and whitelist-check the host.
+    let parsed = reqwest::Url::parse(&url).map_err(|e| format!("invalid URL: {e}"))?;
+    let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
+    if !TICKET_URL_WHITELIST.iter().any(|allowed| host == *allowed) {
+        return Err(format!("URL host '{host}' is not on the ticket link whitelist"));
+    }
+    opener::open(&url).map_err(|e| format!("open_ticket_url failed: {e}"))
+}
+
 #[tauri::command]
 pub async fn open_artist_panel_cmd(app: AppHandle) -> Result<(), String> {
     open_artist_panel(app).await.map_err(|e| e.to_string())
