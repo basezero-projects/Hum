@@ -42,7 +42,9 @@ use std::sync::Mutex;
 
 use anyhow::anyhow;
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
-use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, IsWindowVisible};
+use windows::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, GetWindowThreadProcessId, IsWindowVisible,
+};
 
 use crate::smtc::PlaybackState;
 use crate::web_bridge::{
@@ -183,10 +185,14 @@ impl WebPlayerProbe for PandoraDesktopProbe {
                 continue;
             };
 
-            // Read play/pause from the playback control bar's Play button.
-            // See `detect_playback_state` for the heuristic.
+            // Read play/pause: WASAPI peak meter first (canonical, works
+            // independent of Pandora's UIA hygiene), then fall back to
+            // UIA pattern reads if no audio session is found for this
+            // PID. Default to Playing if neither produces a verdict.
+            let pid = pid_for_window(hwnd);
             let detected_state =
-                detect_playback_state(&automation, &root).unwrap_or(PlaybackState::Playing);
+                detect_playback_state_with_audio(&automation, &root, pid)
+                    .unwrap_or(PlaybackState::Playing);
 
             let now_unix_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -217,6 +223,98 @@ impl WebPlayerProbe for PandoraDesktopProbe {
 /// `Some((title, artist, album))` once a track and artist are both found
 /// (album is best-effort — empty string when not present).
 ///
+/// Detect Pandora's play/pause state. Tries the canonical signal first
+/// (WASAPI audio session peak meter — works regardless of Pandora's UIA
+/// hygiene), falls back to UIA pattern reads if WASAPI fails to find a
+/// session for the PID.
+///
+/// `pid_hint` is the process ID of the Pandora window we're probing,
+/// used to scope the WASAPI session lookup. When `None`, only UIA is
+/// consulted.
+fn detect_playback_state_with_audio(
+    automation: &uiautomation::UIAutomation,
+    root: &uiautomation::UIElement,
+    pid_hint: Option<u32>,
+) -> Option<PlaybackState> {
+    // WASAPI first: peak meter is 0 when the session is silent (paused
+    // or muted), nonzero when audio is actively flowing. This is the
+    // signal iTunes/Spotify implicitly produce through SMTC; we're
+    // synthesizing the equivalent for an app that doesn't publish.
+    if let Some(pid) = pid_hint {
+        if let Some(silent) = is_process_audio_silent(pid) {
+            return Some(if silent {
+                PlaybackState::Paused
+            } else {
+                PlaybackState::Playing
+            });
+        }
+    }
+    detect_playback_state_via_uia(automation, root)
+}
+
+/// Walk WASAPI's audio sessions for the default render endpoint and check
+/// the peak meter of the session belonging to `pid`. Returns:
+/// - `Some(true)`  → session found, peak < threshold (paused/muted)
+/// - `Some(false)` → session found, peak >= threshold (actively playing)
+/// - `None`        → no session found for this pid, or COM failure
+fn is_process_audio_silent(pid: u32) -> Option<bool> {
+    use windows::core::Interface;
+    use windows::Win32::Media::Audio::Endpoints::IAudioMeterInformation;
+    use windows::Win32::Media::Audio::{
+        eMultimedia, eRender, IAudioSessionControl2, IAudioSessionEnumerator,
+        IAudioSessionManager2, IMMDeviceEnumerator, MMDeviceEnumerator,
+    };
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
+    };
+
+    // Anything below this peak amplitude (linear 0.0..1.0) we treat as
+    // silent. Pandora paused leaves the session in "Inactive" state with
+    // peak 0; even Windows mixer dithering well below this floor counts
+    // as silence in practice.
+    const SILENCE_FLOOR: f32 = 0.0001;
+
+    unsafe {
+        // CoInitializeEx is idempotent per-thread; ignore RPC_E_CHANGED_MODE
+        // (someone else already initialized this thread in a compatible
+        // apartment).
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+
+        let enumerator: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok()?;
+        let device = enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia).ok()?;
+        let session_mgr: IAudioSessionManager2 =
+            device.Activate(CLSCTX_ALL, None).ok()?;
+        let sessions: IAudioSessionEnumerator = session_mgr.GetSessionEnumerator().ok()?;
+
+        let count = sessions.GetCount().ok()?;
+        for i in 0..count {
+            let session = match sessions.GetSession(i) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let session2: IAudioSessionControl2 = match session.cast() {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let session_pid = match session2.GetProcessId() {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            if session_pid != pid {
+                continue;
+            }
+            let meter: IAudioMeterInformation = match session.cast() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let peak = meter.GetPeakValue().ok()?;
+            return Some(peak < SILENCE_FLOOR);
+        }
+        None
+    }
+}
+
 /// Detect Pandora's play/pause state by walking the UIA tree for the
 /// playback control bar's Play button. Strategy:
 ///
@@ -234,7 +332,7 @@ impl WebPlayerProbe for PandoraDesktopProbe {
 ///
 /// Returns `None` if no Play/Pause button can be found at all (we'll then
 /// default to `Playing` in the caller — same behavior as v0.11.4-v0.11.6).
-fn detect_playback_state(
+fn detect_playback_state_via_uia(
     automation: &uiautomation::UIAutomation,
     root: &uiautomation::UIElement,
 ) -> Option<PlaybackState> {
@@ -431,6 +529,19 @@ fn classify_pandora_url(url: &str) -> Option<PandoraUrlKind> {
         "AR" => Some(PandoraUrlKind::Artist),
         "AL" => Some(PandoraUrlKind::Album),
         _ => None,
+    }
+}
+
+/// Read the process ID owning `hwnd`. Returns `None` if the call fails or
+/// PID is zero. Used to scope WASAPI session lookups to the Pandora
+/// window we're probing.
+fn pid_for_window(hwnd: HWND) -> Option<u32> {
+    let mut pid: u32 = 0;
+    let _ = unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    if pid == 0 {
+        None
+    } else {
+        Some(pid)
     }
 }
 

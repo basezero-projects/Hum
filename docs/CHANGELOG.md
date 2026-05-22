@@ -6,6 +6,19 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.11.7] - 2026-05-22
+
+### Fixed
+- **Pandora pause now actually freezes the lyrics.** v0.11.6 attempted pause detection by reading the play button's `TogglePattern` from UIA, which turned out unreliable in practice — Pandora's React shell either doesn't expose the pattern at all or reports a stale value, so the bridge kept reporting `Playing` while audio was silent. Replaced with a WASAPI-based signal: query the Windows audio session for the Pandora.exe process and check the peak meter. Peak below `0.0001` (effectively silent) → `Paused`; nonzero → `Playing`. This is the same surface Windows itself uses to draw the per-app volume meter in the system mixer, so it tracks actual audio output rather than any app-published flag.
+
+  **Behavior:** Pause Pandora → within 2 seconds the bridge reports `Paused`, the snapshot's state flips to `paused`, and the overlay's wall-clock interpolation halts. Resume → the bridge re-anchors `period_start_unix_ms` to "now" and the cumulative played-ms keeps advancing from where it stopped. Track changes still reset cumulative to 0.
+
+  **Fallback:** WASAPI is the primary signal. If session enumeration fails to find a session for the Pandora PID (rare — would mean the app hasn't requested audio from the default render endpoint yet, e.g. during a cold start), the probe falls through to the prior UIA `TogglePattern` + Name-fallback logic. Worst case: bridge defaults to `Playing`, same as v0.11.4-v0.11.6 behavior.
+
+  **Implementation:** New `pandora_desktop::is_process_audio_silent(pid)` opens `MMDeviceEnumerator → eRender → eMultimedia` default endpoint, activates `IAudioSessionManager2`, enumerates `IAudioSessionEnumerator`, matches each session's `IAudioSessionControl2.GetProcessId()` against the Pandora window's owning PID, then casts the matching session to `IAudioMeterInformation` and reads `GetPeakValue()`. `detect_playback_state_with_audio` is the new entry point that tries WASAPI first, then falls back to the existing UIA helper (renamed to `detect_playback_state_via_uia`). New Cargo features: `Win32_Media_Audio`, `Win32_Media_Audio_Endpoints`, `Win32_System_Com`.
+
+  Verified: 67 unit tests pass; cargo check + build clean.
+
 ## [0.11.6] - 2026-05-22
 
 ### Fixed

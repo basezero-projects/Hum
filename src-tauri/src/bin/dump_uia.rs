@@ -347,6 +347,8 @@ fn format_elem_oneline(elem: &UIElement) -> String {
         .unwrap_or_else(|_| "?".into());
     let val = read_value_pattern(elem).unwrap_or_default();
     let lct = elem.get_localized_control_type().unwrap_or_default();
+    let toggle = read_toggle_state(elem);
+    let help = elem.get_help_text().unwrap_or_default();
 
     let mut parts = vec![format!("[{ct}]")];
     if !lct.is_empty() && lct.to_lowercase() != ct.to_lowercase() {
@@ -364,7 +366,25 @@ fn format_elem_oneline(elem: &UIElement) -> String {
     if !val.is_empty() {
         parts.push(format!("Value={val:?}"));
     }
+    if let Some(t) = toggle {
+        parts.push(format!("Toggle={t}"));
+    }
+    if !help.is_empty() {
+        parts.push(format!("Help={help:?}"));
+    }
     parts.join("  ")
+}
+
+fn read_toggle_state(elem: &UIElement) -> Option<&'static str> {
+    use uiautomation::patterns::UITogglePattern;
+    use uiautomation::types::ToggleState;
+    let p = elem.get_pattern::<UITogglePattern>().ok()?;
+    let s = p.get_toggle_state().ok()?;
+    Some(match s {
+        ToggleState::On => "On",
+        ToggleState::Off => "Off",
+        ToggleState::Indeterminate => "Indeterminate",
+    })
 }
 
 fn read_value_pattern(elem: &UIElement) -> Option<String> {
