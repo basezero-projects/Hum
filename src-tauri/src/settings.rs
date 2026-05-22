@@ -60,6 +60,9 @@ pub struct Settings {
     /// lyrics in their stream. Off by default — opens a TCP port.
     pub streamer_enabled: bool,
     pub streamer_port: u16,
+    /// When true, clicking album art (or the "•••" fallback dot) opens the
+    /// artist-info panel window.
+    pub show_artist_info_panel: bool,
     /// Windows 11 DWM backdrop applied to the overlay window.
     /// Persisted as snake_case string: "acrylic" | "mica" | "tabbed_mica" | "none".
     #[cfg(windows)]
@@ -98,6 +101,7 @@ impl Default for Settings {
             // 38247 chosen as an unused-by-known-services port. Users
             // can change in Settings if it conflicts with anything local.
             streamer_port: 38247,
+            show_artist_info_panel: true,
             #[cfg(windows)]
             window_backdrop: BackdropKind::Acrylic,
             #[cfg(not(windows))]

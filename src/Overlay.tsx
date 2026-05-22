@@ -37,6 +37,7 @@ const DEFAULT_SETTINGS: Settings = {
   auto_contrast: true,
   streamer_enabled: false,
   streamer_port: 38247,
+  show_artist_info_panel: true,
 };
 
 export default function Overlay() {

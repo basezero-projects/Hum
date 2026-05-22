@@ -43,6 +43,35 @@ export type Settings = {
   auto_contrast: boolean;
   streamer_enabled: boolean;
   streamer_port: number;
+  show_artist_info_panel: boolean;
+};
+
+export type TicketStatus = "available" | "sold_out";
+
+export type TourDate = {
+  date_unix_ms: number;
+  city: string;
+  region: string;
+  country: string;
+  venue: string;
+  ticket_url: string | null;
+  status: TicketStatus;
+};
+
+export type ArtistBio = {
+  text: string;
+  lastfm_url: string;
+};
+
+export type ArtistInfo = {
+  name: string;
+  slug: string;
+  bio: ArtistBio | null;
+  photo_data_url: string | null;
+  similar_artists: string[];
+  tour_dates: TourDate[];
+  mbid: string | null;
+  fetched_at_unix_ms: number;
 };
 
 export type WordSpan = { time_ms: number; text: string };
