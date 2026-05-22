@@ -18,4 +18,12 @@ export default defineConfig({
     hmr: host ? { protocol: "ws", host, port: 1421 } : undefined,
     watch: { ignored: ["**/src-tauri/**"] },
   },
+  build: {
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, "index.html"),
+        artistPanel: path.resolve(__dirname, "src/artist-panel/index.html"),
+      },
+    },
+  },
 });
