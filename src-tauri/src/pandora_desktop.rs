@@ -44,21 +44,101 @@ use anyhow::anyhow;
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, IsWindowVisible};
 
+use crate::smtc::PlaybackState;
 use crate::web_bridge::{
     read_process_name_for_window, read_window_title, WebBridgeTrack, WebPlayerProbe,
 };
 
-/// Per-track playback-start timestamp. Pandora doesn't expose the seek bar
-/// to UI Automation, so we can't read the *real* current position — instead
-/// we record the unix-ms when each new track was first seen and report
-/// elapsed-since-start as the position. Wrong if the user pauses (we keep
-/// advancing while audio is silent), but correct in the common play-through
-/// case, which is enough to make the lyrics overlay scroll roughly in sync.
+/// Per-track playback state tracker. Pandora doesn't expose the seek bar to
+/// UI Automation, so we can't read the *real* current position — instead
+/// we estimate by counting wall-clock ms while the play state is "Playing"
+/// and freezing the count while "Paused". Wrong when Hum joins mid-song
+/// (we'd report position 0 instead of wherever the user actually is), but
+/// correct for: tracks that play through from the start, track changes
+/// while Hum is open, and pause/resume cycles within a track.
+struct TrackPlayState {
+    /// `format!("{title}|{artist}")` of the active track.
+    key: String,
+    /// Total ms played BEFORE the current play period. Frozen while paused.
+    cumulative_ms: u64,
+    /// Unix epoch ms when the current play period started — or, while
+    /// paused, when the pause started (so it can be advanced forward on
+    /// resume without retroactively crediting paused time).
+    period_start_unix_ms: i64,
+    /// The play state at the end of the last poll.
+    state: PlaybackState,
+}
+
+static TRACK_PLAY: Mutex<Option<TrackPlayState>> = Mutex::new(None);
+
+/// Update the per-track state machine and return the position + state the
+/// bridge should report this poll. See `TrackPlayState` doc for the
+/// estimation rationale.
 ///
-/// Stored as `Some(("Track Title — Artist", start_unix_ms))`. The key is
-/// the artist|title pair so a back-to-back replay of the same song resets
-/// to position 0.
-static TRACK_START: Mutex<Option<(String, i64)>> = Mutex::new(None);
+/// State transitions (`prev -> curr`):
+/// - new track key       → reset, position = 0
+/// - Playing  → Playing  → position = cumulative + (now - period_start), no state mutation
+/// - Playing  → Paused   → cumulative += elapsed; period_start = now; freeze
+/// - Paused   → Playing  → period_start = now; resume advancing
+/// - Paused   → Paused   → position = cumulative (frozen)
+fn update_track_state(
+    track_key: String,
+    detected_state: PlaybackState,
+    now_unix_ms: i64,
+) -> (u64, PlaybackState) {
+    let mut guard = TRACK_PLAY.lock().expect("TRACK_PLAY mutex poisoned");
+
+    let needs_reset = match guard.as_ref() {
+        Some(s) => s.key != track_key,
+        None => true,
+    };
+    if needs_reset {
+        *guard = Some(TrackPlayState {
+            key: track_key,
+            cumulative_ms: 0,
+            period_start_unix_ms: now_unix_ms,
+            state: detected_state,
+        });
+        // Position 0 regardless of detected_state; cumulative starts fresh.
+        return (0, detected_state);
+    }
+
+    let s = guard.as_mut().expect("guard is Some after reset branch");
+    match (s.state, detected_state) {
+        (PlaybackState::Playing, PlaybackState::Playing) => {
+            let elapsed = (now_unix_ms - s.period_start_unix_ms).max(0) as u64;
+            (s.cumulative_ms + elapsed, PlaybackState::Playing)
+        }
+        (PlaybackState::Playing, PlaybackState::Paused) => {
+            let elapsed = (now_unix_ms - s.period_start_unix_ms).max(0) as u64;
+            s.cumulative_ms = s.cumulative_ms.saturating_add(elapsed);
+            s.state = PlaybackState::Paused;
+            s.period_start_unix_ms = now_unix_ms;
+            (s.cumulative_ms, PlaybackState::Paused)
+        }
+        (PlaybackState::Paused, PlaybackState::Playing) => {
+            s.state = PlaybackState::Playing;
+            s.period_start_unix_ms = now_unix_ms;
+            (s.cumulative_ms, PlaybackState::Playing)
+        }
+        (PlaybackState::Paused, PlaybackState::Paused) => {
+            (s.cumulative_ms, PlaybackState::Paused)
+        }
+        // Any other detected_state (Unknown/Stopped/Changing/Closed/Opened)
+        // is treated as "no change to the timer" but the reported state
+        // tracks the detection so suppressing logic can act on it.
+        _ => {
+            let reported_position = match s.state {
+                PlaybackState::Playing => {
+                    let elapsed = (now_unix_ms - s.period_start_unix_ms).max(0) as u64;
+                    s.cumulative_ms.saturating_add(elapsed)
+                }
+                _ => s.cumulative_ms,
+            };
+            (reported_position, s.state)
+        }
+    }
+}
 
 pub struct PandoraDesktopProbe;
 
@@ -103,28 +183,19 @@ impl WebPlayerProbe for PandoraDesktopProbe {
                 continue;
             };
 
+            // Read play/pause from the playback control bar's Play button.
+            // See `detect_playback_state` for the heuristic.
+            let detected_state =
+                detect_playback_state(&automation, &root).unwrap_or(PlaybackState::Playing);
+
             let now_unix_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or(0);
 
-            // Position = ms elapsed since this track first appeared in the
-            // UIA tree. New track → reset to 0 + record start time.
             let track_key = format!("{title}|{artist}");
-            let position_ms = {
-                let mut guard = TRACK_START.lock().expect("TRACK_START mutex poisoned");
-                match guard.as_ref() {
-                    Some((prev_key, start_ms)) if prev_key == &track_key => {
-                        // Same track as last poll — report elapsed.
-                        (now_unix_ms - start_ms).max(0) as u64
-                    }
-                    _ => {
-                        // First sighting of this track (or a new one) — anchor.
-                        *guard = Some((track_key, now_unix_ms));
-                        0
-                    }
-                }
-            };
+            let (position_ms, reported_state) =
+                update_track_state(track_key, detected_state, now_unix_ms);
 
             return Ok(Some(WebBridgeTrack {
                 title,
@@ -133,6 +204,7 @@ impl WebPlayerProbe for PandoraDesktopProbe {
                 source: self.name().to_string(),
                 last_seen_unix_ms: now_unix_ms,
                 position_ms: Some(position_ms),
+                state: Some(reported_state),
             }));
         }
 
@@ -145,6 +217,85 @@ impl WebPlayerProbe for PandoraDesktopProbe {
 /// `Some((title, artist, album))` once a track and artist are both found
 /// (album is best-effort — empty string when not present).
 ///
+/// Detect Pandora's play/pause state by walking the UIA tree for the
+/// playback control bar's Play button. Strategy:
+///
+/// 1. Find a `Button` element whose `Name` is exactly `"Play"` or `"Pause"`.
+///    Pandora's React shell sometimes labels it statically as `"Play"`
+///    regardless of state, so step 2 is the more reliable signal.
+/// 2. Try to read the `TogglePattern` from that button. Pandora's button
+///    sets `aria-pressed`, which UIA maps to `ToggleState::On` when
+///    *playing* (button is "engaged") and `Off` when *paused*. Returns
+///    `Some(Playing)` for `On`, `Some(Paused)` for `Off`.
+/// 3. If TogglePattern isn't available, fall back to interpreting the
+///    button's `Name`: `"Pause"` => Playing (clicking would pause),
+///    `"Play"` => Paused (clicking would play). When Name is static this
+///    is wrong, but it's the best we have without the pattern.
+///
+/// Returns `None` if no Play/Pause button can be found at all (we'll then
+/// default to `Playing` in the caller — same behavior as v0.11.4-v0.11.6).
+fn detect_playback_state(
+    automation: &uiautomation::UIAutomation,
+    root: &uiautomation::UIElement,
+) -> Option<PlaybackState> {
+    use uiautomation::patterns::UITogglePattern;
+    use uiautomation::types::ToggleState;
+
+    const MAX_NODES: usize = 10_000;
+    let walker = automation.get_control_view_walker().ok()?;
+
+    let mut stack: Vec<uiautomation::UIElement> = vec![root.clone()];
+    let mut visited = 0_usize;
+    let mut name_only_hit: Option<PlaybackState> = None;
+
+    while let Some(node) = stack.pop() {
+        visited += 1;
+        if visited > MAX_NODES {
+            break;
+        }
+
+        if let Ok(name) = node.get_name() {
+            let trimmed = name.trim();
+            if trimmed.eq_ignore_ascii_case("Play") || trimmed.eq_ignore_ascii_case("Pause") {
+                // Prefer the TogglePattern signal — Name is often static.
+                if let Ok(toggle) = node.get_pattern::<UITogglePattern>() {
+                    if let Ok(state) = toggle.get_toggle_state() {
+                        return Some(match state {
+                            ToggleState::On => PlaybackState::Playing,
+                            ToggleState::Off => PlaybackState::Paused,
+                            ToggleState::Indeterminate => PlaybackState::Unknown,
+                        });
+                    }
+                }
+                // No toggle — fall back to interpreting the Name as the
+                // *action* the button performs. Record but keep walking
+                // in case another button has the pattern.
+                if name_only_hit.is_none() {
+                    name_only_hit = Some(if trimmed.eq_ignore_ascii_case("Pause") {
+                        PlaybackState::Playing
+                    } else {
+                        PlaybackState::Paused
+                    });
+                }
+            }
+        }
+
+        if let Ok(first) = walker.get_first_child(&node) {
+            let mut cur = Some(first);
+            let mut kids: Vec<uiautomation::UIElement> = Vec::new();
+            while let Some(c) = cur {
+                kids.push(c.clone());
+                cur = walker.get_next_sibling(&c).ok();
+            }
+            for c in kids.into_iter().rev() {
+                stack.push(c);
+            }
+        }
+    }
+
+    name_only_hit
+}
+
 /// Pulled out as a free function so the URL-classification logic (the
 /// stable part) can be unit-tested without UIA.
 fn extract_track_from_uia_subtree(

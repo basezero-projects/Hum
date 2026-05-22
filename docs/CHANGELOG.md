@@ -6,6 +6,28 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.11.6] - 2026-05-22
+
+### Fixed
+- **Pandora pause is now respected; another player taking over (Spotify / iTunes / YouTube via Chrome) properly switches the overlay.** Follow-up to v0.11.5: pausing the Pandora desktop app no longer leaves the lyrics scrolling forward as if the song were still playing, and starting a different player while Pandora is paused now correctly switches Hum to the new source.
+
+  **What you'll see when you pause Pandora:** Hum freezes the current lyric line in place. Wall-clock interpolation stops advancing position because the snapshot's playback state is now `Paused`. On resume, lyrics pick up from the same line — the bridge tracks cumulative played-ms (excluding paused stretches) per track, so pause/resume cycles don't desync.
+
+  **What you'll see when you start a different player while Pandora is paused:** Hum switches to the new player within ~2 seconds. Spotify, iTunes, YouTube-in-Chrome — anything that publishes to Windows SMTC with `state == Playing` — now wins over a paused-but-still-running Pandora desktop.
+
+  **What you'll see when you start a different player while Pandora is still playing:** Same — the new player wins. SMTC-publishing apps always beat Pandora desktop because their published position is real-time and accurate, while Hum's Pandora-desktop position is necessarily estimated (Pandora's seek bar is not exposed to UI Automation).
+
+  **Known limitation that did NOT change:** the position estimate for Pandora desktop is still anchored at "the first time Hum saw this track in the UIA tree." If Hum starts after a Pandora track has already been playing for a minute, the lyrics will scroll from 0:00 instead of from 1:00. This is unsolvable without a seek-bar surface; switching tracks resets the anchor to 0 and re-syncs.
+
+  **Implementation:**
+
+  - `pandora_desktop::detect_playback_state` walks the Pandora window's UIA subtree for a `Button` named `"Play"` or `"Pause"`. Tries `TogglePattern.get_toggle_state()` first (Pandora's React shell sets `aria-pressed` which UIA exposes via that pattern); falls back to interpreting the button's `Name` (`"Pause"` → playing, `"Play"` → paused). When the button can't be found at all, the probe defaults to `Playing`.
+  - `pandora_desktop::update_track_state` is a per-track state machine (`Mutex<Option<TrackPlayState>>`) holding `(track_key, cumulative_ms, period_start_unix_ms, last_state)`. Transitions: `Playing→Paused` adds elapsed ms to cumulative and freezes; `Paused→Playing` re-anchors `period_start`; `Playing→Playing` reports `cumulative + (now - period_start)`. New track keys reset everything to 0.
+  - `WebBridgeTrack` gains `state: Option<crate::smtc::PlaybackState>`. The Pandora desktop probe sets it from `update_track_state`; the Chrome `PandoraProbe` leaves it `None` because SMTC's state is already correct for Pandora-in-Chrome.
+  - `blend_bridge_into_snapshot` now copies the probe's state into the snapshot (was previously hard-forced to `Playing`).
+  - `bridge_is_authoritative` returns `false` when the bridge's state is `Paused`, so SMTC's emits can take over for the new player.
+  - `smtc::emit_blended` now has a 3-tier priority: (1) SMTC with `state == Playing` and non-empty title wins outright, (2) bridge takes over when authoritative, (3) raw SMTC otherwise. The bridge worker's parallel `timeline-changed` emit also yields when SMTC is actively playing, so the two streams don't race.
+
 ## [0.11.5] - 2026-05-22
 
 ### Fixed

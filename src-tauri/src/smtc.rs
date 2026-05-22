@@ -152,17 +152,46 @@ pub fn start(
     });
 }
 
-/// Emit a Tauri event with the snapshot fields overridden by any fresh
-/// web_bridge entry (Pandora desktop, etc.). Used in place of bare
-/// `app.emit("X", &snap)` so SMTC's own emits don't race against the
-/// bridge's emits — when Pandora desktop is publishing, iTunes' stale
-/// timeline-changed events would otherwise yank the frontend's track /
-/// position back to iTunes between bridge polls.
+/// Emit a Tauri event, but defer to the web_bridge worker when a
+/// position-supplying probe (Pandora desktop, etc.) is currently
+/// authoritative. Without this, SMTC's own `timeline-changed` emits —
+/// fired whenever iTunes' COM session pings — would yank the frontend's
+/// track/position back to iTunes between bridge polls, causing the
+/// "lyrics jumping around" failure mode that v0.11.4/v0.11.5 still
+/// showed.
+///
+/// Suppression model: when `bridge_is_authoritative` returns true, this
+/// function returns without emitting. The bridge worker emits its own
+/// `timeline-changed` events every 2 s, so the frontend stays in sync
+/// without our help. When bridge data is `None` (Pandora.exe closed) or
+/// truly stale beyond the authority window, we fall through to the
+/// regular blended emit — keeping the original "Pandora-in-Chrome
+/// bridge fills in title; SMTC owns position" behavior for the
+/// `PandoraProbe` (Chrome) case.
 async fn emit_blended(app: &AppHandle, event: &str, mut snap: CurrentTrack) {
     use tauri::Manager;
+    // Tier 1: SMTC has a real actively-playing session (Spotify / iTunes /
+    // YouTube via Chrome / etc.). Real publishers always beat the bridge's
+    // estimated position. Emit raw and skip the bridge entirely so a paused
+    // Pandora session can't keep eating the airwaves.
+    let smtc_actively_playing =
+        snap.state == PlaybackState::Playing && !snap.title.trim().is_empty();
+    if smtc_actively_playing {
+        let _ = app.emit(event, &snap);
+        return;
+    }
+    // Tier 2: defer to the bridge if a position-supplying probe is currently
+    // authoritative (Pandora desktop with Hyperlinks present + state =
+    // Playing). The bridge worker emits its own timeline-changed events, so
+    // suppress ours to avoid two streams racing into the frontend.
     if let Some(bridge_state) = app.try_state::<crate::web_bridge::SharedWebBridge>() {
+        if crate::web_bridge::bridge_is_authoritative(bridge_state.inner()).await {
+            return;
+        }
         crate::web_bridge::blend_bridge_into_snapshot(&mut snap, bridge_state.inner()).await;
     }
+    // Tier 3: nothing claimed authority — emit whatever SMTC has (possibly
+    // stale, possibly Paused/Stopped from an idle app).
     let _ = app.emit(event, &snap);
 }
 

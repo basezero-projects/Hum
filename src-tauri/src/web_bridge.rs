@@ -54,13 +54,30 @@ pub struct WebBridgeTrack {
     /// interpolation.
     #[serde(default)]
     pub position_ms: Option<u64>,
+    /// Playback state — `Playing` or `Paused`. `None` when the probe can't
+    /// determine state (Chrome `PandoraProbe` relies on SMTC for this).
+    /// When `Some`, the frontend's wall-clock interpolation only advances
+    /// position while `Playing`, so a paused Pandora desktop session
+    /// freezes the lyrics where they are instead of scrolling forward.
+    #[serde(default)]
+    pub state: Option<crate::smtc::PlaybackState>,
 }
 
 pub type SharedWebBridge = Arc<RwLock<Option<WebBridgeTrack>>>;
 
 /// Freshness window for bridge data, in ms. Bridge entries older than this
-/// are treated as not present.
+/// are no longer used to override snapshot fields in `blend_bridge_into_snapshot`.
 pub const BRIDGE_FRESHNESS_MS: i64 = 5_000;
+
+/// Authority window for bridge data, in ms. A position-supplying bridge
+/// entry within this window keeps SMTC's parallel emits *suppressed*, so
+/// the frontend doesn't flicker back to whatever app SMTC happens to be
+/// publishing during a single-poll miss (ad breaks transiently collapse
+/// Pandora's now-playing Hyperlinks). When the bridge worker observes
+/// its probe is truly gone (Pandora.exe closed), it clears the cache to
+/// `None`, which trips `bridge_is_authoritative` immediately regardless
+/// of this window.
+pub const BRIDGE_AUTHORITY_MS: i64 = 60_000;
 
 /// Mutate `snap` in place so its `title`/`artist`/`album` reflect a fresh
 /// bridge entry (if one exists), and — when the bridge probe supplied
@@ -94,13 +111,46 @@ pub async fn blend_bridge_into_snapshot(
     if let Some(pos) = bt.position_ms {
         snap.position_ms = pos;
         snap.last_update_unix_ms = bt.last_seen_unix_ms;
-        // Probes that supply position only do so when the app is actively
-        // playing (Pandora desktop's read() returns None when no /TR
-        // Hyperlink is present, which covers ad breaks and the splash
-        // state). Force the snapshot's state to Playing so the frontend's
-        // interpolation advances.
-        snap.state = crate::smtc::PlaybackState::Playing;
+        // The probe's reported state drives the snapshot's state. Frontend
+        // interpolation only advances while Playing; when the probe reports
+        // Paused, lyrics freeze where they are instead of scrolling forward.
+        if let Some(s) = bt.state {
+            snap.state = s;
+        }
     }
+}
+
+/// Returns `true` when a position-supplying bridge probe is currently
+/// authoritative over the snapshot — meaning SMTC's parallel emits should
+/// be suppressed so they don't flicker the frontend back to whatever app
+/// SMTC happens to be publishing.
+///
+/// "Authoritative" = the cache has an entry whose `position_ms` is `Some`
+/// (the probe is actively supplying position) AND whose `last_seen_unix_ms`
+/// is within `BRIDGE_AUTHORITY_MS`. Uses a much longer window than
+/// `blend_bridge_into_snapshot` so a single missed poll doesn't drop
+/// authority mid-song.
+pub async fn bridge_is_authoritative(bridge: &SharedWebBridge) -> bool {
+    let bridge_track = { bridge.read().await.clone() };
+    let Some(bt) = bridge_track else { return false };
+    if bt.position_ms.is_none() {
+        // Bridge entry exists but the probe didn't supply position (e.g.
+        // the Chrome-side PandoraProbe relies on SMTC for position).
+        // SMTC's own emits stay the authoritative source in that case.
+        return false;
+    }
+    // A paused bridge probe yields authority so another SMTC source can
+    // take over. Without this, pausing Pandora.exe and starting Spotify
+    // would leave Hum stuck on the (paused) Pandora track because SMTC's
+    // Spotify emits would still be suppressed.
+    if matches!(bt.state, Some(crate::smtc::PlaybackState::Paused)) {
+        return false;
+    }
+    let now_unix_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    (now_unix_ms - bt.last_seen_unix_ms) < BRIDGE_AUTHORITY_MS
 }
 
 /// A probe for one specific web player that doesn't expose Media Session
@@ -451,10 +501,11 @@ impl WebPlayerProbe for PandoraProbe {
                 album,
                 source: self.name().to_string(),
                 last_seen_unix_ms: now_unix_ms,
-                // Pandora-in-Chrome leaves position to SMTC — Chrome
-                // itself publishes timeline data, so SMTC's position is
-                // already correct for this case.
+                // Pandora-in-Chrome leaves position + state to SMTC —
+                // Chrome itself publishes timeline data, so SMTC's
+                // position/state are already correct for this case.
                 position_ms: None,
+                state: None,
             }));
         }
 
@@ -520,7 +571,19 @@ pub fn start(app: AppHandle, snapshot: SharedSnapshot, shared: SharedWebBridge) 
                             // timeline. Emit a synthesized timeline-changed
                             // event after blending; the frontend already
                             // wires this to applyTrack().
-                            if has_bridge_position {
+                            //
+                            // BUT — yield to SMTC when SMTC has a real
+                            // actively-playing session (Spotify / iTunes /
+                            // etc.). Their published position is real;
+                            // ours is estimated. Emitting our timeline-
+                            // changed in that case would flicker the
+                            // frontend between two sources every 2s.
+                            let smtc_actively_playing = {
+                                let s = snapshot.read().await;
+                                matches!(s.state, crate::smtc::PlaybackState::Playing)
+                                    && !s.title.trim().is_empty()
+                            };
+                            if has_bridge_position && !smtc_actively_playing {
                                 let mut blended = { snapshot.read().await.clone() };
                                 blend_bridge_into_snapshot(&mut blended, &shared).await;
                                 let _ = app.emit("timeline-changed", &blended);
