@@ -70,6 +70,11 @@ pub struct CurrentTrack {
     /// e.g. "Spotify.exe", "308046B0AF4A39CB" (Firefox AUMID), etc. Useful for
     /// debugging / future per-source behavior.
     pub source_app_id: Option<String>,
+    /// True when the current source is playing an ad break (Spotify's
+    /// "Advertisement" track, Pandora's ad interlude, YouTube's ad rolls).
+    /// Drives the overlay to render the SYVR promo card in place of lyrics.
+    #[serde(default)]
+    pub ad_active: bool,
 }
 
 pub type SharedSnapshot = Arc<RwLock<CurrentTrack>>;

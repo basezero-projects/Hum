@@ -1697,6 +1697,8 @@ function statusLine(l: CurrentLyrics, t: CurrentTrack | null): string {
       return "♪ unsynced lyrics (no per-line timing)";
     case "error":
       return "♪ error fetching lyrics";
+    case "ad":
+      return "♪ ad break — promo coming in Task 5";
     case "idle":
       return t?.title ? `♪ ${t.title}` : "♪";
     default:

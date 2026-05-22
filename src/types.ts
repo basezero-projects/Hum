@@ -14,6 +14,7 @@ export type CurrentTrack = {
     | "playing"
     | "paused";
   source_app_id: string | null;
+  ad_active: boolean;
 };
 
 export type OverlayMode = "edit" | "locked" | "ghost";
@@ -88,7 +89,8 @@ export type LyricsStatus =
   | "instrumental"
   | "not_found"
   | "unsupported"
-  | "error";
+  | "error"
+  | "ad";
 
 export type CurrentLyrics = {
   track_key: string;

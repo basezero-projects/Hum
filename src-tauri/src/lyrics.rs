@@ -111,6 +111,8 @@ pub enum Status {
     NotFound,
     Unsupported,
     Error,
+    /// Source is playing an ad break — overlay swaps to the SYVR promo card.
+    Ad,
 }
 
 pub type SharedLyrics = Arc<RwLock<CurrentLyrics>>;

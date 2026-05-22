@@ -6,6 +6,13 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.12.0-rc1] - 2026-05-22
+
+### Added (internal plumbing — no user-visible behavior yet)
+- **`ad_active` flag on the current-track snapshot + `Status::Ad` lyrics variant.** No user-visible behavior in this commit — this is the data-path scaffolding for the ad-break detection feature (spec: `docs/superpowers/specs/2026-05-22-hum-ad-break-detection-design.md`). When `lyrics.status === "ad"`, the overlay currently shows a temporary "♪ ad break — promo coming in Task 5" status line; the real SYVR promo card lands in a follow-up commit.
+
+  **Implementation:** Added `ad_active: bool` (defaults false, serde `#[serde(default)]` for backwards compatibility) to `CurrentTrack` in `src-tauri/src/smtc.rs`. Added `Ad` variant to the `Status` enum in `src-tauri/src/lyrics.rs`. Mirrored both in `src/types.ts`. Frontend `statusLine` function has a placeholder branch for `"ad"`.
+
 ## [0.11.10] - 2026-05-22
 
 ### Fixed
