@@ -469,6 +469,47 @@ pub(crate) async fn fetch_theaudiodb_photo(
     Some(format!("data:image/jpeg;base64,{b64}"))
 }
 
+// ── MusicBrainz ────────────────────────────────────────────────────────────
+
+/// Resolve a MusicBrainz artist ID (mbid) by name.
+/// Only invoked on the Last.fm fallback path (error 6 + Bandsintown hit).
+/// MusicBrainz TOS requires a User-Agent with contact info; the HTTP client
+/// built in Task 6 sets that header. Returns None on any failure.
+#[allow(dead_code)]
+pub(crate) async fn resolve_mbid_musicbrainz(
+    client: &reqwest::Client,
+    artist: &str,
+) -> Option<String> {
+    let query = format!("artist:{}", urlencoding::encode(artist));
+    let url = reqwest::Url::parse_with_params(
+        "https://musicbrainz.org/ws/2/artist",
+        &[("query", query.as_str()), ("limit", "1"), ("fmt", "json")],
+    )
+    .ok()?;
+
+    let resp = match client.get(url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[artist_info] musicbrainz fetch failed: {e}");
+            return None;
+        }
+    };
+    let body: serde_json::Value = match resp.json().await {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("[artist_info] musicbrainz JSON parse failed: {e}");
+            return None;
+        }
+    };
+
+    body.get("artists")?
+        .as_array()?
+        .first()?
+        .get("id")?
+        .as_str()
+        .map(|s| s.to_string())
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
