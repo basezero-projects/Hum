@@ -84,6 +84,13 @@ const REFRESH_INTERVAL_HOURS: u64 = 6;
 /// A source of promos. Phase 2 introduces UserLocalSource alongside this.
 pub trait PromoSource: Send + Sync {
     fn name(&self) -> &'static str;
+    /// Returns a snapshot of the current pool.
+    ///
+    /// **WARNING:** Concrete implementations may use `block_on` internally
+    /// (e.g. `SyvrRemoteSource`'s pool lives behind a `tokio::sync::RwLock`).
+    /// Calling this from a Tokio async context will panic at runtime.
+    /// From async code, use the implementor's async accessor instead
+    /// (e.g. [`SyvrRemoteSource::promos_async`]).
     fn promos(&self) -> Vec<Promo>;
 }
 
@@ -196,6 +203,12 @@ impl SyvrRemoteSource {
 
 impl PromoSource for SyvrRemoteSource {
     fn name(&self) -> &'static str { "syvr-remote" }
+
+    /// **WARNING:** Uses `block_on` internally — calling from inside a
+    /// Tokio runtime panics. Use [`Self::promos_async`] from async contexts.
+    /// Today no production code calls this method; the trait impl is kept
+    /// so the type can satisfy `dyn PromoSource` for future synchronous
+    /// consumers (e.g. CLI tooling).
     fn promos(&self) -> Vec<Promo> {
         // Block briefly on the async read. The pool is small, contention
         // is negligible, and pick_next_promo is called once per ad break
