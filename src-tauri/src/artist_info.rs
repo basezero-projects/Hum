@@ -271,10 +271,11 @@ pub(crate) async fn fetch_lastfm_similar(
 
 // ── Ticketmaster Discovery ─────────────────────────────────────────────────
 
-/// Placeholder. Wes signs up at https://developer-acct.ticketmaster.com/user/register
-/// and replaces this with the live API key. Free tier: 5 req/sec, 5K req/day.
+/// Ticketmaster Discovery API consumer key (SYVR-App, approved 2026-05-22).
+/// Free tier: 5 req/sec, 5K req/day. Rate-limit identifier, not an auth secret —
+/// embedded in the binary per Ticketmaster's documented intended use.
 #[allow(dead_code)]
-const TICKETMASTER_API_KEY: &str = "PLACEHOLDER_REPLACE_BEFORE_LAUNCH";
+const TICKETMASTER_API_KEY: &str = "GQbGNt5UBoE0RdMMCDB9IAplTcjEeA6A";
 #[allow(dead_code)]
 const TICKETMASTER_DISCOVERY_BASE: &str =
     "https://app.ticketmaster.com/discovery/v2/events.json";
