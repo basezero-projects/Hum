@@ -24,6 +24,7 @@ mod lyrics;
 mod mode;
 mod settings;
 mod streamer;
+mod artist_info;
 
 #[cfg(windows)]
 use smtc::{AlbumArtPayload, CurrentTrack, SharedAlbumArt, SharedSnapshot};
