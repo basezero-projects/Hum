@@ -119,6 +119,132 @@ pub async fn fetch_artist_info(_artist: &str) -> Result<ArtistInfo> {
     todo!("implemented in Task 6")
 }
 
+// ── Last.fm ────────────────────────────────────────────────────────────────
+
+/// Register a free API account at https://www.last.fm/api before public release.
+/// Embedding a static key is the documented intended use (rate-limit identifier,
+/// not an auth secret).
+#[allow(dead_code)]
+const LASTFM_API_KEY: &str = "PLACEHOLDER_REPLACE_BEFORE_LAUNCH";
+#[allow(dead_code)]
+const LASTFM_BASE: &str = "https://ws.audioscrobbler.com/2.0/";
+
+/// Fetch artist bio from Last.fm artist.getInfo.
+/// Returns None on artist-not-found (error 6), network failure, or missing fields.
+#[allow(dead_code)]
+pub(crate) async fn fetch_lastfm_bio(
+    client: &reqwest::Client,
+    artist: &str,
+) -> Option<ArtistBio> {
+    let url = reqwest::Url::parse_with_params(
+        LASTFM_BASE,
+        &[
+            ("method", "artist.getInfo"),
+            ("artist", artist),
+            ("api_key", LASTFM_API_KEY),
+            ("format", "json"),
+        ],
+    )
+    .ok()?;
+
+    let resp = client.get(url).send().await.ok()?;
+    let body: serde_json::Value = resp.json().await.ok()?;
+
+    // Error 6 = artist not found; error 26 = suspended key. Both → None.
+    if body.get("error").is_some() {
+        eprintln!(
+            "[artist_info] lastfm getInfo error: {}",
+            body.get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("unknown")
+        );
+        return None;
+    }
+
+    let artist_obj = body.get("artist")?;
+    let raw_bio = artist_obj
+        .get("bio")?
+        .get("summary")?
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    let lastfm_url = artist_obj
+        .get("url")?
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    if lastfm_url.is_empty() {
+        return None;
+    }
+
+    let mut bio_text = strip_html(&raw_bio);
+
+    // Truncate to last sentence boundary before 1500 chars.
+    if bio_text.len() > 1500 {
+        // Find last period, ?, or ! before position 1500.
+        let cutoff = bio_text[..1500]
+            .rfind(['.', '?', '!'])
+            .map(|i| i + 1)
+            .unwrap_or(1500);
+        bio_text.truncate(cutoff);
+        bio_text = bio_text.trim_end().to_string();
+    }
+
+    if bio_text.is_empty() {
+        return None;
+    }
+
+    Some(ArtistBio { text: bio_text, lastfm_url })
+}
+
+/// Fetch similar artists from Last.fm artist.getSimilar (top 8).
+/// Returns an empty Vec on any failure.
+#[allow(dead_code)]
+pub(crate) async fn fetch_lastfm_similar(
+    client: &reqwest::Client,
+    artist: &str,
+) -> Vec<String> {
+    let url = match reqwest::Url::parse_with_params(
+        LASTFM_BASE,
+        &[
+            ("method", "artist.getSimilar"),
+            ("artist", artist),
+            ("api_key", LASTFM_API_KEY),
+            ("limit", "8"),
+            ("format", "json"),
+        ],
+    ) {
+        Ok(u) => u,
+        Err(_) => return vec![],
+    };
+
+    let resp = match client.get(url).send().await {
+        Ok(r) => r,
+        Err(_) => return vec![],
+    };
+    let body: serde_json::Value = match resp.json().await {
+        Ok(b) => b,
+        Err(_) => return vec![],
+    };
+
+    if body.get("error").is_some() {
+        return vec![];
+    }
+
+    body.get("similarartists")
+        .and_then(|sa| sa.get("artist"))
+        .and_then(|arr| arr.as_array())
+        .map(|artists| {
+            artists
+                .iter()
+                .filter_map(|a| a.get("name")?.as_str().map(|s| s.to_string()))
+                .take(8)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
