@@ -61,6 +61,17 @@ pub struct WebBridgeTrack {
     /// freezes the lyrics where they are instead of scrolling forward.
     #[serde(default)]
     pub state: Option<crate::smtc::PlaybackState>,
+    /// Set by probes that can detect an ad break (Pandora desktop /
+    /// Pandora web). When true, `blend_bridge_into_snapshot` flips
+    /// `snap.ad_active = true`. `position_ms` / `duration_ms` still
+    /// reflect ad timing when present.
+    #[serde(default)]
+    pub is_ad: bool,
+    /// Ad (or probe-supplied) track duration in ms. When `Some`, overrides
+    /// the SMTC-reported `snap.duration_ms`. Used by Pandora desktop ads
+    /// to surface the countdown-derived duration for the progress bar.
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
 }
 
 pub type SharedWebBridge = Arc<RwLock<Option<WebBridgeTrack>>>;
@@ -101,6 +112,26 @@ pub async fn blend_bridge_into_snapshot(
     if now_unix_ms - bt.last_seen_unix_ms >= BRIDGE_FRESHNESS_MS {
         return;
     }
+    // Ad-break path: empty title is expected (no track to display).
+    // Set the ad flag and timing fields, then return — don't overwrite
+    // title/artist/album with empty strings (the snapshot retains whatever
+    // the last real track was, which is fine since the overlay shows the
+    // promo card, not metadata, during ads).
+    if bt.is_ad {
+        snap.ad_active = true;
+        if let Some(pos) = bt.position_ms {
+            snap.position_ms = pos;
+            snap.last_update_unix_ms = bt.last_seen_unix_ms;
+        }
+        if let Some(dur) = bt.duration_ms {
+            snap.duration_ms = dur;
+        }
+        if let Some(s) = bt.state {
+            snap.state = s;
+        }
+        return;
+    }
+
     if bt.title.trim().is_empty() {
         return;
     }
@@ -117,6 +148,9 @@ pub async fn blend_bridge_into_snapshot(
         if let Some(s) = bt.state {
             snap.state = s;
         }
+    }
+    if let Some(dur) = bt.duration_ms {
+        snap.duration_ms = dur;
     }
 }
 
@@ -506,6 +540,8 @@ impl WebPlayerProbe for PandoraProbe {
                 // position/state are already correct for this case.
                 position_ms: None,
                 state: None,
+                is_ad: false,
+                duration_ms: None,
             }));
         }
 

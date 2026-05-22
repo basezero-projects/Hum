@@ -6,6 +6,13 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.12.0-rc7] - 2026-05-22
+
+### Added
+- **Pandora desktop ad-break detection.** When the Pandora Microsoft Store app plays an ad break, Hum now switches the overlay to the SYVR promo card and shows the ad's countdown in the progress bar (when the countdown widget is readable from the UIA tree). Detection: the existing DFS-walk of Pandora's accessibility tree no longer requires `/artist/...TR{id}` Hyperlinks — when none are present but the window is still visible, the probe declares an ad break and looks for the player's countdown text (matches `M:SS`) to surface as ad position + duration.
+
+  **Implementation:** New `classify_pandora_state` helper in `src-tauri/src/pandora_desktop.rs` that combines URL collection with countdown parsing into a single decision struct (`PandoraStateResult { is_ad, countdown_seconds }`). New `collect_pandora_uia_data` DFS function collects both the Pandora Hyperlink URLs and any countdown-shaped text node (`^\d+:\d{2}$` via cached `OnceLock<Regex>`) in one pass. `WebBridgeTrack` gained `is_ad: bool` + `duration_ms: Option<u64>` fields. `blend_bridge_into_snapshot` maps both onto the snapshot via a fast ad-path that bypasses the title-empty guard. Countdown parse fallback: when the countdown can't be read, ad duration defaults to 30 seconds and position stays 0 (progress bar shows 0% — documented limitation). Five unit tests cover the classifier in `pandora_desktop::ad_detection_tests`. Manual live verification skipped — no Pandora Free available; classifier verified independently via unit tests.
+
 ## [0.12.0-rc6] - 2026-05-22
 
 ### Added

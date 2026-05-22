@@ -38,9 +38,10 @@
 //! renders the now-playing block before any "Recently Played" / artist-bio /
 //! album-details Hyperlinks in document order.
 
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use anyhow::anyhow;
+use regex::Regex;
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowThreadProcessId, IsWindowVisible,
@@ -179,11 +180,11 @@ impl WebPlayerProbe for PandoraDesktopProbe {
                 Err(_) => continue,
             };
 
-            let Some((title, artist, album)) =
-                extract_track_from_uia_subtree(&automation, &root)
-            else {
-                continue;
-            };
+            // Collect all Pandora URLs + countdown text in one DFS pass.
+            let (urls, countdown) = collect_pandora_uia_data(&automation, &root);
+
+            // Classify: ad or normal track?
+            let state_result = classify_pandora_state(&urls, countdown.as_deref());
 
             // Read play/pause: WASAPI peak meter first (canonical, works
             // independent of Pandora's UIA hygiene), then fall back to
@@ -199,6 +200,37 @@ impl WebPlayerProbe for PandoraDesktopProbe {
                 .map(|d| d.as_millis() as i64)
                 .unwrap_or(0);
 
+            if state_result.is_ad {
+                // Simple approach: duration = countdown_seconds (what the
+                // countdown shows right now). This means duration decreases
+                // over the ad — position stays 0 (progress bar at 0%).
+                // The AD BREAK badge still fires correctly. Documented in
+                // commit message. Full initial-duration caching deferred to
+                // a future task if Wes wants accurate progress.
+                let dur_ms = state_result
+                    .countdown_seconds
+                    .map(|s| s * 1_000)
+                    .unwrap_or(30_000); // 30s fallback when countdown unreadable
+                return Ok(Some(WebBridgeTrack {
+                    title: String::new(),
+                    artist: String::new(),
+                    album: String::new(),
+                    source: "pandora-desktop".into(),
+                    last_seen_unix_ms: now_unix_ms,
+                    position_ms: Some(0),
+                    state: Some(detected_state),
+                    is_ad: true,
+                    duration_ms: Some(dur_ms),
+                }));
+            }
+
+            // Normal track path — use the URL-extracted title/artist/album.
+            let Some((title, artist, album)) =
+                extract_track_from_uia_subtree(&automation, &root)
+            else {
+                continue;
+            };
+
             let track_key = format!("{title}|{artist}");
             let (position_ms, reported_state) =
                 update_track_state(track_key, detected_state, now_unix_ms);
@@ -211,6 +243,8 @@ impl WebPlayerProbe for PandoraDesktopProbe {
                 last_seen_unix_ms: now_unix_ms,
                 position_ms: Some(position_ms),
                 state: Some(reported_state),
+                is_ad: false,
+                duration_ms: None,
             }));
         }
 
@@ -394,6 +428,77 @@ fn detect_playback_state_via_uia(
     name_only_hit
 }
 
+/// Walk the UIA subtree and collect:
+/// 1. All Hyperlink `Value` URLs (for track/artist/album classification).
+/// 2. The first text node whose `Name` matches `^\d+:\d{2}$` (countdown
+///    widget shown during ads, e.g. "0:23").
+///
+/// Returns `(urls, countdown_text)`. The caller passes these to
+/// `classify_pandora_state` to decide ad vs. normal-track.
+fn collect_pandora_uia_data(
+    automation: &uiautomation::UIAutomation,
+    root: &uiautomation::UIElement,
+) -> (Vec<String>, Option<String>) {
+    static COUNTDOWN_RE: OnceLock<Regex> = OnceLock::new();
+    let countdown_re = COUNTDOWN_RE.get_or_init(|| {
+        Regex::new(r"^\d+:\d{2}$").expect("countdown regex is valid")
+    });
+
+    const MAX_NODES: usize = 10_000;
+    let walker = match automation.get_control_view_walker() {
+        Ok(w) => w,
+        Err(_) => return (Vec::new(), None),
+    };
+
+    let mut urls: Vec<String> = Vec::new();
+    let mut countdown: Option<String> = None;
+
+    let mut stack: Vec<uiautomation::UIElement> = vec![root.clone()];
+    let mut visited = 0_usize;
+
+    while let Some(node) = stack.pop() {
+        visited += 1;
+        if visited > MAX_NODES {
+            eprintln!(
+                "[pandora_desktop] collect_uia_data hit MAX_NODES={MAX_NODES}"
+            );
+            break;
+        }
+
+        // Collect Hyperlink URLs (track/artist/album classification).
+        if let Some(value) = read_value_pattern(&node) {
+            if classify_pandora_url(&value).is_some() {
+                urls.push(value);
+            }
+        }
+
+        // Collect countdown text (ad timer: "0:23", "1:05", etc.).
+        // Only capture the first match.
+        if countdown.is_none() {
+            if let Ok(name) = node.get_name() {
+                if countdown_re.is_match(name.trim()) {
+                    countdown = Some(name.trim().to_string());
+                }
+            }
+        }
+
+        // Enqueue children in reverse (left-to-right DFS).
+        if let Ok(first) = walker.get_first_child(&node) {
+            let mut cur = Some(first);
+            let mut kids: Vec<uiautomation::UIElement> = Vec::new();
+            while let Some(c) = cur {
+                kids.push(c.clone());
+                cur = walker.get_next_sibling(&c).ok();
+            }
+            for c in kids.into_iter().rev() {
+                stack.push(c);
+            }
+        }
+    }
+
+    (urls, countdown)
+}
+
 /// Pulled out as a free function so the URL-classification logic (the
 /// stable part) can be unit-tested without UIA.
 fn extract_track_from_uia_subtree(
@@ -469,6 +574,46 @@ fn extract_track_from_uia_subtree(
     let track = track?;
     let artist = artist?;
     Some((track, artist, album.unwrap_or_default()))
+}
+
+pub(crate) struct PandoraStateResult {
+    pub is_ad: bool,
+    /// Seconds remaining in the ad, if the countdown widget was readable.
+    /// None when the countdown text couldn't be parsed.
+    pub countdown_seconds: Option<u64>,
+}
+
+/// Given the URLs found in the player region + optionally the countdown
+/// widget text, classify as ad or normal track.
+///
+/// - At least one URL matching `classify_pandora_url(…)` returning
+///   `Some(PandoraUrlKind::Track)` → normal track. Otherwise → ad.
+/// - Countdown text parsing: `M:SS` format. Returns total seconds when
+///   parseable, None otherwise. Ad classification is independent of
+///   countdown parseability.
+pub(crate) fn classify_pandora_state(
+    urls: &[String],
+    countdown_text: Option<&str>,
+) -> PandoraStateResult {
+    let has_track = urls
+        .iter()
+        .any(|u| matches!(classify_pandora_url(u), Some(PandoraUrlKind::Track)));
+    let countdown_seconds = countdown_text.and_then(parse_countdown_to_seconds);
+    PandoraStateResult {
+        is_ad: !has_track,
+        countdown_seconds,
+    }
+}
+
+fn parse_countdown_to_seconds(text: &str) -> Option<u64> {
+    let text = text.trim();
+    let (mins, secs) = text.split_once(':')?;
+    let mins: u64 = mins.parse().ok()?;
+    let secs: u64 = secs.parse().ok()?;
+    if secs >= 60 {
+        return None;
+    }
+    Some(mins * 60 + secs)
 }
 
 fn read_value_pattern(elem: &uiautomation::UIElement) -> Option<String> {
@@ -582,6 +727,54 @@ fn find_pandora_desktop_windows() -> Vec<HWND> {
     let _ = unsafe { EnumWindows(Some(enum_proc), LPARAM(ctx_ptr as isize)) };
 
     ctx.hits
+}
+
+#[cfg(test)]
+mod ad_detection_tests {
+    use super::*;
+
+    /// Classify ad detection logic in isolation from UIA. We test the
+    /// classifier that takes an enumerated set of Hyperlink URLs + a
+    /// possibly-empty countdown text and decides ad-ness.
+    #[test]
+    fn empty_url_set_with_pandora_window_present_is_ad() {
+        let urls: Vec<String> = vec![];
+        let countdown = Some("0:23".to_string());
+        let result = classify_pandora_state(&urls, countdown.as_deref());
+        assert!(result.is_ad, "no /TR URLs + countdown present → ad");
+        assert_eq!(result.countdown_seconds, Some(23));
+    }
+
+    #[test]
+    fn url_set_with_TR_link_is_not_ad() {
+        let urls = vec!["https://www.pandora.com/artist/x/y/TR123abc".into()];
+        let result = classify_pandora_state(&urls, None);
+        assert!(!result.is_ad);
+    }
+
+    #[test]
+    fn countdown_parses_minutes_seconds() {
+        let urls: Vec<String> = vec![];
+        let result = classify_pandora_state(&urls, Some("1:05"));
+        assert!(result.is_ad);
+        assert_eq!(result.countdown_seconds, Some(65));
+    }
+
+    #[test]
+    fn countdown_parses_zero_seconds() {
+        let urls: Vec<String> = vec![];
+        let result = classify_pandora_state(&urls, Some("0:00"));
+        assert!(result.is_ad);
+        assert_eq!(result.countdown_seconds, Some(0));
+    }
+
+    #[test]
+    fn malformed_countdown_returns_none() {
+        let urls: Vec<String> = vec![];
+        let result = classify_pandora_state(&urls, Some("not a countdown"));
+        assert!(result.is_ad, "no /TR URLs is still an ad signal");
+        assert_eq!(result.countdown_seconds, None);
+    }
 }
 
 #[cfg(test)]
