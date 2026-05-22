@@ -6,6 +6,22 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.11.1] - 2026-05-21
+
+### Changed
+- **Tour-date source swapped from Bandsintown to Ticketmaster.** The Upcoming shows section in the artist-info panel now sources events from the Ticketmaster Discovery API. The panel's appearance, behavior, and interaction model are unchanged — same row layout (date, city + region/country, venue, gold "[Tickets]" button), same "Sold Out" disabled variant, same 10-event cap with "View all on Ticketmaster →" link when more events exist. The footer attribution row at the bottom of the panel now reads "Powered by Ticketmaster · Last.fm · TheAudioDB" instead of "Powered by Bandsintown · Last.fm · TheAudioDB"; the Ticketmaster name links to ticketmaster.com.
+
+  **Why:** Bandsintown's developer program signup was deprecated around 2022-2023, their `app_id` placeholder we shipped with was never officially registered, and the affiliate revenue side of their partner program is most likely no longer active. Ticketmaster's Discovery API is actively maintained (free tier: 5 requests/second, 5,000 requests/day), and their affiliate program runs on Impact (impact.com) with documented commissions (~2-4% of ticket face value).
+
+  **Implementation:** `fetch_ticketmaster_events` in `src-tauri/src/artist_info.rs` calls `https://app.ticketmaster.com/discovery/v2/events.json?keyword={artist}&classificationName=music&size=50&sort=date,asc`. Results are validated against the requested artist using a case-insensitive `eq_ignore_ascii_case` check on the first attraction's name (mirrors the v0.10.26 art-validation pattern). Date parsing reuses the existing `parse_iso8601_to_unix_ms` helper against `localDate + "T" + localTime`. Ticket URLs are wrapped through an Impact affiliate prefix via `wrap_with_impact_affiliate`; the prefix is currently `None` (no affiliate credit), to be replaced post-Impact-signup with a real tracking template.
+
+- **Ticket URL whitelist updated.** The `open_ticket_url` Tauri command's host whitelist (defense against cache-poisoned URLs) now accepts Ticketmaster regional domains (`ticketmaster.com`, `.ca`, `.co.uk`, `.de`) and Impact tracking subdomains (`*.go.impact.com`). Bandsintown's domain was removed. The command now also enforces `https` scheme as defense-in-depth.
+
+### Pre-launch (Wes only)
+- Sign up for Ticketmaster Discovery API key at `https://developer-acct.ticketmaster.com/user/register` (instant, self-serve) → replace `PLACEHOLDER_REPLACE_BEFORE_LAUNCH` in `src-tauri/src/artist_info.rs::TICKETMASTER_API_KEY`.
+- Sign up for Impact affiliate platform at `https://impact.com`, join the Ticketmaster brand → replace `IMPACT_AFFILIATE_PREFIX = None` with the tracking URL prefix template.
+- Last.fm API key signup remains open from v0.11.0.
+
 ## [0.11.0] - 2026-05-21
 
 ### Added
