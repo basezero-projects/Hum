@@ -271,7 +271,7 @@ export default function ArtistPanel() {
         }}
       >
         <span>Powered by</span>
-        <FooterLink url="https://bandsintown.com" onOpen={openUrl}>Bandsintown</FooterLink>
+        <FooterLink url="https://www.ticketmaster.com" onOpen={openUrl}>Ticketmaster</FooterLink>
         <span>·</span>
         <FooterLink url="https://last.fm" onOpen={openUrl}>Last.fm</FooterLink>
         <span>·</span>
@@ -346,10 +346,10 @@ function TourDatesList({
       {hasMore && (
         <div style={{ marginTop: 8 }}>
           <ExternalLink
-            url={`https://bandsintown.com`}
+            url={`https://www.ticketmaster.com`}
             onOpen={onOpenUrl}
           >
-            View all on Bandsintown →
+            View all on Ticketmaster →
           </ExternalLink>
         </div>
       )}
