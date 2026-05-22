@@ -524,6 +524,13 @@ export default function Overlay() {
     ? () => { invoke("open_artist_panel_cmd").catch(() => {}); }
     : undefined;
 
+  // Close any open panel immediately when the user toggles the setting off.
+  useEffect(() => {
+    if (!settings.show_artist_info_panel) {
+      invoke("close_artist_panel_cmd").catch(() => {});
+    }
+  }, [settings.show_artist_info_panel]);
+
   const layoutMode: LayoutMode = settings.layout_mode;
   // Auto-contrast override: when the toggle is on AND we have a luminance
   // read for the OVERLAY SURFACE (not the screen behind — see the
