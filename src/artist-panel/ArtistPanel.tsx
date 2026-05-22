@@ -463,7 +463,7 @@ function formatTourDate(unix_ms: number): string {
   const month = months[d.getUTCMonth()];
   const day = d.getUTCDate();
   const year = d.getUTCFullYear();
-  if (year === now.getFullYear()) {
+  if (year === now.getUTCFullYear()) {
     return `${month} ${day}`;
   }
   return `${month} ${day}, ${year}`;
