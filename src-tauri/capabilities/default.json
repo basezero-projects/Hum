@@ -24,7 +24,6 @@
     "core:window:allow-set-size",
     "core:window:allow-close",
     "core:webview:allow-create-webview-window",
-    "opener:default",
-    "opener:allow-open-url"
+    "opener:default"
   ]
 }

@@ -1129,7 +1129,9 @@ function PromoCard({
   const handleClick = (e: React.MouseEvent) => {
     if (dragRegion) return;
     e.stopPropagation();
-    openUrl(url).catch(() => {});
+    openUrl(url).catch((err) => {
+      console.error("[hum] opener failed to open promo URL:", url, err);
+    });
   };
   const drag = dragRegion ? { "data-tauri-drag-region": true } : {};
 
