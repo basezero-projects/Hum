@@ -6,6 +6,37 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.11.0] - 2026-05-21
+
+### Added
+- **Artist-info panel — click album art to see bio, similar artists, tour dates, and buy tickets.** In edit and locked modes, clicking the album art square (visible in the 3-line and single-line layouts as the square image to the left of the lyrics; in the full-page layout as the small badge in the top-left corner) opens a new floating window showing information about the currently playing artist. When album art is hidden or unavailable, a small gold "•••" dot appears in the top-right corner of the overlay (same anchor as the update banner); hovering it expands an "Artist info" label, clicking it opens the panel. The panel is not available in ghost mode, consistent with ghost's "no chrome, click-through" design. The click affordance shows a 1.5px gold outline on hover so users know it is interactive; tooltip is omitted in the full-page layout where the badge is too small.
+
+  The panel window (labeled `artist-info` internally) is 360×480px, transparent, always-on-top, no OS titlebar, and floats 8px below the overlay by default. If the overlay is within 500px of the screen's bottom edge, the panel anchors above the overlay instead. It can be dragged from its header to any screen position after opening. The panel closes via: the × button in the panel header, the ESC key, or automatically when the SMTC source switches to a different artist (same artist / new track keeps the panel open — the panel is artist-keyed, not track-keyed).
+
+  **What the panel shows, top to bottom:**
+  - **Header:** 60×60 round artist photo (from TheAudioDB) + artist name (18px, weight 600) + × close button (gold on hover). Header is the drag region.
+  - **Bio section:** Last.fm artist bio prose, truncated at the last sentence before 1,500 characters. "Read more on Last.fm →" link. Section hidden entirely when bio is unavailable — no "no bio" placeholder.
+  - **Similar artists section:** Up to 8 similar artists from Last.fm, comma-separated, prefixed with a gold "Similar to" section label. Section hidden when empty.
+  - **Upcoming shows section:** Up to 10 upcoming tour dates from Bandsintown, sorted by date. Each row shows the date (gold, monospace, "Mar 5" format, year included only if not the current year), city+region (or city+country for international), venue in italic dim text, and a gold "[Tickets]" button right-aligned. Clicking Tickets opens the Bandsintown affiliate URL in the user's default browser — Bandsintown routes the click through Ticketmaster, SeatGeek, AXS, or Live Nation depending on the event. Sold-out events show a gray "[Sold Out]" non-clickable button instead. Empty state shows "No upcoming tour dates." in dim italic text. When more than 10 events exist, shows "View all on Bandsintown →" after the first 10.
+  - **Footer:** "Powered by Bandsintown · Last.fm · TheAudioDB" in 10px dim centered text; each name is clickable and opens the respective service's website.
+
+- **Affiliate ticket links via Bandsintown partner program.** Every ticket click from the panel routes through Hum's partner `app_id`. Affiliate revenue accrues to Wes on every user's click — no per-user setup required. The implementation ships with a `hum-dev` placeholder `app_id`; replace with the live partner ID from https://bandsintown.com/partners before public release.
+
+- **Settings: "Show artist info panel" toggle** in Settings → Artist info panel section. Disabling it hides the click affordance on the album art and the fallback "•••" dot; any open panel closes. Below the toggle, a "Clear artist info cache" button wipes the on-disk artist cache (`%APPDATA%\com.syvr.hum\cache\artist\`).
+
+### Architecture / files
+- **New `src-tauri/src/artist_info.rs`** — All data types (`ArtistInfo`, `ArtistBio`, `TourDate`, `TicketStatus`); pure helpers `slug_for_artist` (diacritic-mapped, alphanumeric-only slug), `tour_dates_stale` (12-hour TTL check), `strip_html` (regex tag stripper + entity decode). Source fetchers: `fetch_lastfm_bio`, `fetch_lastfm_similar` (Last.fm REST), `fetch_bandsintown_events` (Bandsintown REST, ISO8601 date parser), `fetch_theaudiodb_photo` (TheAudioDB, base64-inline image), `resolve_mbid_musicbrainz` (MusicBrainz fallback). Orchestrator: `ArtistInfoCache` Tauri managed state — `fetch()` reads disk cache, returns immediately on fully-fresh data, refetches only tour dates when stale (≥12h), fires a full `tokio::join!` parallel fetch on cache miss with MusicBrainz fallback on Last.fm error 6. In-flight dedup via `Arc<Mutex<HashMap<String, Arc<Notify>>>>`. Disk cache at `%APPDATA%\com.syvr.hum\cache\artist\{slug}.json`, one JSON file per artist, version field for future schema evolution. Tauri commands: `get_artist_info`, `clear_artist_info_cache`.
+- **New `src-tauri/src/artist_window.rs`** — `open_artist_panel` (creates `WebviewWindowBuilder` for label `artist-info`, computes anchor position from `overlay.outer_position` + `outer_size` + monitor height, auto-close listener via `app.listen("track-changed")`), `close_artist_panel`, `open_ticket_url` (URL host whitelist: bandsintown.com, ticketmaster.com, seatgeek.com, axs.com, livenation.com, last.fm, theaudiodb.com, musicbrainz.org). Uses `opener` crate for `shell.open` equivalent.
+- **`src-tauri/src/lib.rs`** — added `mod artist_info; mod artist_window;`. `ArtistInfoCache::new(app.handle().clone())` managed in setup hook. Six new commands registered in `invoke_handler!`: `get_artist_info`, `clear_artist_info_cache`, `open_artist_panel_cmd`, `close_artist_panel_cmd`, `open_ticket_url`.
+- **`src-tauri/src/settings.rs`** — new `show_artist_info_panel: bool` field, default `true`.
+- **`src-tauri/Cargo.toml`** — added `urlencoding = "2"` and `opener = "0.7"`. Version bumped to `0.11.0`.
+- **`src-tauri/capabilities/default.json`** — added `artist-info` to windows scope; added `core:window:allow-close`, `core:window:allow-set-position`, `core:window:allow-set-size`, `core:webview:allow-create-webview-window`.
+- **`src/types.ts`** — `Settings` extended with `show_artist_info_panel: boolean`; new types `ArtistInfo`, `ArtistBio`, `TourDate`, `TicketStatus`.
+- **`src/Overlay.tsx`** — `AlbumArtSide` and `AlbumArtBadge` accept optional `onClick?: () => void`; gold outline + pointer cursor on hover when onClick is provided. New `ArtistInfoDot` component (mirrors `UpdateBanner` geometry — 9×9 gold dot, hover-expand label). `openArtistPanel` handler gated on `settings.show_artist_info_panel && mode !== 'ghost'`. `DEFAULT_SETTINGS` updated with `show_artist_info_panel: true`.
+- **`src/Settings.tsx`** — new `<Section title="Artist info panel">` with `<Toggle>` and cache-clear `<button>`.
+- **New `src/artist-panel/index.html`**, **`src/artist-panel/main.tsx`**, **`src/artist-panel/ArtistPanel.tsx`** — second Vite entry point; React panel component with header/bio/similar/tour-dates/footer sections.
+- **`vite.config.ts`** — `build.rollupOptions.input` added for multi-page build (`main` + `artistPanel`).
+
 ## [0.10.26] - 2026-05-21
 
 ### Fixed
