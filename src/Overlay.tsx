@@ -706,7 +706,7 @@ export default function Overlay() {
         opacity: 0.18,
         pointerEvents: "none",
         userSelect: "none",
-        fontFamily: `"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`,
+        fontFamily: `"Cascadia Code", "Cascadia Mono", Consolas, "Courier New", monospace`,
       }}
     >
       Hum by SYVR

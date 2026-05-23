@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.14] - 2026-05-22
+
+### Changed
+- **Watermark font is now Cascadia Code (monospace) instead of Inter (default UI sans).** Inter at 64px bold looked like the UI font scaled up — generic, no personality, read as "placeholder." Cascadia Code is a monospace display font that ships on Windows (used by Windows Terminal); at large display sizes it gives the watermark an intentional, designed feel rather than a "we forgot to pick a font" feel. Falls back to Cascadia Mono → Consolas → "Courier New" → generic monospace for any system without it. Same 64px, weight 700, opacity 0.18, white, centered.
+
 ## [0.13.13] - 2026-05-22
 
 ### Fixed
