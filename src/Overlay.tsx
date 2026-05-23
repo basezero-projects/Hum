@@ -2284,7 +2284,18 @@ function ServiceBg({ serviceName }: { serviceName: string | null }) {
       style={{
         position: "absolute",
         inset: 0,
-        background: `radial-gradient(ellipse 60% 120% at 22% 50%, ${color}33 0%, ${color}14 38%, transparent 72%)`,
+        // TWO-layer CSS background: a radial brand-color gradient
+        // painted ON TOP of a semi-opaque dark plate. The dark plate is
+        // required because the Tauri overlay window is transparent by
+        // default — without it, the colored gradient blends with
+        // whatever's behind the window (Chrome page, desktop, etc.)
+        // and reads as muddy gray instead of the service color.
+        // Streamer side has its own #plate div providing the same dark
+        // base; this combined-background mirrors that on the desktop.
+        background: [
+          `radial-gradient(ellipse at center, ${color}cc 0%, ${color}80 45%, ${color}33 100%)`,
+          "rgba(0, 0, 0, 0.55)",
+        ].join(", "),
         pointerEvents: "none",
         // No explicit z-index: relies on DOM order. Mounted right after
         // BlurredAlbumBg and before the inner-row content so it paints

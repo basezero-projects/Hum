@@ -6,6 +6,17 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.38] - 2026-05-23
+
+### Fixed
+- **Service brand-color backdrop is now visible on the desktop overlay.** The desktop's Tauri window is transparent by default (user setting `bg_opacity = 0`), so the previous semi-translucent gradient was blending with whatever was behind the window (the Chrome page underneath, the desktop wallpaper, etc.) and reading as muddy gray instead of the service color. Fixed by stacking the gradient ON TOP of an opaque-enough dark plate as a two-layer CSS background — same dark base the streamer side already had via its `#plate` div. Gradient alphas also bumped from 40%/25%/10% → 80%/50%/20% so the brand color actually dominates the surface.
+- **Streamer side intensity bumped to match.** Same alpha bump so both surfaces look consistent.
+
+## [0.13.37] - 2026-05-23
+
+### Changed
+- **Service brand-color backdrop now actually reads as the service color.** v0.13.36's radial gradient was too subtle to see in practice — it was left-skewed (~22% from the left) with low alpha (20% center → transparent at 72%), so the right half of the overlay was indistinguishable from flat gray. New gradient is centered, covers the entire overlay, and uses higher alpha at every stop: 40% center, 25% mid (~45% radius), 10% edge. Every pixel picks up some tint; the dark plate underneath still anchors the lyric/headline text. Applies to both desktop and OBS browser source.
+
 ## [0.13.36] - 2026-05-23
 
 ### Added
