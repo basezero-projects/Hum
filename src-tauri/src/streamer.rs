@@ -160,7 +160,36 @@ fn source_label_for(app_id: &str) -> String {
     if lower.contains("youtube") {
         return "YouTube Music".into();
     }
-    if lower.contains("chrome") || lower.contains("edge") || lower.contains("firefox") {
+    // Specific browser identification so the source badge can render
+    // the right browser logo. Was "Browser" generic — useless for
+    // logo lookups since simple-icons doesn't have a "browser" icon.
+    if lower.contains("chrome") {
+        return "Chrome".into();
+    }
+    if lower.contains("msedge") || lower.contains("edge") {
+        return "Edge".into();
+    }
+    if lower.contains("firefox") {
+        return "Firefox".into();
+    }
+    if lower.contains("brave") {
+        return "Brave".into();
+    }
+    if lower.contains("opera") {
+        return "Opera".into();
+    }
+    if lower.contains("vivaldi") {
+        return "Vivaldi".into();
+    }
+    if lower.contains("safari") {
+        return "Safari".into();
+    }
+    if lower.contains("arc") {
+        return "Arc".into();
+    }
+    if lower.contains("zen") {
+        // Old broad-match path — kept for backwards compatibility
+        // with any cached state. Falls through to Browser otherwise.
         return "Browser".into();
     }
     // Strip ".exe" + capitalize first char as a fallback.
@@ -332,16 +361,35 @@ async fn get_logo() -> Response {
 // Each entry is a `(slug, svg-bytes)` pair — adding a new logo means
 // dropping the SVG into `public/logos/` and adding an entry below.
 const SERVICE_LOGOS: &[(&str, &[u8])] = &[
+    // Video services
     ("netflix", include_bytes!("../../public/logos/netflix.svg")),
     ("twitch", include_bytes!("../../public/logos/twitch.svg")),
     ("youtube", include_bytes!("../../public/logos/youtube.svg")),
-    ("pandora", include_bytes!("../../public/logos/pandora.svg")),
-    ("spotify", include_bytes!("../../public/logos/spotify.svg")),
     ("crunchyroll", include_bytes!("../../public/logos/crunchyroll.svg")),
     ("paramountplus", include_bytes!("../../public/logos/paramountplus.svg")),
     ("max", include_bytes!("../../public/logos/max.svg")),
     ("appletv", include_bytes!("../../public/logos/appletv.svg")),
     ("hbomax", include_bytes!("../../public/logos/hbomax.svg")),
+    // Music services / apps
+    ("pandora", include_bytes!("../../public/logos/pandora.svg")),
+    ("spotify", include_bytes!("../../public/logos/spotify.svg")),
+    ("itunes", include_bytes!("../../public/logos/itunes.svg")),
+    ("applemusic", include_bytes!("../../public/logos/applemusic.svg")),
+    ("youtubemusic", include_bytes!("../../public/logos/youtubemusic.svg")),
+    ("tidal", include_bytes!("../../public/logos/tidal.svg")),
+    ("deezer", include_bytes!("../../public/logos/deezer.svg")),
+    ("vlcmediaplayer", include_bytes!("../../public/logos/vlcmediaplayer.svg")),
+    ("foobar2000", include_bytes!("../../public/logos/foobar2000.svg")),
+    ("winamp", include_bytes!("../../public/logos/winamp.svg")),
+    // Browsers (source-badge fallback for sources where the actual
+    // service can't be identified beyond "running in a browser")
+    ("googlechrome", include_bytes!("../../public/logos/googlechrome.svg")),
+    ("firefox", include_bytes!("../../public/logos/firefox.svg")),
+    ("brave", include_bytes!("../../public/logos/brave.svg")),
+    ("opera", include_bytes!("../../public/logos/opera.svg")),
+    ("safari", include_bytes!("../../public/logos/safari.svg")),
+    ("arc", include_bytes!("../../public/logos/arc.svg")),
+    ("vivaldi", include_bytes!("../../public/logos/vivaldi.svg")),
 ];
 
 async fn get_service_logo(axum::extract::Path(slug): axum::extract::Path<String>) -> Response {

@@ -1665,6 +1665,46 @@ function SourceBadge({
 }) {
   const label = sourceLabel(appId, overrideLabel);
   if (!label) return null;
+  const logoSlug = serviceLogoSlug(label);
+  const brand = serviceBrandColor(label);
+  // Show the brand logo when we have one — paints in the brand color
+  // via mask. Falls back to uppercase text otherwise.
+  if (logoSlug) {
+    return (
+      <div
+        title={label}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "3px 6px",
+          borderRadius: 8,
+          background: "rgba(127,127,127,0.18)",
+          border: "1px solid rgba(127,127,127,0.25)",
+          opacity: 0.85,
+          height: 18,
+        }}
+      >
+        <div
+          aria-hidden
+          style={{
+            width: 12,
+            height: 12,
+            backgroundColor: brand ?? textColorDim,
+            WebkitMaskImage: `url(/logos/${logoSlug}.svg)`,
+            maskImage: `url(/logos/${logoSlug}.svg)`,
+            WebkitMaskRepeat: "no-repeat",
+            maskRepeat: "no-repeat",
+            WebkitMaskPosition: "center",
+            maskPosition: "center",
+            WebkitMaskSize: "contain",
+            maskSize: "contain",
+            transition: "background-color 220ms ease",
+          }}
+        />
+      </div>
+    );
+  }
   return (
     <div
       style={{
@@ -2414,16 +2454,34 @@ const KNOWN_VIDEO_SERVICES = /^(netflix|youtube|twitch|hulu|disney\+|prime video
 function serviceLogoSlug(name: string | null | undefined): string | null {
   if (!name) return null;
   const k = name.toLowerCase();
+  // Video services
   if (k === "netflix") return "netflix";
   if (k === "twitch") return "twitch";
-  if (k === "youtube" || k === "youtube music") return "youtube";
-  if (k === "pandora") return "pandora";
-  if (k === "spotify") return "spotify";
+  if (k === "youtube") return "youtube";
   if (k === "crunchyroll") return "crunchyroll";
   if (k === "paramount+") return "paramountplus";
   if (k === "max") return "max";
-  if (k === "apple tv" || k === "apple music") return "appletv";
+  if (k === "apple tv") return "appletv";
   if (k === "hbo") return "hbomax";
+  // Music services / apps
+  if (k === "spotify") return "spotify";
+  if (k === "pandora") return "pandora";
+  if (k === "itunes") return "itunes";
+  if (k === "apple music") return "applemusic";
+  if (k === "youtube music") return "youtubemusic";
+  if (k === "tidal") return "tidal";
+  if (k === "deezer") return "deezer";
+  if (k === "vlc") return "vlcmediaplayer";
+  if (k === "foobar2000") return "foobar2000";
+  if (k === "winamp") return "winamp";
+  // Browsers
+  if (k === "chrome") return "googlechrome";
+  if (k === "firefox") return "firefox";
+  if (k === "brave") return "brave";
+  if (k === "opera") return "opera";
+  if (k === "safari") return "safari";
+  if (k === "arc") return "arc";
+  if (k === "vivaldi") return "vivaldi";
   return null;
 }
 
@@ -2483,6 +2541,21 @@ function serviceBrandColor(name: string | null | undefined): string | null {
   if (k === "youtube music") return "#ff0000";
   if (k === "apple music") return "#fa5760";
   if (k === "tidal") return "#000000";
+  if (k === "itunes") return "#fb5bc5";
+  if (k === "deezer") return "#a238ff";
+  if (k === "vlc") return "#ff8800";
+  if (k === "foobar2000") return "#3d4444";
+  if (k === "winamp") return "#f6ec1f";
+  // Browsers — wordmark/icon colors. Used only for the source badge in
+  // the metadata column; the unsupported-view brand color stays
+  // service-driven (Netflix-red, not Chrome-red, etc.).
+  if (k === "chrome") return "#4285f4";
+  if (k === "firefox") return "#ff7139";
+  if (k === "brave") return "#fb542b";
+  if (k === "opera") return "#ff1b2d";
+  if (k === "safari") return "#000000";
+  if (k === "arc") return "#fcbfae";
+  if (k === "vivaldi") return "#ef3939";
   return null;
 }
 

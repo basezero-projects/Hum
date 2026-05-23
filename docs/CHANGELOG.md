@@ -6,6 +6,21 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.33] - 2026-05-23
+
+### Added
+- **Brand logos on the source badge** in the metadata column. Previously the small pill on the right side of the overlay said "SPOTIFY" / "CHROME" / "PANDORA" / etc. as uppercase text. Now it renders the actual brand glyph in the brand color via CSS mask. 17 new logos bundled — covering music apps (iTunes, Apple Music, YouTube Music, Tidal, Deezer, VLC, foobar2000, Winamp) and browsers (Chrome, Firefox, Brave, Opera, Safari, Arc, Vivaldi). Sources without a logo (MusicBee, Amazon Music, Windows Media, Groove, Edge — not in the simple-icons catalog) fall back to the previous uppercase text styling. Hover for the source name as a tooltip.
+- **Brand-color extension for source badges.** `serviceBrandColor()` now includes colors for the music apps (iTunes pink, Deezer purple, VLC orange, Winamp yellow, foobar2000 charcoal) and browsers (Chrome blue, Firefox orange, Brave red-orange, Opera red, Safari near-black, Arc pink, Vivaldi red). Source-badge logos pick up the right color even when the surrounding overlay is in a different state.
+
+### Internal
+- New `walk_chrome_for_video_show_name()` UIA-tree walker in `web_bridge.rs` — attempts to extract a video-service show name from Chrome's accessibility tree when window-title scraping fails. **Caveat:** Netflix actively suppresses its accessibility tree under Widevine DRM (confirmed empirically — neither control-view nor raw-view walker reaches Netflix's page DOM, only Chrome's chrome). The walker stays in place because it can still help when other services degrade to title="<Service>" + no `document.title`-encoded show name; documented in code comments.
+- Streamer endpoint registers 17 additional logo entries in `SERVICE_LOGOS`.
+
+## [0.13.32] - 2026-05-23
+
+### Added
+- **Netflix show titles now surface via Chrome's UI Automation tree** when window-title scraping can't find them. Netflix locks `document.title` to the literal string "Netflix" even during playback (DRM/branding policy), so the simpler window-title parse always returns nothing useful for them. The new `walk_chrome_for_video_show_name()` helper walks Chrome's accessibility tree looking for the show name in element labels — Netflix's play/pause button reads `Pause <Show>` / `Play <Show>` and the back button reads `Back to <Show>`, both surfaced through Chrome's accessibility API. First node matching one of these prefixes wins. Same pattern Hum already uses for Pandora. Capped at 4000 nodes so the walk doesn't get stuck on Netflix's deep player tree. Falls back to the previous "just the brand logo" view when no show name can be extracted (e.g. Netflix homepage with no active playback).
+
 ## [0.13.31] - 2026-05-23
 
 ### Fixed

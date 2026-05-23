@@ -1046,6 +1046,94 @@ fn parse_video_show_name(
     Some(result)
 }
 
+/// Walks the Chrome UIA accessibility tree for `hwnd` looking for the
+/// active show/movie title in element names. Netflix locks
+/// `document.title` to the literal string "Netflix" even during
+/// playback (intentional — DRM/branding policy), so window-title
+/// scraping returns nothing useful. But the player's UI controls
+/// expose the show name via accessible names: the play/pause button
+/// reads "Pause <Show>" / "Play <Show>", the back button reads
+/// "Back to <Show>" or similar. Walk the tree and the first node
+/// matching one of those patterns wins.
+///
+/// Capped at 4000 nodes — Netflix's player accessibility tree is
+/// large but the title-carrying buttons sit near the top of the
+/// player overlay, well within that budget.
+#[cfg(windows)]
+fn walk_chrome_for_video_show_name(hwnd: HWND) -> Option<String> {
+    use uiautomation::UIAutomation;
+
+    const MAX_NODES: usize = 4_000;
+    const STRIP_PREFIXES: &[&str] = &[
+        "Pause ",
+        "Play ",
+        "Back to ",
+        "Now playing: ",
+        "Now Playing: ",
+    ];
+
+    let automation = UIAutomation::new().ok()?;
+    let root = automation
+        .element_from_handle((hwnd.0 as isize).into())
+        .ok()?;
+    // Raw view walker reaches deeper than the control-view walker
+    // (it doesn't filter out "uninteresting" intermediate elements
+    // that the control view skips). For Chrome's page content tree
+    // we need every node we can get since Netflix's UI doesn't follow
+    // standard accessibility patterns the control view recognizes.
+    let walker = automation.get_raw_view_walker().ok()?;
+
+    let mut stack: Vec<uiautomation::UIElement> = vec![root];
+    let mut visited = 0_usize;
+    while let Some(node) = stack.pop() {
+        visited += 1;
+        if visited > MAX_NODES {
+            break;
+        }
+
+        if let Ok(name) = node.get_name() {
+            let trimmed = name.trim();
+            // Pause/Play/Back-to prefixes carry the show name as the
+            // remainder. Use the strictest match wins so a "Pause"
+            // standalone button doesn't capture an empty string.
+            for prefix in STRIP_PREFIXES {
+                if let Some(rest) = trimmed.strip_prefix(prefix) {
+                    let rest = rest.trim();
+                    // Reject too-short / service-name-only matches so
+                    // we don't false-positive on "Pause" alone or
+                    // "Back to Netflix".
+                    if rest.len() >= 2
+                        && !rest.eq_ignore_ascii_case("Netflix")
+                        && !rest.eq_ignore_ascii_case("Hulu")
+                        && !rest.eq_ignore_ascii_case("Disney+")
+                        && !rest.eq_ignore_ascii_case("Twitch")
+                        && !rest.eq_ignore_ascii_case("Prime Video")
+                        && !rest.eq_ignore_ascii_case("Browse")
+                        && !rest.eq_ignore_ascii_case("Home")
+                    {
+                        return Some(rest.to_string());
+                    }
+                }
+            }
+        }
+
+        if let Ok(first) = walker.get_first_child(&node) {
+            let mut cur = Some(first);
+            while let Some(c) = cur {
+                stack.push(c.clone());
+                cur = walker.get_next_sibling(&c).ok();
+            }
+        }
+    }
+    // Caveat: Netflix specifically suppresses its accessibility tree (Widevine
+    // DRM keeps the player content out of Chrome's AX exposure even with
+    // raw_view_walker). Confirmed empirically — walker reaches Chrome's chrome
+    // (tabs, bookmarks, download notifications) but never the page DOM. For
+    // services that don't suppress AX (Twitch, Hulu when title-scraping
+    // misses, etc.) this walker still has a chance of finding the name.
+    None
+}
+
 struct VideoServiceProbe;
 
 impl WebPlayerProbe for VideoServiceProbe {
@@ -1070,12 +1158,17 @@ impl WebPlayerProbe for VideoServiceProbe {
             let hwnds = find_chrome_windows(|t| t.contains(marker));
             for hwnd in hwnds {
                 let title = read_window_title(hwnd);
-                let Some(show) = parse_video_show_name(&title, service) else {
-                    // Common case: Netflix homepage where window title is just
-                    // "Netflix - Google Chrome" (no show in progress yet) —
-                    // returns None and we keep deferring to the SMTC title.
-                    continue;
-                };
+                let show = parse_video_show_name(&title, service)
+                    .or_else(|| {
+                        // Window-title parse miss (Netflix locks the
+                        // document.title to just "Netflix" even during
+                        // playback). Walk Chrome's UIA accessibility tree
+                        // looking for the show name in the player UI's
+                        // button labels. Same approach Hum already uses
+                        // for Pandora.
+                        walk_chrome_for_video_show_name(hwnd)
+                    });
+                let Some(show) = show else { continue };
                 return Ok(Some(WebBridgeTrack {
                     title: show,
                     artist: String::new(),
