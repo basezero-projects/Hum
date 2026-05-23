@@ -23,10 +23,19 @@ pub async fn open_artist_panel(app: AppHandle) -> Result<()> {
     // Compute position relative to the overlay window.
     let (x, y) = compute_panel_position(&app)?;
 
+    // URL note: Vite's multi-page setup preserves the input path under
+    // `dist/`, so the artist-panel entry ends up at `dist/src/artist-panel/
+    // index.html` in production and is served at `/src/artist-panel/
+    // index.html` by the dev server. Without the `src/` prefix the webview
+    // 404s, Tauri falls back to the root `index.html`, main.tsx's
+    // `pickComponent()` sees the unknown `artist-info` window label and
+    // defaults to `DevConsole` — which is the "blank black window with no
+    // visible content and dev-console title" failure mode you can hit if
+    // this URL drifts.
     let window = WebviewWindowBuilder::new(
         &app,
         "artist-info",
-        WebviewUrl::App("artist-panel/index.html".into()),
+        WebviewUrl::App("src/artist-panel/index.html".into()),
     )
     .title("Artist Info")
     .inner_size(360.0, 480.0)

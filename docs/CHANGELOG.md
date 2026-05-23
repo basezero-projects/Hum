@@ -6,6 +6,13 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.12.4] - 2026-05-22
+
+### Fixed
+- **Clicking the album cover now actually opens the artist info panel** with the artist's bio, photo, and tour dates (the panel that was designed in v0.10.x and shipped broken). Before this release, clicking the album cover spawned a 360×480 always-on-top window titled with the dev-console heading and showing only a blank black background — confusing and unusable. Root cause: the Tauri webview was asked to load `artist-panel/index.html` but Vite's multi-page build preserves the input path, so the entry actually lives at `src/artist-panel/index.html`. The wrong URL 404'd, Tauri fell back to the root `index.html`, `main.tsx::pickComponent()` saw the unrecognized `"artist-info"` window label and defaulted to rendering the `DevConsole` component inside the panel window. Fixed by correcting the URL path in `src-tauri/src/artist_window.rs` to `src/artist-panel/index.html`.
+
+  **What you'll see now:** click the album cover → a small panel slides in below (or above, if no room below) the overlay window with the artist's photo, bio (Wikipedia), and any upcoming tour dates with ticket links. The panel auto-closes when the track changes to a different artist, and reopens on the next click.
+
 ## [0.12.3] - 2026-05-22
 
 ### Fixed
