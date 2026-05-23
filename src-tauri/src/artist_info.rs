@@ -52,7 +52,6 @@ pub enum TicketStatus {
 /// Lowercase, collapse whitespace to single dash, strip everything else
 /// except ASCII alphanumerics and dashes. Common Latin diacritics mapped
 /// to ASCII before stripping.
-#[allow(dead_code)]
 pub(crate) fn slug_for_artist(name: &str) -> String {
     // Diacritic → ASCII mapping for common Latin Extended chars.
     let mapped: String = name.chars().map(|c| match c {
@@ -92,7 +91,6 @@ pub(crate) fn slug_for_artist(name: &str) -> String {
 }
 
 /// True if the tour-dates entry is stale (older than 12 hours).
-#[allow(dead_code)]
 pub(crate) fn tour_dates_stale(fetched_at_unix_ms: i64, now_unix_ms: i64) -> bool {
     const TWELVE_HOURS_MS: i64 = 12 * 3600 * 1000;
     (now_unix_ms - fetched_at_unix_ms) >= TWELVE_HOURS_MS
@@ -250,9 +248,7 @@ pub(crate) async fn fetch_wikipedia_bio(
 /// Ticketmaster Discovery API consumer key (SYVR-App, approved 2026-05-22).
 /// Free tier: 5 req/sec, 5K req/day. Rate-limit identifier, not an auth secret —
 /// embedded in the binary per Ticketmaster's documented intended use.
-#[allow(dead_code)]
 const TICKETMASTER_API_KEY: &str = "GQbGNt5UBoE0RdMMCDB9IAplTcjEeA6A";
-#[allow(dead_code)]
 const TICKETMASTER_DISCOVERY_BASE: &str =
     "https://app.ticketmaster.com/discovery/v2/events.json";
 
@@ -262,7 +258,6 @@ const TICKETMASTER_DISCOVERY_BASE: &str =
 /// directly without affiliate credit. Format expected:
 /// `https://{subdomain}.go.impact.com/c/{publisher-id}/{campaign-id}/`
 /// then append the URL-encoded target.
-#[allow(dead_code)]
 const IMPACT_AFFILIATE_PREFIX: Option<&str> = None;
 
 fn wrap_with_impact_affiliate(url: &str) -> String {
@@ -276,7 +271,6 @@ fn wrap_with_impact_affiliate(url: &str) -> String {
 /// Returns events sorted by date ascending, validated against the requested
 /// artist name (case-insensitive primary-attraction match). Empty Vec on
 /// any failure or no-match.
-#[allow(dead_code)]
 pub(crate) async fn fetch_ticketmaster_events(
     client: &reqwest::Client,
     artist: &str,
@@ -459,12 +453,10 @@ fn days_from_epoch(year: i64, month: i64, day: i64) -> Option<i64> {
 
 /// TheAudioDB free tier uses the public test key "2".
 /// Documented at https://www.theaudiodb.com/api_guide.php
-#[allow(dead_code)]
 const THEAUDIODB_BASE: &str = "https://www.theaudiodb.com/api/v1/json/2/search.php";
 
 /// Fetch artist thumbnail from TheAudioDB and return as `data:image/jpeg;base64,...`.
 /// Returns None on any failure.
-#[allow(dead_code)]
 pub(crate) async fn fetch_theaudiodb_photo(
     client: &reqwest::Client,
     artist: &str,
@@ -537,7 +529,6 @@ pub(crate) fn build_artist_info_http_client() -> Result<reqwest::Client> {
 
 /// On-disk structure per artist. Fields are individually timestamped so
 /// tour-dates can be refreshed without blowing away the bio/photo.
-#[allow(dead_code)]
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 struct CachedArtistData {
     version: u32,
@@ -551,7 +542,6 @@ struct CachedArtistData {
     tour_dates_fetched_at_unix_ms: Option<i64>,
 }
 
-#[allow(dead_code)]
 fn now_unix_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -559,17 +549,14 @@ fn now_unix_ms() -> i64 {
         .unwrap_or(0)
 }
 
-#[allow(dead_code)]
 fn cache_dir(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_data_dir().ok().map(|d| d.join("cache").join("artist"))
 }
 
-#[allow(dead_code)]
 fn cache_file_path(app: &AppHandle, slug: &str) -> Option<PathBuf> {
     cache_dir(app).map(|d| d.join(format!("{slug}.json")))
 }
 
-#[allow(dead_code)]
 async fn read_cache_file(app: &AppHandle, slug: &str) -> Option<CachedArtistData> {
     let path = cache_file_path(app, slug)?;
     let bytes = tokio::fs::read(&path).await.ok()?;
@@ -595,7 +582,6 @@ async fn read_cache_file(app: &AppHandle, slug: &str) -> Option<CachedArtistData
     Some(data)
 }
 
-#[allow(dead_code)]
 async fn write_cache_file(app: &AppHandle, data: &CachedArtistData) -> Result<()> {
     let slug = data.slug.as_deref().unwrap_or("unknown");
     let path = cache_file_path(app, slug)
@@ -615,13 +601,11 @@ async fn write_cache_file(app: &AppHandle, data: &CachedArtistData) -> Result<()
 /// `in_flight` maps artist slug → a `Notify` that fires when the pending
 /// fetch for that slug completes. A second caller for the same slug waits
 /// on the Notify instead of firing a duplicate request.
-#[allow(dead_code)]
 pub struct ArtistInfoCache {
     in_flight: Arc<Mutex<HashMap<String, Arc<Notify>>>>,
     app: AppHandle,
 }
 
-#[allow(dead_code)]
 impl ArtistInfoCache {
     pub fn new(app: AppHandle) -> Self {
         Self {
@@ -748,7 +732,6 @@ impl ArtistInfoCache {
     }
 }
 
-#[allow(dead_code)]
 fn build_artist_info_from_cache(
     data: &CachedArtistData,
     artist: &str,

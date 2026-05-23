@@ -6,6 +6,15 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.1] - 2026-05-22
+
+### Changed
+- **Internal cleanup — no user-visible changes.** Audit-driven pass after running `/audit full` (15 Tier 1 workers, ~13.6 kloc surface):
+  - **Dead-code annotation cleanup in `src-tauri/src/artist_info.rs`.** Removed 16 false-positive `#[allow(dead_code)]` annotations after verifying each annotated symbol has a real caller. The annotated functions / constants / structs (`slug_for_artist`, `tour_dates_stale`, `TICKETMASTER_API_KEY`, `TICKETMASTER_DISCOVERY_BASE`, `IMPACT_AFFILIATE_PREFIX`, `fetch_ticketmaster_events`, `THEAUDIODB_BASE`, `fetch_theaudiodb_photo`, `CachedArtistData`, `now_unix_ms`, `cache_dir`, `cache_file_path`, `read_cache_file`, `write_cache_file`, `ArtistInfoCache` struct + impl, `build_artist_info_from_cache`) are all reachable through `ArtistInfoCache::fetch` (Tauri-managed state wired in `lib.rs`) or unit tests. The single remaining annotation on `fetch_artist_info` is correct — that's a genuinely unused public top-level API kept as a non-cached fallback entry point. `cargo check` + `cargo clippy` clean post-cleanup.
+  - **CLAUDE.md doc drift fixes.** Stack table updated to reflect v0.13.0 reality: added Tailwind 4 + browser bridges + iTunes PowerShell bridge + lyrics fallback chain + artist info APIs + streamer server + promo source + auto-updater rows. Architecture section rewritten as a four-layer model (sources → blend → resolve → render) instead of the original three-layer scaffolding description. Phase status section replaced — previously claimed "Phase 1 implemented, Phases 2-6 not started," now lists all ten phases shipped (SMTC source, LRCLib, overlay render, hotkeys, settings, streamer, browser bridges, artist panel, ad-break detection, image-driven PromoCards) with next-planned slices below.
+  - **README.md version bump.** Current-version line updated from v0.11.7 → v0.13.0; bundle filename example updated to match.
+  - **RELEASE_NOTES.md rewrite.** Replaced the unfilled `{{PROJECT_NAME}}` template placeholder + "v0.1.0 / Not released yet" header with current v0.13.0 release notes (image-driven PromoCards: full hero images can now fill the lyric area during ad breaks; text-driven layout preserved as fallback).
+
 ## [0.13.0] - 2026-05-22
 
 ### Added

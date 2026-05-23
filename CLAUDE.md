@@ -10,22 +10,38 @@ Windows desktop overlay that displays real-time synced lyrics for whatever music
 
 | Layer | Choice |
 |---|---|
-| Frontend | React 19 + Vite 7 + TypeScript 5.9 |
-| Styling | Inline styles (Phase 1 dev console). Tailwind 4 wired but unused for the overlay itself. |
+| Frontend | React 19 + Vite 7 + TypeScript 5.9 + Tailwind 4 (cn() helper via `lib/utils.ts`); Overlay uses inline styles for hot-path rendering |
 | Desktop | Tauri 2 |
 | SMTC bridge | `windows` crate 0.58 (`Media_Control` + `Foundation`) |
-| Lyrics source | LRCLib (`/api/get` + `/api/search` fallback) — Phase 2 |
-| Settings store | `tauri-plugin-store` — Phase 5 |
-| Hotkeys | `tauri-plugin-global-shortcut` — Phase 4 |
+| Browser bridges | `uiautomation` crate 0.25 (Chrome UIA for Pandora web + YouTube; Pandora desktop UIA + WASAPI peak meter) |
+| iTunes bridge | PowerShell subprocess (`itunes.rs` spawns + reads JSON lines) |
+| Lyrics source | LRCLib primary; SimpMusic + NetEase fallback chain |
+| Artist info | Wikipedia REST + TheAudioDB + Ticketmaster Discovery API |
+| Streamer server | `axum` 0.8 (loopback HTTP, serves `streamer_overlay.html`) |
+| Promo source | `https://syvrstudios.com/hum/promos.json` (hot-swappable, 6h refresh, disk-cached) |
+| Settings store | `tauri-plugin-store` |
+| Hotkeys | `tauri-plugin-global-shortcut` |
+| Auto-updater | `tauri-plugin-updater` → GitHub Releases (signing key not yet wired) |
 | Package manager | pnpm |
 
 ## Architecture
 
-Three layers, one direction:
+Four layers, source → blend → resolve → render:
 
-1. **Source** (`src-tauri/src/smtc.rs`) — owns the `GlobalSystemMediaTransportControlsSessionManager`, subscribes to its `CurrentSessionChanged` plus per-session `MediaPropertiesChanged` / `TimelinePropertiesChanged` / `PlaybackInfoChanged`. COM event handlers dispatch through an mpsc channel into a tokio worker, which reads fresh state and emits Tauri events.
-2. **Lyrics** (Phase 2 — not yet implemented) — on `track-changed`, hits LRCLib, parses LRC into `Vec<{ time_ms, text }>`, caches by track ID + by `artist|title|duration`.
-3. **Render** (`src/App.tsx`) — Phase 1 is a dev console (current track + scrolling event log). Phase 3 replaces it with the actual overlay.
+1. **Sources** — owns the now-playing snapshot.
+   - `src-tauri/src/smtc.rs` — Windows SMTC reader. Owns `GlobalSystemMediaTransportControlsSessionManager`, subscribes to `CurrentSessionChanged` + per-session `MediaPropertiesChanged` / `TimelinePropertiesChanged` / `PlaybackInfoChanged`. COM event handlers dispatch through mpsc into a tokio worker. Detects Spotify ads via title heuristics + duration < 35s.
+   - `src-tauri/src/itunes.rs` — iTunes adapter via PowerShell subprocess.
+   - `src-tauri/src/web_bridge.rs` + `youtube_bridge.rs` — Chrome UIA bridges for Pandora web + YouTube ad detection.
+   - `src-tauri/src/pandora_desktop.rs` — Pandora native desktop app via UIA tree walks + WASAPI peak meter.
+2. **Blend** (`smtc.rs::emit_blended` + `web_bridge.rs::blend_bridge_into_snapshot`) — merges SMTC and bridge state into a `SharedSnapshot`. Owns the `ad_active` flag set/clear semantics (Spotify ad → true; real song → false; bridge sources owned by the bridge path).
+3. **Lyrics** (`src-tauri/src/lyrics.rs`) — on `track-changed` / `web-bridge-updated` / `timeline-changed`, fetches from LRCLib (`/api/get` + `/api/search`), falling back to SimpMusic + NetEase. Parses LRC into `Vec<{ time_ms, text }>`. Caches in-memory by track key. Short-circuits to `Status::Ad` when `ad_active` is true.
+4. **Render** — multi-window React app:
+   - `src/Overlay.tsx` — main always-on-top lyric overlay (the user-facing window). PromoCard renders during ad breaks.
+   - `src/DevConsole.tsx` — developer window for live event/state inspection.
+   - `src/Settings.tsx` — settings panel (sources, alignment, theming, hotkeys, streamer mode).
+   - `src/artist-panel/ArtistPanel.tsx` — side panel that opens on album-art click, fed by `artist_info.rs`.
+   - `src-tauri/src/streamer_overlay.html` — OBS browser source served by the `axum` server in `streamer.rs`.
+   - `main.tsx::pickComponent()` routes by Tauri window label.
 
 ## Tauri events emitted by the Rust side
 
@@ -64,8 +80,25 @@ cd src-tauri && cargo clippy
 
 ## Phase status
 
-- **Phase 1: SMTC reader** — implemented. Manual verify across Spotify / Chrome-YouTube / iTunes still required before this is "done."
-- Phases 2-6 — not started. See top-level spec.
+Current version: **v0.13.0**. Shipped through 2026-05-22.
+
+- Phase 1 (SMTC source) — shipped.
+- Phase 2 (lyric fetch via LRCLib + fallback chain) — shipped.
+- Phase 3 (overlay render, 3-line karaoke scroll, per-word sweep) — shipped.
+- Phase 4 (global hotkeys for lock/unlock + offset nudge) — shipped.
+- Phase 5 (settings store + Settings window) — shipped.
+- Phase 6 (streamer mode via local axum HTTP server) — shipped.
+- Phase 7 (browser bridges: Pandora web, Pandora desktop, YouTube web; iTunes via PowerShell) — shipped.
+- Phase 8 (artist info panel: Wikipedia bio + TheAudioDB photo + Ticketmaster tour dates with impact.com affiliate links) — shipped.
+- Phase 9 (ad-break detection across Spotify / Pandora / YouTube + SYVR promo card rotation, hot-swappable via `promos.json`) — shipped (v0.12.0–v0.12.4).
+- Phase 10 (image-driven PromoCards — advertisers can ship a designed 1920×240 hero image) — shipped (v0.13.0).
+
+**Next planned slices** (see top-level task list):
+- Cross-platform refactor (extract `MediaSource` trait, add Linux MPRIS + macOS MediaRemote).
+- Updater signing key + GitHub Actions release CI + Claude-desktop-style relaunch UX.
+- Analytics foundation on Hetzner (install + heartbeat + daily aggregate; local SQLite for per-user history).
+
+See `BUGS.md` for known limitations and `docs/CHANGELOG.md` for per-commit detail.
 
 ## Branch & push policy
 

@@ -2,7 +2,7 @@
 
 Real-time synced lyrics overlay for Windows streamers and music listeners. It reads whatever is playing via Windows SMTC — Spotify, Chrome, YouTube Music, iTunes, anything — fetches time-synced lyrics from LRCLib, and renders them as a transparent always-on-top window. Text color auto-adjusts to stay readable over any background. Streamers get a dedicated OBS/browser-source mode that serves lyrics as a local HTTP page.
 
-**Current version:** v0.11.7 — shipping
+**Current version:** v0.13.0 — shipping
 
 > Renamed from "Lyric Overlay" → "Hum" in v0.10.2 (2026-05-21). Identifier and install path moved from `com.syvr.lyric-overlay` → `com.syvr.hum`. Existing settings on disk are not migrated automatically — re-set your preferences in the new Settings window on first launch.
 
@@ -90,7 +90,7 @@ To build a release installer:
 
 ```bash
 pnpm tauri build
-# outputs: src-tauri/target/release/bundle/nsis/Hum_0.11.7_x64-setup.exe
+# outputs: src-tauri/target/release/bundle/nsis/Hum_0.13.0_x64-setup.exe
 ```
 
 > Push policy: desktop app — never push without Wes asking.
