@@ -217,7 +217,7 @@ pub fn start(
             // sees only the browser tab title; the bridge fills in the real
             // song via UIA.
             #[cfg(windows)]
-            let (effective_title, effective_artist, effective_album, bridge_fresh, unreliable_no_bridge) = {
+            let (effective_title, effective_artist, effective_album, bridge_fresh, unreliable_no_bridge, is_video_bridge) = {
                 let bridge_track = {
                     let b = web_bridge.read().await;
                     b.clone()
@@ -249,14 +249,31 @@ pub fn start(
                         snap.source_app_id.as_deref().unwrap_or(""),
                     );
 
-                (title, artist, album, fresh, unreliable)
+                // Video-service bridge (NetflixProbe / TwitchProbe etc.) —
+                // the bridge IS fresh, but the title is a show/stream name,
+                // not a song. Skip lyrics fetch and short-circuit to
+                // Unsupported with the fresh title intact so the frontend
+                // can render the brand-framed view.
+                let is_video = fresh
+                    && bridge_track
+                        .as_ref()
+                        .is_some_and(|t| matches!(
+                            t.source.as_str(),
+                            "netflix-web" | "twitch-web" | "hulu-web"
+                            | "disneyplus-web" | "prime-web" | "max-web"
+                            | "peacock-web" | "paramount-web" | "appletv-web"
+                            | "crunchyroll-web"
+                        ));
+
+                (title, artist, album, fresh, unreliable, is_video)
             };
 
             #[cfg(not(windows))]
-            let (effective_title, effective_artist, effective_album, bridge_fresh, unreliable_no_bridge) = (
+            let (effective_title, effective_artist, effective_album, bridge_fresh, unreliable_no_bridge, is_video_bridge) = (
                 snap.title.clone(),
                 snap.artist.clone(),
                 snap.album.clone(),
+                false,
                 false,
                 false,
             );
@@ -280,12 +297,31 @@ pub fn start(
                 duration_ms: snap.duration_ms,
             };
 
-            if unreliable_no_bridge {
+            if unreliable_no_bridge || is_video_bridge {
                 // Short-circuit: emit Unsupported, do NOT hit any network source.
                 // The resolver's normal LRCLib / SimpMusic / NetEase chain would
                 // burn an HTTP round trip on a non-song query and return NotFound
                 // anyway. Skipping it saves the round trip and renders the
-                // honest "Pandora web — track info unavailable" message.
+                // honest "<service> — track info unavailable" message.
+                //
+                // For the video-bridge path, the snapshot's `bridge_source`
+                // carries the service identity (netflix-web, twitch-web, etc.)
+                // and we use it as the lyrics-state `source` so the frontend
+                // can brand-frame the view. For unreliable_no_bridge (Pandora
+                // with no fresh bridge), keep the historical "unsupported-source"
+                // tag for backwards compatibility with the existing renderer.
+                let lyrics_source = if is_video_bridge {
+                    // Read the bridge source. The bridge was fresh per the
+                    // `is_video_bridge` derivation above, so this re-read
+                    // returns the same identifier the blend already wrote
+                    // into the snapshot.
+                    let b = web_bridge.read().await;
+                    b.as_ref()
+                        .map(|t| t.source.clone())
+                        .unwrap_or_else(|| "unsupported-source".into())
+                } else {
+                    "unsupported-source".into()
+                };
                 apply_outcome(
                     &app,
                     &shared,
@@ -293,7 +329,7 @@ pub fn start(
                     &track,
                     Outcome {
                         cached: CachedLyrics::Unsupported,
-                        source: "unsupported-source".into(),
+                        source: lyrics_source,
                         persist: false,
                         errors: Vec::new(),
                     },

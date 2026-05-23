@@ -6,6 +6,17 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.29] - 2026-05-23
+
+### Added
+- **Hum now surfaces the actual show/stream/episode name when you're watching Netflix / Twitch / Hulu / Disney+ / Prime Video / Max / Peacock / Paramount+ / Apple TV / Crunchyroll in a Chromium browser**, instead of just "Netflix" or "Twitch" as the headline. Implementation: new `VideoServiceProbe` in `web_bridge.rs` that runs whenever the SMTC media-session title matches one of those service names + the source is Chrome/Edge/Brave/etc. The probe reads the Chrome window title via `GetWindowTextW` (set from `document.title`, which IS the show name on these services even when the media-session title is the locked service brand), strips the browser suffix (` - Google Chrome`, ` - Microsoft Edge`, etc.) and the service-tag suffix (` | Netflix`, ` - Twitch`, etc.), and surfaces the result.
+- **The unsupported view brand-frames the show.** When the bridge identified the service, the centered ghost mark stays unchanged but the headline is now the show name (e.g. "Stranger Things") and the supertitle reads "WATCHING NETFLIX" — painted in the service's brand color (Netflix red, Twitch purple, Hulu green, etc.) with a matching halo. The service-color radial backdrop also keys off the bridge identity now, so the plate picks up the right color even when the show name doesn't match a known brand.
+- **`bridge_source` field on the `CurrentTrack` snapshot** — populated by `blend_bridge_into_snapshot` whenever a web-bridge probe wrote the title/artist/album. Downstream consumers (the lyrics resolver, the frontend) read it to know "this title came from a probe, here's which one." Carries the probe's `source` identifier (e.g. `"netflix-web"`, `"pandora-web"`, `"twitch-web"`).
+- **Lyrics resolver short-circuit for known video services.** When `bridge_source` matches one of the video-service probe identifiers, the resolver skips the full LRCLib/SimpMusic/NetEase chain (no point looking up song lyrics for "Stranger Things") and emits `Status::Unsupported` directly with the bridge identifier as the lyrics `source`. The frontend reads `lyrics.source` to drive brand framing.
+
+### Internal
+- Per-service mapping table `VIDEO_SERVICES` in `web_bridge.rs` ties together SMTC title detection, window-title marker, the bridge_source identifier, and the human service name. Extending support to another service (Vimeo, etc.) is one entry in this table.
+
 ## [0.13.28] - 2026-05-23
 
 ### Added

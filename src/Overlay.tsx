@@ -507,11 +507,39 @@ export default function Overlay() {
   const middleText =
     cur?.text || (lyrics ? statusLine(lyrics, track) : "♪");
 
+  // Maps a backend lyrics.source identifier (set by web_bridge probes —
+  // "netflix-web", "twitch-web", etc.) to its human service name. Used
+  // by UnsupportedBlock + UnsupportedBg to brand-frame the view with
+  // the right color even when track.title has been replaced by the
+  // actual show name (so "Stranger Things" headline + "WATCHING
+  // NETFLIX" supertitle in Netflix red).
+  const bridgeServiceName = (() => {
+    const src = lyrics?.source;
+    if (!src) return null;
+    switch (src) {
+      case "netflix-web": return "Netflix";
+      case "twitch-web": return "Twitch";
+      case "hulu-web": return "Hulu";
+      case "disneyplus-web": return "Disney+";
+      case "prime-web": return "Prime Video";
+      case "max-web": return "Max";
+      case "peacock-web": return "Peacock";
+      case "paramount-web": return "Paramount+";
+      case "appletv-web": return "Apple TV";
+      case "crunchyroll-web": return "Crunchyroll";
+      case "pandora-web": return "Pandora";
+      case "youtube-web": return "YouTube";
+      default: return null;
+    }
+  })();
+
   // Service name driving the unsupported-state brand-color backdrop.
-  // Same resolution as UnsupportedBlock so the backdrop matches the
-  // headline color (Netflix → red, Twitch → purple, etc.).
+  // Prefer the bridge identity (definitive — set by a probe that
+  // recognized the source) over the title-name heuristic (matches the
+  // pre-bridge fallback path where SMTC's title was the only signal).
   const unsupportedServiceName = (() => {
     if (lyrics?.status !== "unsupported") return null;
+    if (bridgeServiceName) return bridgeServiceName;
     const t = (track?.title ?? "").trim();
     const srcLabel = sourceLabel(track?.source_app_id ?? null, null);
     if (t.endsWith("Now Playing on Pandora")) return "Pandora";
@@ -839,6 +867,7 @@ export default function Overlay() {
               <UnsupportedBlock
                 track={track}
                 sourceLabelText={sourceLabel(track?.source_app_id ?? null, null)}
+                bridgeServiceName={bridgeServiceName}
                 settings={settingsForRender}
                 textShadow={effectiveTextShadow}
                 dragRegion={isEdit}
@@ -914,6 +943,7 @@ export default function Overlay() {
           <UnsupportedBlock
             track={track}
             sourceLabelText={sourceLabel(track?.source_app_id ?? null, null)}
+            bridgeServiceName={bridgeServiceName}
             settings={settingsForRender}
             textShadow={effectiveTextShadow}
             dragRegion={isEdit}
@@ -985,6 +1015,7 @@ export default function Overlay() {
             <UnsupportedBlock
               track={track}
               sourceLabelText={sourceLabel(track?.source_app_id ?? null, null)}
+              bridgeServiceName={bridgeServiceName}
               settings={settingsForRender}
               textShadow={effectiveTextShadow}
               dragRegion={isEdit}
@@ -1972,12 +2003,17 @@ function TranslationRow({
 function UnsupportedBlock({
   track,
   sourceLabelText,
+  bridgeServiceName,
   settings,
   textShadow,
   dragRegion,
 }: {
   track: CurrentTrack | null;
   sourceLabelText: string | null;
+  /** When set (web-bridge probe recognized the source), the headline
+   *  becomes the actual show/stream title and the supertitle becomes
+   *  `WATCHING <SERVICE>` painted in the service brand color. */
+  bridgeServiceName: string | null;
   settings: Settings;
   textShadow: string;
   dragRegion: boolean;
@@ -1993,12 +2029,28 @@ function UnsupportedBlock({
   const titleIsJustSource =
     !!sourceLabelText && title.toLowerCase() === sourceLabelText.toLowerCase();
 
-  // Decide the "lead text + highlight word" split that matches the
-  // statusLine() string but keeps the service name separable so we can
-  // brand-color just that token.
+  // Decide the "lead text + highlight word" split. Two paths:
+  //
+  //   1. The web-bridge probe identified the service (Netflix/Twitch/etc.)
+  //      AND scraped the actual show name into track.title. The headline
+  //      becomes the show name; the supertitle becomes "WATCHING <SERVICE>"
+  //      painted in the service's brand color via `leadColor`.
+  //
+  //   2. No bridge identity (or the bridge didn't run). Fall back to the
+  //      pre-bridge heuristic — title-equals-service-name framing.
   let lead = "";
   let highlight = "";
-  if (isPandoraTab) {
+  let leadColor: string | null = null;
+  if (
+    bridgeServiceName &&
+    title &&
+    title.toLowerCase() !== bridgeServiceName.toLowerCase()
+  ) {
+    // Bridge gave us a real show name (different from the service name).
+    lead = `Watching ${bridgeServiceName}`;
+    leadColor = serviceBrandColor(bridgeServiceName);
+    highlight = title;
+  } else if (isPandoraTab) {
     lead = "Hum's tuned in —";
     highlight = "Pandora";
   } else if (isVideoService) {
@@ -2015,7 +2067,12 @@ function UnsupportedBlock({
     highlight = "";
   }
 
-  const color = serviceBrandColor(highlight) ?? settings.text_color;
+  // Color for the headline highlight word. When the bridge path is
+  // active, the brand color rides on the lead instead; the headline is
+  // the show name and stays the default text color so it stands out.
+  const color = leadColor
+    ? settings.text_color
+    : (serviceBrandColor(highlight) ?? settings.text_color);
 
   // Remaining time. Wall-clock interpolation while playing so the count
   // updates between server pushes.
@@ -2042,10 +2099,13 @@ function UnsupportedBlock({
   const headlineFontSize = Math.max(settings.font_size_px * 1.6, 32);
   const captionFontSize = Math.max(headlineFontSize * 0.28, 11);
   const sublineFontSize = Math.max(headlineFontSize * 0.4, 14);
-  // Soft halo behind the headline using the service brand color — adds
-  // a colored breath to the otherwise gray plate without taking over.
-  // Falls back to a neutral dark glow when there's no brand color.
-  const haloColor = serviceBrandColor(highlight);
+  // Soft halo using the service brand color — adds a colored breath to
+  // the otherwise gray plate without taking over. When the bridge path
+  // is active, the brand color rides on the LEAD ("WATCHING NETFLIX")
+  // so the halo follows it there; otherwise the halo follows the
+  // headline word. Falls back to a neutral dark glow when no brand
+  // color is known.
+  const haloColor = leadColor ?? serviceBrandColor(highlight);
   const halo = haloColor
     ? `0 0 64px ${haloColor}55, 0 0 22px ${haloColor}77`
     : undefined;
@@ -2071,14 +2131,17 @@ function UnsupportedBlock({
         <div
           style={{
             fontSize: captionFontSize,
-            fontWeight: 600,
-            color: settings.text_color_dim,
-            textShadow,
+            fontWeight: 700,
+            color: leadColor ?? settings.text_color_dim,
+            textShadow: leadColor
+              ? `0 1px 2px rgba(0,0,0,0.95), 0 0 14px ${leadColor}88, 0 0 28px ${leadColor}44`
+              : textShadow,
             letterSpacing: 2,
             textTransform: "uppercase",
-            opacity: 0.7,
+            opacity: leadColor ? 0.95 : 0.7,
             lineHeight: 1.2,
             textAlign: "left",
+            transition: "color 220ms ease",
           }}
         >
           {lead.replace(/[—\s]+$/, "")}

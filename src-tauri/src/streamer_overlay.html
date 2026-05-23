@@ -550,31 +550,56 @@
   }
 
   // Renders the cur line for the unsupported state. Bypasses setLine so
-  // we can layer a small uppercase supertitle ("WATCHING") above the
-  // brand-colored headline ("Netflix"), an optional artist subtitle
+  // we can layer a small uppercase supertitle ("WATCHING NETFLIX")
+  // above the headline (the show name), an optional artist subtitle
   // (e.g. YouTube channel name), and a "X min remaining" subline.
-  function renderUnsupportedCur(lead, highlight, artist, subline, animate) {
+  // When `leadServiceName` is provided (web-bridge probe identified
+  // the service), the supertitle takes the brand color and the
+  // headline stays text-color so the show name reads clearly.
+  function renderUnsupportedCur(lead, highlight, artist, subline, leadServiceName, animate) {
     const escape = (s) => String(s).replace(/[&<>"']/g, (c) =>
       ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[c]
     );
-    const color = serviceBrandColor(highlight);
+    const leadColor = leadServiceName ? serviceBrandColor(leadServiceName) : null;
+    const headlineColor = leadColor ? null : serviceBrandColor(highlight);
     const cleanLead = (lead || "").replace(/[—\s]+$/, "").trim();
     const parts = [];
     if (cleanLead) {
+      // When the bridge identified the service, paint the supertitle
+      // in the service brand color with a soft matching halo. Else use
+      // the default dim text-color (no halo).
+      const styleParts = [];
+      if (leadColor) {
+        styleParts.push("color:" + leadColor);
+        styleParts.push("opacity:0.95");
+        styleParts.push(
+          "text-shadow:0 1px 2px rgba(0,0,0,0.95), 0 0 14px " + leadColor
+          + "88, 0 0 28px " + leadColor + "44"
+        );
+      }
+      const styleAttr = styleParts.length
+        ? " style=\"" + styleParts.join(";") + "\""
+        : "";
       parts.push(
-        "<div class=\"unsupported-supertitle\">" + escape(cleanLead) + "</div>"
+        "<div class=\"unsupported-supertitle\"" + styleAttr + ">"
+        + escape(cleanLead) + "</div>"
       );
     }
     if (highlight) {
-      // Layered text shadow: dark contact for legibility + colored
-      // halo for visual interest. Falls back to dark-only when no
-      // brand color is known.
       const styleParts = [];
-      if (color) {
-        styleParts.push("color:" + color);
+      if (headlineColor) {
+        styleParts.push("color:" + headlineColor);
         styleParts.push(
-          "text-shadow:0 2px 4px rgba(0,0,0,0.95), 0 0 28px " + color
-          + "88, 0 0 60px " + color + "55"
+          "text-shadow:0 2px 4px rgba(0,0,0,0.95), 0 0 28px " + headlineColor
+          + "88, 0 0 60px " + headlineColor + "55"
+        );
+      } else if (leadColor) {
+        // Subtle service-tinted ambient glow on the headline too — so
+        // the show name picks up a hint of the service color without
+        // changing the text color itself.
+        styleParts.push(
+          "text-shadow:0 2px 4px rgba(0,0,0,0.95), 0 0 28px " + leadColor
+          + "44, 0 0 60px " + leadColor + "22"
         );
       } else {
         styleParts.push(
@@ -730,20 +755,30 @@
       }
     }
 
-    // Brand-color backdrop for the unsupported state. Same service-name
-    // resolution as renderUnsupportedCur — uses the headline word as
-    // the key. Sets a CSS variable so the #unsupported-bg div paints
-    // the radial gradient. Cleared (transparent) in every other state.
+    // Brand-color backdrop for the unsupported state. Prefer the bridge
+    // identity from `lyr.source` — that's the definitive answer when a
+    // probe ran (NetflixProbe etc.). Falls back to the title-word
+    // heuristic for the pre-bridge code path.
     const unsupportedBgEl = document.getElementById("unsupported-bg");
     if (lyr.status === "unsupported") {
       const title = (t.title || "").trim();
       const srcLabel = s.source_label || "";
       const KNOWN_VIDEO = /^(netflix|youtube|twitch|hulu|disney\+|prime video|amazon prime|hbo|max|peacock|apple tv|paramount\+|crunchyroll)$/i;
-      let svcName = "";
-      if (title.endsWith("Now Playing on Pandora")) svcName = "Pandora";
-      else if (title && KNOWN_VIDEO.test(title)) svcName = title;
-      else if (title && (!srcLabel || title.toLowerCase() !== srcLabel.toLowerCase())) svcName = title;
-      else svcName = srcLabel;
+      const BRIDGE_MAP = {
+        "netflix-web": "Netflix", "twitch-web": "Twitch",
+        "hulu-web": "Hulu", "disneyplus-web": "Disney+",
+        "prime-web": "Prime Video", "max-web": "Max",
+        "peacock-web": "Peacock", "paramount-web": "Paramount+",
+        "appletv-web": "Apple TV", "crunchyroll-web": "Crunchyroll",
+        "pandora-web": "Pandora", "youtube-web": "YouTube",
+      };
+      let svcName = BRIDGE_MAP[lyr.source] || "";
+      if (!svcName) {
+        if (title.endsWith("Now Playing on Pandora")) svcName = "Pandora";
+        else if (title && KNOWN_VIDEO.test(title)) svcName = title;
+        else if (title && (!srcLabel || title.toLowerCase() !== srcLabel.toLowerCase())) svcName = title;
+        else svcName = srcLabel;
+      }
       const c = serviceBrandColor(svcName);
       unsupportedBgEl.style.setProperty(
         "--unsupported-bg",
@@ -852,8 +887,27 @@
         const isPandoraTab = title.endsWith("Now Playing on Pandora");
         const isVideoSvc = !!title && KNOWN_VIDEO.test(title);
         const titleIsJustSource = !!src && title.toLowerCase() === src.toLowerCase();
+        // Bridge identity from the lyrics source — set by web_bridge
+        // probes like NetflixProbe / TwitchProbe when they recognized
+        // the source and scraped the real show name into the title.
+        const BRIDGE_MAP = {
+          "netflix-web": "Netflix", "twitch-web": "Twitch",
+          "hulu-web": "Hulu", "disneyplus-web": "Disney+",
+          "prime-web": "Prime Video", "max-web": "Max",
+          "peacock-web": "Peacock", "paramount-web": "Paramount+",
+          "appletv-web": "Apple TV", "crunchyroll-web": "Crunchyroll",
+          "pandora-web": "Pandora", "youtube-web": "YouTube",
+        };
+        const bridgeServiceName = BRIDGE_MAP[lyr.source] || null;
         let lead = "", highlight = "";
-        if (isPandoraTab) { lead = "Hum's tuned in —"; highlight = "Pandora"; }
+        if (bridgeServiceName && title && title.toLowerCase() !== bridgeServiceName.toLowerCase()) {
+          // Bridge probe identified the service AND scraped a real show
+          // name. Headline = show name, supertitle = "Watching <Service>"
+          // with the service brand color riding on the supertitle.
+          lead = "Watching " + bridgeServiceName;
+          highlight = title;
+        }
+        else if (isPandoraTab) { lead = "Hum's tuned in —"; highlight = "Pandora"; }
         else if (isVideoSvc) { lead = "Watching"; highlight = title; }
         else if (title && !titleIsJustSource) { highlight = title; }
         else if (src) { lead = "Hum's tuned in —"; highlight = src; }
@@ -877,7 +931,7 @@
         setLine($prev, "", false, "");
         setLine($next, "", false, "");
         const artist = (t.artist || "").trim();
-        renderUnsupportedCur(lead, highlight, artist, subline, trackChanged);
+        renderUnsupportedCur(lead, highlight, artist, subline, bridgeServiceName, trackChanged);
       } else {
         let mid;
         switch (lyr.status) {

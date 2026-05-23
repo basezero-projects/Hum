@@ -75,6 +75,16 @@ pub struct CurrentTrack {
     /// Drives the overlay to render the SYVR promo card in place of lyrics.
     #[serde(default)]
     pub ad_active: bool,
+    /// Set by `blend_bridge_into_snapshot` when a web-bridge probe is the
+    /// source of truth for the title/artist/album fields — e.g. "netflix-web"
+    /// when NetflixProbe scraped the show name from the Chrome window title,
+    /// "pandora-web" when PandoraProbe scraped the now-playing widget. Lets
+    /// `lyrics.rs` short-circuit to Unsupported for known video services
+    /// (don't burn an HTTP round trip looking up lyrics for a show), and
+    /// lets the frontend brand-frame the unsupported view with the right
+    /// service identity (Netflix red around "WATCHING NETFLIX", etc.).
+    #[serde(default)]
+    pub bridge_source: Option<String>,
 }
 
 pub type SharedSnapshot = Arc<RwLock<CurrentTrack>>;

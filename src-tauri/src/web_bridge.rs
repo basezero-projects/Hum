@@ -156,6 +156,11 @@ pub async fn blend_bridge_into_snapshot(
     snap.title = bt.title;
     snap.artist = bt.artist;
     snap.album = bt.album;
+    // Surface the probe identity so downstream consumers (lyrics resolver,
+    // frontend) know which web bridge supplied the title. The lyrics
+    // resolver uses this to short-circuit lyric fetches for known video
+    // services; the frontend uses it to brand-frame the unsupported view.
+    snap.bridge_source = Some(bt.source.clone());
     if let Some(pos) = bt.position_ms {
         snap.position_ms = pos;
         snap.last_update_unix_ms = bt.last_seen_unix_ms;
@@ -237,6 +242,12 @@ pub fn any_probe_detects(smtc_title: &str, smtc_app_id: &str) -> bool {
 static PROBES: &[&dyn WebPlayerProbe] = &[
     &PandoraProbe,
     &crate::pandora_desktop::PandoraDesktopProbe,
+    // VideoServiceProbe BEFORE YouTubeProbe — VideoServiceProbe's
+    // `detects()` is strict (matches one of a known list of service
+    // titles like "Netflix" / "Twitch" / etc.), while YouTubeProbe's
+    // `detects()` matches ANY non-empty title in Chromium. If YouTube
+    // came first it'd swallow every Chrome session including Netflix.
+    &VideoServiceProbe,
     &crate::youtube_bridge::YouTubeProbe,
 ];
 
@@ -844,6 +855,242 @@ pub fn start(app: AppHandle, snapshot: SharedSnapshot, shared: SharedWebBridge) 
             }
         }
     });
+}
+
+// ─── Video-service probe (Netflix, Twitch, Hulu, Disney+, etc.) ──────────
+//
+// These services publish a generic media-session title (just the service
+// name, like "Netflix") even when the user is watching specific content,
+// because of DRM / service policy. The probe scrapes the Chrome WINDOW
+// title via GetWindowTextW (set from document.title) — which for these
+// services usually includes the show/stream/episode name — and surfaces
+// that as the snapshot's `title`. Sets `bridge_source` to the service's
+// short name so the frontend can brand-frame the unsupported view
+// ("WATCHING NETFLIX" in Netflix red around the show name) and so
+// `lyrics.rs` knows to skip the lyric-fetch round trip (no song lyrics
+// for a TV show).
+
+/// Recognized video-streaming services. Each entry pairs:
+/// - `smtc_title`: what the SMTC publishes as the media-session title
+///   (almost always just the service name itself for these — that's the
+///   whole reason we need the probe).
+/// - `window_marker`: substring to look for in the Chrome window title
+///   to confirm we found the right tab (often the same as smtc_title).
+/// - `bridge_source`: short identifier surfaced on the snapshot.
+/// - `service_name`: human label the frontend brand-maps to a color.
+struct VideoServiceEntry {
+    smtc_title: &'static str,
+    window_marker: &'static str,
+    bridge_source: &'static str,
+    service_name: &'static str,
+}
+
+const VIDEO_SERVICES: &[VideoServiceEntry] = &[
+    VideoServiceEntry {
+        smtc_title: "Netflix",
+        window_marker: "Netflix",
+        bridge_source: "netflix-web",
+        service_name: "Netflix",
+    },
+    VideoServiceEntry {
+        smtc_title: "Twitch",
+        window_marker: "Twitch",
+        bridge_source: "twitch-web",
+        service_name: "Twitch",
+    },
+    VideoServiceEntry {
+        smtc_title: "Hulu",
+        window_marker: "Hulu",
+        bridge_source: "hulu-web",
+        service_name: "Hulu",
+    },
+    VideoServiceEntry {
+        smtc_title: "Disney+",
+        window_marker: "Disney+",
+        bridge_source: "disneyplus-web",
+        service_name: "Disney+",
+    },
+    VideoServiceEntry {
+        smtc_title: "Prime Video",
+        window_marker: "Prime Video",
+        bridge_source: "prime-web",
+        service_name: "Prime Video",
+    },
+    VideoServiceEntry {
+        smtc_title: "Max",
+        window_marker: "Max",
+        bridge_source: "max-web",
+        service_name: "Max",
+    },
+    VideoServiceEntry {
+        smtc_title: "HBO Max",
+        window_marker: "HBO Max",
+        bridge_source: "max-web",
+        service_name: "HBO",
+    },
+    VideoServiceEntry {
+        smtc_title: "Peacock",
+        window_marker: "Peacock",
+        bridge_source: "peacock-web",
+        service_name: "Peacock",
+    },
+    VideoServiceEntry {
+        smtc_title: "Paramount+",
+        window_marker: "Paramount+",
+        bridge_source: "paramount-web",
+        service_name: "Paramount+",
+    },
+    VideoServiceEntry {
+        smtc_title: "Apple TV",
+        window_marker: "Apple TV",
+        bridge_source: "appletv-web",
+        service_name: "Apple TV",
+    },
+    VideoServiceEntry {
+        smtc_title: "Crunchyroll",
+        window_marker: "Crunchyroll",
+        bridge_source: "crunchyroll-web",
+        service_name: "Crunchyroll",
+    },
+];
+
+fn lookup_video_service(smtc_title: &str) -> Option<&'static VideoServiceEntry> {
+    // Trim whitespace; some sources have stray leading/trailing spaces in
+    // the media-session title. Match is case-insensitive so "netflix" /
+    // "NETFLIX" / "Netflix" all hit.
+    let needle = smtc_title.trim();
+    if needle.is_empty() {
+        return None;
+    }
+    VIDEO_SERVICES
+        .iter()
+        .find(|s| needle.eq_ignore_ascii_case(s.smtc_title))
+}
+
+/// Strips standard browser suffixes from a window title — Chrome on
+/// Windows usually appends " - Google Chrome", Edge " - Microsoft Edge",
+/// etc. Some Chromium browsers (Brave, Opera, Vivaldi) follow the same
+/// pattern with their own product name. Returns the title without the
+/// suffix; if no known suffix matches, returns the input unchanged.
+fn strip_browser_suffix(s: &str) -> &str {
+    const SUFFIXES: &[&str] = &[
+        " - Google Chrome",
+        " — Google Chrome",
+        " - Microsoft Edge",
+        " — Microsoft Edge",
+        " - Brave",
+        " — Brave",
+        " - Opera",
+        " — Opera",
+        " - Vivaldi",
+        " — Vivaldi",
+        " - Arc",
+    ];
+    for suf in SUFFIXES {
+        if let Some(stripped) = s.strip_suffix(suf) {
+            return stripped;
+        }
+    }
+    s
+}
+
+/// Parses the show/episode/stream name out of a Chrome window title for a
+/// known video service. Conventions vary slightly by service:
+/// - Netflix:  "Watch <Show> | Netflix"  →  "<Show>"
+/// - Twitch:   "<Streamer> - <Category> - Twitch"  →  "<Streamer>" (first segment)
+/// - Hulu:     "<Show> | Hulu"  →  "<Show>"
+/// - Disney+:  "<Show> | Disney+"  →  "<Show>"
+/// - Prime:    "<Show> | Prime Video" / "Watch <Show> | Prime Video"  → "<Show>"
+/// - others:   strip a trailing " | <Service>" / " - <Service>" if present.
+///
+/// Returns `None` when nothing useful remains (empty, equals the service
+/// name itself, or under 2 chars).
+fn parse_video_show_name(
+    window_title: &str,
+    service: &VideoServiceEntry,
+) -> Option<String> {
+    let base = strip_browser_suffix(window_title.trim()).trim();
+    if base.is_empty() {
+        return None;
+    }
+    // Strip trailing service tag in any of the common separator forms.
+    let svc = service.service_name;
+    let smtc = service.smtc_title;
+    let mut s = base.to_string();
+    for tag in [smtc, svc] {
+        for sep in [" | ", " - ", " — "] {
+            let needle = format!("{sep}{tag}");
+            if s.ends_with(&needle) {
+                s.truncate(s.len() - needle.len());
+                break;
+            }
+        }
+    }
+    let s = s.trim();
+    // Netflix sometimes prefixes with "Watch ".
+    let s = s.strip_prefix("Watch ").unwrap_or(s).trim();
+    // Twitch window titles often look like "<Streamer> - <Category> -
+    // Twitch" — the first dash-separated segment is the streamer name.
+    // For other services, the whole stripped string IS the show name.
+    let result = if service.bridge_source == "twitch-web" {
+        s.split(" - ").next().unwrap_or(s).trim().to_string()
+    } else {
+        s.to_string()
+    };
+    if result.is_empty() || result.len() < 2 {
+        return None;
+    }
+    if result.eq_ignore_ascii_case(svc) || result.eq_ignore_ascii_case(smtc) {
+        return None;
+    }
+    Some(result)
+}
+
+struct VideoServiceProbe;
+
+impl WebPlayerProbe for VideoServiceProbe {
+    fn name(&self) -> &'static str {
+        "video-service"
+    }
+
+    fn detects(&self, smtc_title: &str, smtc_app_id: &str) -> bool {
+        // Chromium-only path — non-Chrome browsers don't go through here.
+        if smtc_app_id.is_empty() || !smtc_app_id.to_lowercase().contains("chrome") {
+            return false;
+        }
+        lookup_video_service(smtc_title).is_some()
+    }
+
+    fn read(&self) -> anyhow::Result<Option<WebBridgeTrack>> {
+        // The probe is only invoked when detects() said yes, but we don't
+        // get the SMTC title here — re-walk all Chromium windows looking
+        // for ANY video service marker in the title. First hit wins.
+        for service in VIDEO_SERVICES {
+            let marker = service.window_marker;
+            let hwnds = find_chrome_windows(|t| t.contains(marker));
+            for hwnd in hwnds {
+                let title = read_window_title(hwnd);
+                let Some(show) = parse_video_show_name(&title, service) else {
+                    // Common case: Netflix homepage where window title is just
+                    // "Netflix - Google Chrome" (no show in progress yet) —
+                    // returns None and we keep deferring to the SMTC title.
+                    continue;
+                };
+                return Ok(Some(WebBridgeTrack {
+                    title: show,
+                    artist: String::new(),
+                    album: String::new(),
+                    source: service.bridge_source.into(),
+                    last_seen_unix_ms: now_unix_ms(),
+                    position_ms: None,
+                    state: None,
+                    is_ad: false,
+                    duration_ms: None,
+                }));
+            }
+        }
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
