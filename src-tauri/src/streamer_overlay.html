@@ -29,8 +29,12 @@
    */
   :root {
     --text: #ffffff;
-    --text-dim: rgba(255, 255, 255, 0.55);
-    --text-faint: rgba(255, 255, 255, 0.35);
+    /* Solid light grays for secondary text — alpha-based dims used to
+       wash out on bright/colorful album-art backgrounds because the
+       background bleed-through tinted the text and killed contrast.
+       Solid values render the same regardless of what's behind. */
+    --text-dim: #c8c8c8;
+    --text-faint: #909090;
     --gold: #d4af37;
     --plate: rgba(0, 0, 0, 0.45);
   }

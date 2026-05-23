@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.13] - 2026-05-22
+
+### Fixed
+- **Secondary text (metadata, timestamps, prev/next lyric lines) is now solid light gray instead of alpha-blended white, so it stays readable on bright album-art backgrounds.** Previously `--text-dim` was `rgba(255, 255, 255, 0.55)` and the desktop autocolor mode used `rgba(255, 255, 255, 0.45)` — both let the background color bleed through, which meant a bright yellow/orange/cyan album cover would tint the dim text the same color and kill contrast (the v0.13.11 halo shadow helped but couldn't fully rescue it). New values: `#c8c8c8` (streamer `--text-dim`, desktop dark-surface autocolor, default `text_color_dim`), `#909090` (streamer `--text-faint`), `#5a5a5a` (desktop light-surface autocolor). Solid hex values render the same regardless of what's behind them. Includes a one-shot migration in `settings.rs` that swaps the old exact-default `rgba(255,255,255,0.45)` to the new solid value on load — users who customized their dim color in Settings keep their value untouched. Theme presets on the streamer side (neon, retro, minimal) still use their own opinionated colors.
+
 ## [0.13.12] - 2026-05-22
 
 ### Changed

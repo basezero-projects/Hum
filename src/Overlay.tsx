@@ -577,8 +577,12 @@ export default function Overlay() {
   const effectiveTextColor = autoColorActive
     ? (surfaceIsLight ? "#0a0a0a" : "#ffffff")
     : settings.text_color;
+  // Solid grays for the autocolor branch — alpha-based dims wash out on
+  // bright/colorful album-art backgrounds because the background bleeds
+  // through and tints the dim text. Solid values render the same regardless
+  // of what's behind.
   const effectiveTextColorDim = autoColorActive
-    ? (surfaceIsLight ? "rgba(0,0,0,0.45)" : "rgba(255,255,255,0.45)")
+    ? (surfaceIsLight ? "#5a5a5a" : "#c8c8c8")
     : settings.text_color_dim;
   // Scale factor: driven by WIDTH only since height auto-follows content
   // (see the innerRow ResizeObserver above). Drag the window wider →

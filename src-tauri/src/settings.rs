@@ -90,7 +90,7 @@ impl Default for Settings {
             font_size_px: 26.0,
             font_weight: 600,
             text_color: "#ffffff".to_string(),
-            text_color_dim: "rgba(255,255,255,0.45)".to_string(),
+            text_color_dim: "#c8c8c8".to_string(),
             bg_color: "#000000".to_string(),
             bg_opacity: 0.0,
             text_align: "left".to_string(),
@@ -275,6 +275,13 @@ fn sanitize(s: &mut Settings) {
     // text_color_dim accepts hex OR rgba(...). Reject anything that contains
     // characters used in CSS expressions (`url(`, `;`, `}`, etc.).
     if !is_valid_color_string(&s.text_color_dim) {
+        s.text_color_dim = defaults.text_color_dim.clone();
+    }
+    // One-shot migration: the old default was `rgba(255,255,255,0.45)`, which
+    // washed out on bright album-art backgrounds because the background bled
+    // through the alpha and tinted the dim text. New default is a solid light
+    // gray. Users who explicitly customized it keep their value.
+    if s.text_color_dim == "rgba(255,255,255,0.45)" {
         s.text_color_dim = defaults.text_color_dim.clone();
     }
 
