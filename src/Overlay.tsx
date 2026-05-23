@@ -1149,6 +1149,17 @@ function PromoCard({
   const tagline = promo?.tagline ?? "Tools and apps from the makers of Hum.";
   const url = promo?.url ?? "https://syvrstudios.com";
   const iconUrl = promo?.icon_url ?? null;
+  const imageUrl = promo?.image_url ?? null;
+  const altText = promo?.alt ?? `Sponsored content from ${productName}`;
+  // Tracks whether the hero image failed to load (404, blocked, etc.) so
+  // we can gracefully degrade to the text-driven layout instead of leaving
+  // a broken-image gap in the overlay.
+  const [imgFailed, setImgFailed] = useState(false);
+  // Reset the failure flag whenever the source URL changes — a new promo
+  // rotation shouldn't inherit the prior promo's failure state.
+  useEffect(() => {
+    setImgFailed(false);
+  }, [imageUrl]);
 
   const handleClick = (e: React.MouseEvent) => {
     if (dragRegion) return;
@@ -1158,6 +1169,51 @@ function PromoCard({
     });
   };
   const drag = dragRegion ? { "data-tauri-drag-region": true } : {};
+
+  // Image-driven path: when `image_url` is set AND we're in a layout where
+  // the image makes sense (three_line / full_page — single_line's ~26px
+  // row height is too short for a hero image to read). Falls back to text
+  // when image_url is unset, image load failed, or single_line layout.
+  const useImageDriven =
+    !!imageUrl && !imgFailed && layoutMode !== "single_line";
+
+  if (useImageDriven) {
+    return (
+      <div
+        {...drag}
+        onClick={handleClick}
+        className="hum-line-in"
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "stretch",
+          justifyContent: "center",
+          cursor: dragRegion ? "move" : "pointer",
+          width: "100%",
+          maxWidth: "92vw",
+          overflow: "hidden",
+        }}
+      >
+        <img
+          src={imageUrl!}
+          alt={altText}
+          draggable={false}
+          onError={() => setImgFailed(true)}
+          style={{
+            width: "100%",
+            height: "auto",
+            maxHeight: "100%",
+            // contain so any aspect ratio the user designs at letterboxes
+            // gracefully rather than cropping or distorting. Recommend 8:1
+            // (1920×240) for edge-to-edge fit in the default overlay.
+            objectFit: "contain",
+            display: "block",
+            pointerEvents: "none",
+          }}
+        />
+      </div>
+    );
+  }
 
   if (layoutMode === "single_line") {
     return (

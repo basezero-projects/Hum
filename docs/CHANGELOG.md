@@ -6,6 +6,48 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.0] - 2026-05-22
+
+### Added
+- **Image-driven SYVR PromoCards — design every pixel.** Promos can now ship as a single designed hero image rendered edge-to-edge in the lyric area during an ad break, replacing the text-driven product name + tagline + CTA layout. This matches how real advertisers (Chipotle, T-Mobile, etc.) deliver Spotify ads — the advertiser controls every pixel of the creative, including custom typography, gradients, logos, brand colors. The text-driven layout from v0.11.9 is preserved as a fallback for promos without an image.
+
+  **Schema:** the `Promo` type in `promos.json` gains two optional fields:
+  - `image_url` — URL of the hero image (PNG/JPG/SVG). When set, takes precedence over the text-driven layout.
+  - `alt` — accessibility alt text. Defaults to `"Sponsored content from <product_name>"` when not provided.
+
+  **Example entry:**
+  ```json
+  {
+    "id": "trellis",
+    "image_url": "https://syvrstudios.com/hum/promo-images/trellis.png",
+    "alt": "Trellis — Guided AI creative platform",
+    "url": "https://trellis.syvr.dev",
+    "product_name": "Trellis",
+    "tagline": "Guided AI creative platform.",
+    "weight": 1,
+    "active": true
+  }
+  ```
+  The `product_name` / `tagline` / `cta_text` / `accent_color` fields are still respected when present (used for accessibility fallbacks and the text-driven path if the image fails to load), but only the image renders visually when `image_url` is set.
+
+  **Recommended asset dimensions:** **1920×240 (8:1 aspect)** for crisp rendering at any overlay width on HiDPI displays. The card slot in the default overlay is roughly 770-1000px wide × ~100px tall; 1920×240 gives 2× pixel density at the default and stays sharp when users drag the overlay wider. Other aspects work — the image uses `object-fit: contain` so it letterboxes gracefully — but designing at the recommended aspect gives edge-to-edge fill with no empty bands.
+
+  **Layout behavior:**
+  - `three_line` (default) layout: image fills the lyric area's full width and height
+  - `full_page` layout: same — image is the centerpiece
+  - `single_line` layout: falls back to the text-driven path. The ~26px row height is too short for a hero image to read; the text layout still rotates from the same `promos.json` pool
+
+  **Graceful degradation:** if the image URL 404s, is blocked by network policy, or otherwise fails to load, PromoCard catches the error and falls back to the text-driven layout for that promo. The user never sees a broken-image gap. Per-promo failure state is reset whenever the rotation picks a different promo.
+
+  **Author workflow (Wes):**
+  1. Design a card at 1920×240 (Figma / Photoshop / Canva).
+  2. Export as PNG (or SVG for crisp scaling).
+  3. Drop into `Websites/sites/syvr-site/public/hum/promo-images/<filename>.png`.
+  4. Add `"image_url": "https://syvrstudios.com/hum/promo-images/<filename>.png"` to the entry in `Websites/sites/syvr-site/public/hum/promos.json`.
+  5. `git push`. Vercel auto-deploys. Live on all Hum installs within 6 hours (or on next app launch).
+
+  **Implementation:** `Promo` struct in `src-tauri/src/promos.rs` gained `image_url: Option<String>` + `alt: Option<String>`, both `#[serde(default)]` so existing JSON without these fields continues to parse unchanged. `Promo` type in `src/types.ts` mirrored. `PromoCard` in `src/Overlay.tsx` gained an early-return branch that renders `<img src={image_url} alt={alt} ... />` filling the card slot with `object-fit: contain`, gated on `image_url` being set AND layout being `three_line`/`full_page` AND image not having failed to load. The text-driven render path remains untouched as the fallback.
+
 ## [0.12.4] - 2026-05-22
 
 ### Fixed

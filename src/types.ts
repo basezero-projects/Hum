@@ -84,6 +84,14 @@ export type Promo = {
   active: boolean;
   cta_text: string | null;
   accent_color: string | null;
+  /** Hero image URL. When set, PromoCard renders the image edge-to-edge
+   * (object-fit: contain) in place of the text-driven product_name +
+   * tagline + CTA layout. Recommended source dimensions: 1920×240
+   * (8:1 aspect) for crispness at any overlay width on HiDPI displays. */
+  image_url: string | null;
+  /** Alt text for the hero image. Defaults to a generic
+   * "Sponsored content from <product_name>" when null. */
+  alt: string | null;
 };
 
 export type WordSpan = { time_ms: number; text: string };

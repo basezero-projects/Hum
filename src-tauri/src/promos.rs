@@ -25,6 +25,23 @@ pub struct Promo {
     pub cta_text: Option<String>,
     #[serde(default)]
     pub accent_color: Option<String>,
+    /// Optional hero image URL. When set, the PromoCard renders the image
+    /// edge-to-edge (object-fit: contain) in place of the text-driven
+    /// product_name + tagline + CTA layout — the advertiser controls
+    /// every pixel. The card is still clickable through to `url`.
+    /// Recommended source dimensions: 1920×240 (8:1 aspect) for crisp
+    /// rendering at any overlay window size including HiDPI displays.
+    /// When this field is null/absent, the PromoCard falls back to the
+    /// text-driven layout (product_name + tagline + CTA), so existing
+    /// promos without image_url continue to render unchanged.
+    #[serde(default)]
+    pub image_url: Option<String>,
+    /// Accessibility alt text for the hero image. Used as the <img>'s
+    /// `alt` attribute (screen readers, image-load failures). Defaults
+    /// to a generic "Sponsored content from <product_name>" when not
+    /// provided. Only relevant when `image_url` is set.
+    #[serde(default)]
+    pub alt: Option<String>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -251,6 +268,8 @@ pub fn bundled_defaults() -> Vec<Promo> {
             active: true,
             cta_text: None,
             accent_color: None,
+            image_url: None,
+            alt: None,
         }])
 }
 
@@ -269,6 +288,8 @@ mod tests {
             active,
             cta_text: None,
             accent_color: None,
+            image_url: None,
+            alt: None,
         }
     }
 
