@@ -330,18 +330,26 @@
      centered watermark stays visible behind the block so the Hum brand
      is always present (just the meta column on the right gets hidden
      since it'd repeat what the headline already says). */
-  body.unsupported #cur { text-align: center; line-height: 1; }
-  body.unsupported #credit { display: none; }
-  /* The hum-logo fallback paints the brand mark in the album-art slot
-     when the source has no art (Netflix, YouTube, Twitch in browser).
-     Slightly dimmed and inset so it reads as a logo-as-art rather than
-     a real cover. */
-  #art.hum-logo-art {
-    background: transparent;
-    box-shadow: none;
-    object-fit: contain;
-    opacity: 0.85;
-    padding: 6px;
+  /* Unsupported state — headline left-aligned in the lyric column so
+     the centered watermark behind it stays visible (lyrics text moves
+     out of the watermark's vertical centerline). Brand-color backdrop
+     fills the plate with a soft service-tinted glow. */
+  body.unsupported #cur { text-align: left; line-height: 1; }
+  /* Service-brand-color backdrop. The radial gradient is centered on
+     the headline area (~22% from the left) and fades out by 72%,
+     leaving the right edge of the plate dark for the metadata column.
+     `--unsupported-bg` is set inline from JS per service. Defaults to
+     transparent so it has no effect when no brand color is known. */
+  #unsupported-bg {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    /* z-index 1 = same level as #plate. DOM order puts it AFTER #plate
+       so it paints over the dark veil, AND BEFORE #credit so the
+       centered watermark still paints on top of the backdrop tint. */
+    z-index: 1;
+    background: var(--unsupported-bg, transparent);
+    transition: background 320ms ease;
   }
   .unsupported-supertitle {
     display: block;
@@ -399,6 +407,7 @@
 <div id="wrap">
   <div id="bg"></div>
   <div id="plate"></div>
+  <div id="unsupported-bg"></div>
   <div id="row">
     <img id="art" alt="">
     <div id="col">
@@ -683,37 +692,47 @@
       setTimeout(() => document.body.classList.remove("track-in"), 800);
     }
 
-    // Album art (or Hum logo fallback for the unsupported state — gives
-    // the row a visual anchor on the left when there's no album art to
-    // show, since the centered watermark is hidden in this state).
+    // Album art.
     const artKey = s.art_key || "";
-    const isUnsupported = lyr.status === "unsupported";
-    const desiredArt = artKey
-      ? "/art?k=" + encodeURIComponent(artKey)
-      : isUnsupported ? "/hum-logo.png" : "";
-    if (desiredArt !== lastArtKey) {
-      lastArtKey = desiredArt;
-      if (desiredArt) {
-        $art.src = desiredArt;
+    if (artKey !== lastArtKey) {
+      lastArtKey = artKey;
+      if (artKey) {
+        const src = "/art?k=" + encodeURIComponent(artKey);
+        $art.src = src;
         $art.classList.add("on");
-        // Hum-logo fallback gets a flag so its CSS can shrink it inside
-        // the art square and dim it slightly (the actual logo PNG is
-        // narrower than a square album cover).
-        $art.classList.toggle("hum-logo-art", !artKey && isUnsupported);
-        if (artKey) {
-          $bg.style.backgroundImage = `url("${desiredArt}")`;
-          $bg.classList.add("on");
-        } else {
-          $bg.classList.remove("on");
-          $bg.style.backgroundImage = "";
-        }
+        $bg.style.backgroundImage = `url("${src}")`;
+        $bg.classList.add("on");
       } else {
         $art.classList.remove("on");
-        $art.classList.remove("hum-logo-art");
         $art.removeAttribute("src");
         $bg.classList.remove("on");
         $bg.style.backgroundImage = "";
       }
+    }
+
+    // Brand-color backdrop for the unsupported state. Same service-name
+    // resolution as renderUnsupportedCur — uses the headline word as
+    // the key. Sets a CSS variable so the #unsupported-bg div paints
+    // the radial gradient. Cleared (transparent) in every other state.
+    const unsupportedBgEl = document.getElementById("unsupported-bg");
+    if (lyr.status === "unsupported") {
+      const title = (t.title || "").trim();
+      const srcLabel = s.source_label || "";
+      const KNOWN_VIDEO = /^(netflix|youtube|twitch|hulu|disney\+|prime video|amazon prime|hbo|max|peacock|apple tv|paramount\+|crunchyroll)$/i;
+      let svcName = "";
+      if (title.endsWith("Now Playing on Pandora")) svcName = "Pandora";
+      else if (title && KNOWN_VIDEO.test(title)) svcName = title;
+      else if (title && (!srcLabel || title.toLowerCase() !== srcLabel.toLowerCase())) svcName = title;
+      else svcName = srcLabel;
+      const c = serviceBrandColor(svcName);
+      unsupportedBgEl.style.setProperty(
+        "--unsupported-bg",
+        c
+          ? "radial-gradient(ellipse 60% 120% at 22% 50%, " + c + "33 0%, " + c + "14 38%, transparent 72%)"
+          : "transparent"
+      );
+    } else {
+      unsupportedBgEl.style.setProperty("--unsupported-bg", "transparent");
     }
 
     // Ad-break promo card branch.

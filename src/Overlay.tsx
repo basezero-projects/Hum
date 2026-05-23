@@ -507,6 +507,20 @@ export default function Overlay() {
   const middleText =
     cur?.text || (lyrics ? statusLine(lyrics, track) : "♪");
 
+  // Service name driving the unsupported-state brand-color backdrop.
+  // Same resolution as UnsupportedBlock so the backdrop matches the
+  // headline color (Netflix → red, Twitch → purple, etc.).
+  const unsupportedServiceName = (() => {
+    if (lyrics?.status !== "unsupported") return null;
+    const t = (track?.title ?? "").trim();
+    const srcLabel = sourceLabel(track?.source_app_id ?? null, null);
+    if (t.endsWith("Now Playing on Pandora")) return "Pandora";
+    if (t && KNOWN_VIDEO_SERVICES.test(t)) return t;
+    const titleIsJustSource = !!srcLabel && t.toLowerCase() === srcLabel.toLowerCase();
+    if (t && !titleIsJustSource) return t;
+    return srcLabel;
+  })();
+
   // Translation under the current line — only when the user opted in AND the
   // source actually returned one (currently only NetEase tlyric).
   const translationText: string | undefined =
@@ -744,7 +758,7 @@ export default function Overlay() {
     display: "flex",
     flexDirection: "row",
     alignItems: "center",
-    gap: (showArt && albumArt) || lyrics?.status === "unsupported" ? 14 : 0,
+    gap: showArt && albumArt ? 14 : 0,
     width: "100%",
     minHeight: 0,
     position: "relative",
@@ -799,11 +813,12 @@ export default function Overlay() {
         {showBlurBg ? (
           <BlurredAlbumBg dataUrl={albumArt!.data_url} tintColor={bgRgba} />
         ) : null}
+        {lyrics?.status === "unsupported" ? (
+          <UnsupportedBg serviceName={unsupportedServiceName} />
+        ) : null}
         <div {...dragProps} style={innerRowStyle}>
           {showArt && albumArt ? (
             <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} dragRegion={isEdit} onClick={openArtistPanel} />
-          ) : lyrics?.status === "unsupported" ? (
-            <HumLogoArt size={artSize} dragRegion={isEdit} />
           ) : null}
           <div {...dragProps} ref={setLyricsColEl} style={lyricsColStyle}>
             {lyrics?.status === "ad" && settingsForRender.ad_break_promos_enabled ? (
@@ -857,7 +872,7 @@ export default function Overlay() {
             />
           ) : null}
         </div>
-        {lyrics?.status === "unsupported" ? null : watermark}
+        {watermark}
       </div>
     );
   }
@@ -873,6 +888,9 @@ export default function Overlay() {
       >
         {showBlurBg ? (
           <BlurredAlbumBg dataUrl={albumArt!.data_url} tintColor={bgRgba} />
+        ) : null}
+        {lyrics?.status === "unsupported" ? (
+          <UnsupportedBg serviceName={unsupportedServiceName} />
         ) : null}
         {showArt && albumArt ? <AlbumArtBadge dataUrl={albumArt.data_url} onClick={openArtistPanel} /> : null}
         {openArtistPanel && (!showArt || !albumArt) && lyrics?.status !== "unsupported" ? (
@@ -922,7 +940,7 @@ export default function Overlay() {
             textShadow={effectiveTextShadow}
           />
         )}
-        {lyrics?.status === "unsupported" ? null : watermark}
+        {watermark}
       </div>
     );
   }
@@ -947,8 +965,6 @@ export default function Overlay() {
         <div {...dragProps} style={innerRowStyle}>
           {showArt && albumArt ? (
             <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} dragRegion={isEdit} onClick={openArtistPanel} />
-          ) : lyrics?.status === "unsupported" ? (
-            <HumLogoArt size={artSize} dragRegion={isEdit} />
           ) : null}
           <div {...dragProps} ref={setLyricsColEl} style={lyricsColStyle}>
           {lyrics?.status === "ad" && settingsForRender.ad_break_promos_enabled ? (
@@ -2070,17 +2086,17 @@ function UnsupportedBlock({
     <div
       {...drag}
       style={{
-        alignSelf: "stretch",
+        // Left-aligned now. The centered watermark sits behind the empty
+        // space to the right of this block (between it and the metadata
+        // column), so the Hum brand mark stays visible.
         display: "flex",
         flexDirection: "column",
-        alignItems: "center",
+        alignItems: "flex-start",
         justifyContent: "center",
         gap: 4,
         position: "relative",
-        width: "100%",
         maxWidth: "100%",
-        // Soft service-colored glow behind the block.
-        textShadow: halo,
+        flexShrink: 0,
       }}
     >
       {lead ? (
@@ -2094,7 +2110,7 @@ function UnsupportedBlock({
             textTransform: "uppercase",
             opacity: 0.7,
             lineHeight: 1.2,
-            textAlign: "center",
+            textAlign: "left",
           }}
         >
           {lead.replace(/[—\s]+$/, "")}
@@ -2106,7 +2122,6 @@ function UnsupportedBlock({
             fontSize: headlineFontSize,
             fontWeight: 800,
             color,
-            // Layered shadow: solid dark contact + the service-color halo.
             textShadow: halo
               ? `0 2px 4px rgba(0,0,0,0.95), 0 0 28px ${haloColor}88, 0 0 60px ${haloColor}55`
               : textShadow,
@@ -2117,7 +2132,7 @@ function UnsupportedBlock({
             overflow: "hidden",
             textOverflow: "ellipsis",
             maxWidth: "100%",
-            textAlign: "center",
+            textAlign: "left",
           }}
         >
           {highlight}
@@ -2133,13 +2148,36 @@ function UnsupportedBlock({
             letterSpacing: 0.3,
             opacity: 0.85,
             marginTop: 6,
-            textAlign: "center",
+            textAlign: "left",
           }}
         >
           {remaining}
         </div>
       ) : null}
     </div>
+  );
+}
+
+// Service-brand-color gradient backdrop for the unsupported state. Soft
+// elliptical glow originating from the left (where the headline sits)
+// fading into the dark plate on the right. Adds chromatic interest to
+// what would otherwise be a flat gray panel, without taking over.
+function UnsupportedBg({ serviceName }: { serviceName: string | null }) {
+  const color = serviceBrandColor(serviceName);
+  if (!color) return null;
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        background: `radial-gradient(ellipse 60% 120% at 22% 50%, ${color}33 0%, ${color}14 38%, transparent 72%)`,
+        pointerEvents: "none",
+        // No explicit z-index: relies on DOM order. Mounted right after
+        // BlurredAlbumBg and before the inner-row content so it paints
+        // behind the lyrics, watermark, and metadata.
+        transition: "background 320ms ease",
+      }}
+    />
   );
 }
 

@@ -6,6 +6,17 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.26] - 2026-05-22
+
+### Changed
+- **Unsupported-source view re-laid-out per Wes's spec: headline on the LEFT, watermark centered behind, metadata on the right + a service-brand-color gradient backdrop on the plate.** Replaces v0.13.25's three-column "logo-in-art-slot" layout.
+  - **Headline left-aligned** — `WATCHING` cap + brand-colored service name + `X min remaining` all sit in the left portion of the lyric column. Moves the text out of the centered watermark's vertical centerline so the Hum brand mark stays visible behind it.
+  - **Centered Hum watermark is back** in this state — same ghost mark as the music states.
+  - **Hum-logo-in-art-slot is gone** — would be a second logo on screen now that the centered watermark is back.
+  - **Metadata column stays visible** — time progress + source badge on the right (same as v0.13.25).
+  - **NEW: service-brand-color radial-gradient backdrop.** A soft elliptical glow originates from the headline's left position (~22% across) in the service's brand color (Netflix red, Twitch purple, etc.) at ~20% alpha, fading to transparent by 72% so the right side of the plate stays dark for the metadata column. Plate is no longer a flat gray — it picks up the service's identity at the same intensity as the headline halo. Falls back to no backdrop (transparent) when no brand color is known (e.g. generic browser, unknown source). Applied via an absolute-positioned `UnsupportedBg` div on the desktop side, and via a CSS variable `--unsupported-bg` on the streamer side.
+- Applies to both desktop overlay and OBS browser source.
+
 ## [0.13.25] - 2026-05-22
 
 ### Changed
