@@ -331,8 +331,18 @@
      is always present (just the meta column on the right gets hidden
      since it'd repeat what the headline already says). */
   body.unsupported #cur { text-align: center; line-height: 1; }
-  body.unsupported #meta { display: none; }
-  body.unsupported #bar { display: none; }
+  body.unsupported #credit { display: none; }
+  /* The hum-logo fallback paints the brand mark in the album-art slot
+     when the source has no art (Netflix, YouTube, Twitch in browser).
+     Slightly dimmed and inset so it reads as a logo-as-art rather than
+     a real cover. */
+  #art.hum-logo-art {
+    background: transparent;
+    box-shadow: none;
+    object-fit: contain;
+    opacity: 0.85;
+    padding: 6px;
+  }
   .unsupported-supertitle {
     display: block;
     font-size: 11px;
@@ -673,18 +683,33 @@
       setTimeout(() => document.body.classList.remove("track-in"), 800);
     }
 
-    // Album art.
+    // Album art (or Hum logo fallback for the unsupported state — gives
+    // the row a visual anchor on the left when there's no album art to
+    // show, since the centered watermark is hidden in this state).
     const artKey = s.art_key || "";
-    if (artKey !== lastArtKey) {
-      lastArtKey = artKey;
-      if (artKey) {
-        const src = "/art?k=" + encodeURIComponent(artKey);
-        $art.src = src;
+    const isUnsupported = lyr.status === "unsupported";
+    const desiredArt = artKey
+      ? "/art?k=" + encodeURIComponent(artKey)
+      : isUnsupported ? "/hum-logo.png" : "";
+    if (desiredArt !== lastArtKey) {
+      lastArtKey = desiredArt;
+      if (desiredArt) {
+        $art.src = desiredArt;
         $art.classList.add("on");
-        $bg.style.backgroundImage = `url("${src}")`;
-        $bg.classList.add("on");
+        // Hum-logo fallback gets a flag so its CSS can shrink it inside
+        // the art square and dim it slightly (the actual logo PNG is
+        // narrower than a square album cover).
+        $art.classList.toggle("hum-logo-art", !artKey && isUnsupported);
+        if (artKey) {
+          $bg.style.backgroundImage = `url("${desiredArt}")`;
+          $bg.classList.add("on");
+        } else {
+          $bg.classList.remove("on");
+          $bg.style.backgroundImage = "";
+        }
       } else {
         $art.classList.remove("on");
+        $art.classList.remove("hum-logo-art");
         $art.removeAttribute("src");
         $bg.classList.remove("on");
         $bg.style.backgroundImage = "";

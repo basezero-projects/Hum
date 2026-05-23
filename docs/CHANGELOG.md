@@ -6,6 +6,15 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.25] - 2026-05-22
+
+### Changed
+- **Unsupported-source view is now a three-column layout: Hum logo on the left, centered headline in the middle, media-player metadata on the right.** v0.13.24 hid the metadata column to clean up duplication, but that took out the time-progress bar and source badge that genuinely belong on screen even when there's no lyrics. v0.13.24 also kept the centered watermark visible — directly behind the new big headline — which made the watermark invisible in practice (the bold headline + colored halo masked it). New approach:
+  - **Album-art slot now renders the Hum brand mark when the source has no art** (Netflix in browser, Twitch streams, etc.). Same square footprint album art would normally occupy, slightly dimmed (opacity 0.85) and inset 6px so it reads as a logo standing in for art rather than a real cover. Gives the row a visual anchor on the left and keeps the Hum brand mark present.
+  - **Centered watermark hidden in unsupported state** (the logo-in-art-slot is the brand mark now).
+  - **Metadata column is back** — same time progress bar + source badge as the music states. The center-column "Watching Netflix · 23 min remaining" headline carries the friendly framing; the metadata column carries the exact at-a-glance numbers.
+- Net effect: HUM logo (left) — bold brand-colored "Watching Netflix" headline + remaining time (center) — time progress bar + CHROME badge (right).
+
 ## [0.13.24] - 2026-05-22
 
 ### Changed
