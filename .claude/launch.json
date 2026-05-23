@@ -1,0 +1,15 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "hum-streamer-overlay",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-Command",
+        "while ($true) { Start-Sleep 60 }"
+      ],
+      "port": 38247
+    }
+  ]
+}

@@ -12,8 +12,15 @@
    * transparent so OBS compositing Just Works; a subtle dark plate
    * sits behind the layout for legibility against bright captures.
    * State updates arrive via Server-Sent Events (/events) with a poll
-   * fallback to /state if the stream drops. Progress bar interpolates
-   * locally between server pushes so it advances smoothly.
+   * fallback to /state if the stream drops. Progress bar + karaoke
+   * word index interpolate locally between server pushes so they
+   * advance smoothly without flooding the wire.
+   *
+   * URL params (all optional):
+   *   ?theme=default|neon|retro|minimal    — visual preset
+   *   ?accent=ff00aa                       — overrides --gold (hex, no #)
+   *   ?only=spotify|pandora|youtube|...    — render only this source
+   *   ?nochrome=1                          — minimalist 3-line mode (no art, no meta column)
    */
   :root {
     --text: #ffffff;
@@ -22,6 +29,36 @@
     --gold: #d4af37;
     --plate: rgba(0, 0, 0, 0.45);
   }
+  /* Theme presets — applied as body classes from the ?theme= URL param. */
+  body.theme-neon {
+    --text: #ffffff;
+    --text-dim: #ff35c7;
+    --text-faint: rgba(255, 53, 199, 0.55);
+    --gold: #00ffe0;
+    --plate: rgba(20, 0, 30, 0.55);
+  }
+  body.theme-retro {
+    --text: #f7e9c4;
+    --text-dim: rgba(247, 233, 196, 0.55);
+    --text-faint: rgba(247, 233, 196, 0.32);
+    --gold: #ff6b35;
+    --plate: rgba(40, 20, 10, 0.55);
+  }
+  body.theme-minimal {
+    --text: #ffffff;
+    --text-dim: rgba(255, 255, 255, 0.4);
+    --text-faint: rgba(255, 255, 255, 0.25);
+    --gold: #ffffff;
+    --plate: transparent;
+  }
+  body.theme-minimal #bg,
+  body.theme-minimal #plate { display: none; }
+  /* No-chrome mode — back to the original 3-line stripped-down look. */
+  body.no-chrome #art,
+  body.no-chrome #meta,
+  body.no-chrome #bg,
+  body.no-chrome #plate { display: none !important; }
+
   * { box-sizing: border-box; }
   html, body {
     margin: 0;
@@ -44,7 +81,6 @@
     padding: 10px 16px;
     overflow: hidden;
   }
-  /* Blurred album art behind everything, mirrors BlurredAlbumBg. */
   #bg {
     position: absolute;
     inset: -48px;
@@ -52,12 +88,10 @@
     background-size: cover;
     filter: blur(40px) saturate(1.35) brightness(0.62);
     opacity: 0;
-    transition: opacity 320ms ease;
+    transition: opacity 320ms ease, background-image 320ms ease;
     z-index: 0;
   }
   #bg.on { opacity: 1; }
-  /* Subtle dark plate above the blur but below the text. Provides
-     legibility on the corner case where no art has loaded yet. */
   #plate {
     position: absolute;
     inset: 0;
@@ -85,7 +119,7 @@
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
     object-fit: cover;
     background: rgba(255, 255, 255, 0.04);
-    display: none; /* shown when art loads */
+    display: none;
   }
   #art.on { display: block; }
   #col {
@@ -120,6 +154,47 @@
     0%   { transform: translateY(8px); opacity: 0; }
     60%  { opacity: 1; }
     100% { transform: translateY(0); opacity: 1; }
+  }
+  /* Karaoke per-word gradient — each .word span is a slice of a two-stop
+     gradient sized 200% wide, scrolled by background-position. Lit (text
+     color) on the left half, dim (text-dim) on the right half. Future
+     words sit at 100% 0% (dim half visible), past words at 0% 0% (lit
+     half visible), the current word transitions 100% → 0% over its
+     duration. background-clip:text restricts the gradient to glyph
+     shapes so the words look like solid color blocks, not painted
+     rectangles. */
+  .word {
+    background: linear-gradient(
+      to right,
+      var(--text) 0%,
+      var(--text) 50%,
+      var(--text-dim) 50%,
+      var(--text-dim) 100%
+    );
+    background-size: 200% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    transition-property: background-position;
+    transition-timing-function: linear;
+    transition-duration: 0ms;
+  }
+  .word.future { background-position: 100% 0%; }
+  .word.current,
+  .word.past { background-position: 0% 0%; }
+  /* Track-change stinger — fires when the track key changes. Album art
+     slides in from the left, metadata column fades in from the right.
+     The lyric line uses the existing .anim-in keyframe. */
+  body.track-in #art.on { animation: hum-art-in 600ms cubic-bezier(0.4, 0.0, 0.2, 1) both; }
+  body.track-in #meta   { animation: hum-meta-in 600ms 80ms cubic-bezier(0.4, 0.0, 0.2, 1) both; }
+  @keyframes hum-art-in {
+    0%   { transform: translateX(-18px) scale(0.92); opacity: 0; }
+    100% { transform: translateX(0) scale(1); opacity: 1; }
+  }
+  @keyframes hum-meta-in {
+    0%   { transform: translateX(14px); opacity: 0; }
+    100% { transform: translateX(0); opacity: 1; }
   }
   #meta {
     flex-shrink: 0;
@@ -184,9 +259,7 @@
     background: rgba(212, 175, 55, 0.12);
     border-color: rgba(212, 175, 55, 0.5);
   }
-  /* Ad-break promo card render path. Replaces the lyric column when
-     status === "ad". Image-driven path renders the hero <img>; the
-     text-driven fallback layout sits inside #promo-text. */
+  /* PromoCard during ad breaks (image-driven or text-driven fallback). */
   #promo {
     position: relative;
     z-index: 2;
@@ -236,6 +309,11 @@
     text-transform: uppercase;
     letter-spacing: 0.8px;
   }
+  /* When the only= URL param filters out the current source, blank the
+     whole layout so OBS shows nothing. Streamers can layer multiple
+     browser sources (one per service) and have them all pointing at
+     the same Hum, each filtering its own source. */
+  body.hidden #wrap { visibility: hidden; }
 </style>
 </head>
 <body>
@@ -271,16 +349,34 @@
 </div>
 <script>
 (() => {
-  const $bg   = document.getElementById("bg");
-  const $art  = document.getElementById("art");
-  const $prev = document.getElementById("prev");
-  const $cur  = document.getElementById("cur");
-  const $next = document.getElementById("next");
-  const $row  = document.getElementById("row");
-  const $meta = document.getElementById("meta-text");
-  const $tcur = document.getElementById("time-current");
-  const $tdur = document.getElementById("time-duration");
-  const $bar  = document.getElementById("bar-fill");
+  // ── URL params ───────────────────────────────────────────────────────
+  const params = new URLSearchParams(window.location.search);
+  const themeRaw = (params.get("theme") || "default").toLowerCase();
+  const validThemes = ["default", "neon", "retro", "minimal"];
+  const theme = validThemes.includes(themeRaw) ? themeRaw : "default";
+  if (theme !== "default") {
+    document.body.classList.add("theme-" + theme);
+  }
+  const accentRaw = (params.get("accent") || "").replace(/^#/, "");
+  if (/^[0-9a-fA-F]{3,8}$/.test(accentRaw)) {
+    document.documentElement.style.setProperty("--gold", "#" + accentRaw);
+  }
+  if (params.get("nochrome") === "1") {
+    document.body.classList.add("no-chrome");
+  }
+  const onlySource = (params.get("only") || "").toLowerCase().trim();
+
+  // ── DOM refs ─────────────────────────────────────────────────────────
+  const $bg    = document.getElementById("bg");
+  const $art   = document.getElementById("art");
+  const $prev  = document.getElementById("prev");
+  const $cur   = document.getElementById("cur");
+  const $next  = document.getElementById("next");
+  const $row   = document.getElementById("row");
+  const $meta  = document.getElementById("meta-text");
+  const $tcur  = document.getElementById("time-current");
+  const $tdur  = document.getElementById("time-duration");
+  const $bar   = document.getElementById("bar-fill");
   const $badge = document.getElementById("badge");
   const $promo = document.getElementById("promo");
   const $promoImg = document.getElementById("promo-img");
@@ -289,12 +385,21 @@
   const $promoTagline = document.getElementById("promo-tagline");
   const $promoCta = document.getElementById("promo-cta");
 
+  // ── State ────────────────────────────────────────────────────────────
+  let lastState = null;
   let lastTrackKey = "";
   let lastArtKey = "";
   let lastCursor = -2;
   let lastPromoId = "";
-  let lastState = null;
+  // Karaoke state: tracks which line's words are currently rendered in
+  // $cur and which word index was active on the last rAF tick.
+  let karaokeLineKey = "";
+  let karaokeWordSpans = [];
+  let karaokeWordsRef = [];
+  let karaokeLineEndMs = 0;
+  let karaokeLastIdx = -2;
 
+  // ── Helpers ──────────────────────────────────────────────────────────
   function fmtMs(ms) {
     if (!ms || ms < 0 || !isFinite(ms)) return "0:00";
     const total = Math.floor(ms / 1000);
@@ -313,22 +418,118 @@
     el.classList.toggle("empty", isEmpty);
     if (animate) {
       el.classList.remove("anim-in");
-      // Force reflow so the animation restarts cleanly.
       void el.offsetWidth;
       el.classList.add("anim-in");
     }
   }
 
+  // A word's "duration" = time until the next word starts, or until the
+  // next line starts for the last word. Floored at 80ms so the gradient
+  // sweep stays visible on tightly-packed lyrics.
+  function wordDurationMs(words, idx, lineEndMs) {
+    const w = words[idx];
+    if (!w) return 500;
+    const nextStart = idx + 1 < words.length ? words[idx + 1].time_ms : lineEndMs;
+    return Math.max(80, nextStart - w.time_ms);
+  }
+
+  // Build the per-word spans for a karaoke line. Initial state: all
+  // words .future (dim, no transition). The rAF tick advances classes.
+  function buildKaraokeSpans(words, animate) {
+    $cur.innerHTML = "";
+    $cur.classList.remove("empty");
+    karaokeWordSpans = [];
+    const wrap = document.createElement("span");
+    wrap.style.display = "inline-block";
+    if (animate) {
+      wrap.className = "anim-in";
+    }
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i];
+      const span = document.createElement("span");
+      span.className = "word future";
+      span.textContent = w.text;
+      // Trailing space so the words don't collide; if the source already
+      // included spacing in the text (NetEase does this), the extra
+      // whitespace collapses harmlessly.
+      if (i < words.length - 1) {
+        span.textContent += " ";
+      }
+      wrap.appendChild(span);
+      karaokeWordSpans.push(span);
+    }
+    $cur.appendChild(wrap);
+  }
+
+  function updateKaraokeIdx(newIdx) {
+    if (newIdx === karaokeLastIdx) return;
+    for (let i = 0; i < karaokeWordSpans.length; i++) {
+      const span = karaokeWordSpans[i];
+      // Compute class transition. Setting transition-duration BEFORE
+      // changing the class so the new background-position interpolation
+      // picks up the right duration.
+      if (i < newIdx) {
+        span.style.transitionDuration = "0ms";
+        span.className = "word past";
+      } else if (i === newIdx) {
+        const dur = wordDurationMs(karaokeWordsRef, i, karaokeLineEndMs);
+        span.style.transitionDuration = dur + "ms";
+        span.className = "word current";
+      } else {
+        span.style.transitionDuration = "0ms";
+        span.className = "word future";
+      }
+    }
+    karaokeLastIdx = newIdx;
+  }
+
+  function clearKaraoke() {
+    karaokeLineKey = "";
+    karaokeWordSpans = [];
+    karaokeWordsRef = [];
+    karaokeLineEndMs = 0;
+    karaokeLastIdx = -2;
+  }
+
+  // Maps the server-supplied source_label to the simple lower-case keys
+  // accepted by the ?only= URL param. Streamers can pass aliases like
+  // ?only=spotify and have it match "Spotify".
+  function sourceMatchesFilter(label, filter) {
+    if (!filter) return true;
+    const l = (label || "").toLowerCase();
+    if (l === filter) return true;
+    // Partial match — ?only=apple matches "Apple Music"; ?only=youtube
+    // matches "YouTube Music".
+    return l.includes(filter);
+  }
+
+  // ── Render ───────────────────────────────────────────────────────────
   function render(s) {
     lastState = s;
     const t = s.track || {};
     const lyr = s.lyrics || {};
     const cursor = typeof s.cursor === "number" ? s.cursor : -1;
 
+    // Source filter — when ?only= is set and the current source doesn't
+    // match, blank the layout instead of showing the wrong stream's
+    // metadata. Lets a streamer layer multiple OBS browser sources
+    // (one per app) and only the active source paints.
+    const matchesFilter = sourceMatchesFilter(s.source_label, onlySource);
+    document.body.classList.toggle("hidden", !matchesFilter);
+
     const trackKey = (t.title || "") + "|" + (t.artist || "");
-    const trackChanged = trackKey !== lastTrackKey;
+    const trackChanged = trackKey !== lastTrackKey && trackKey !== "|";
     lastTrackKey = trackKey;
 
+    // Stinger animation on track change.
+    if (trackChanged && matchesFilter) {
+      document.body.classList.remove("track-in");
+      void document.body.offsetWidth;
+      document.body.classList.add("track-in");
+      setTimeout(() => document.body.classList.remove("track-in"), 800);
+    }
+
+    // Album art.
     const artKey = s.art_key || "";
     if (artKey !== lastArtKey) {
       lastArtKey = artKey;
@@ -348,6 +549,7 @@
 
     // Ad-break promo card branch.
     if (lyr.status === "ad" && lyr.promo) {
+      clearKaraoke();
       $row.style.display = "none";
       $promo.classList.add("on");
       const p = lyr.promo;
@@ -401,9 +603,32 @@
       const cur  = lines[cursor];
       const next = cursor + 1 < lines.length ? lines[cursor + 1] : null;
       setLine($prev, prev ? prev.text : "", false);
-      setLine($cur,  cur  ? cur.text  : "", cursorChanged);
+      // Karaoke vs flat-text branch for the current line. Karaoke
+      // requires per-word timings (SimpMusic's enhanced LRC, NetEase
+      // word-level data). Lines without `.words` fall back to the
+      // existing flat-text render.
+      const curHasWords = cur && Array.isArray(cur.words) && cur.words.length > 0;
+      const lineKey = cur ? `${cursor}|${cur.time_ms}|${cur.text}` : "";
+      if (curHasWords) {
+        if (lineKey !== karaokeLineKey) {
+          karaokeLineKey = lineKey;
+          karaokeWordsRef = cur.words;
+          // Line end = next line's start time (for word-duration calc on
+          // the trailing word). Fall back to current line + 5s if there
+          // is no next line.
+          karaokeLineEndMs = next ? next.time_ms : (cur.time_ms + 5000);
+          karaokeLastIdx = -2;
+          buildKaraokeSpans(cur.words, cursorChanged);
+        }
+      } else {
+        if (karaokeLineKey !== "") {
+          clearKaraoke();
+        }
+        setLine($cur, cur ? cur.text : "", cursorChanged);
+      }
       setLine($next, next ? next.text : "", false);
     } else {
+      clearKaraoke();
       let mid;
       switch (lyr.status) {
         case "fetching":     mid = t.title ? "♪ fetching — " + t.title : "♪ fetching…"; break;
@@ -421,24 +646,8 @@
     }
   }
 
-  // Local position interpolation. The server pushes state only when
-  // change-relevant fields flip — the progress bar advances between
-  // pushes by extrapolating from track.position_ms + (now -
-  // last_update_unix_ms). Runs at rAF cadence; no network cost.
-  function tickProgress() {
-    requestAnimationFrame(tickProgress);
-    const s = lastState;
-    if (!s) return;
-    const t = s.track || {};
-    const dur = Number(t.duration_ms) || 0;
-    if (dur <= 0) {
-      $tcur.textContent = "";
-      $tdur.textContent = "";
-      $bar.style.transform = "scaleX(0)";
-      $bar.parentElement.style.visibility = "hidden";
-      return;
-    }
-    $bar.parentElement.style.visibility = "visible";
+  // ── rAF tick — progress bar + karaoke word index ─────────────────────
+  function interpolatedPosMs(t) {
     let pos = Number(t.position_ms) || 0;
     if (t.state === "playing") {
       const last = Number(t.last_update_unix_ms) || 0;
@@ -446,17 +655,50 @@
         pos += Math.max(0, Date.now() - last);
       }
     }
-    pos = Math.min(pos, dur);
-    const frac = pos / dur;
-    $bar.style.transform = `scaleX(${frac.toFixed(4)})`;
-    $tcur.textContent = fmtMs(pos);
-    $tdur.textContent = fmtMs(dur);
+    return pos;
   }
-  tickProgress();
 
-  // Server-Sent Events stream. EventSource auto-reconnects on disconnect;
-  // poll fallback only fires if the initial connection never opens (e.g.
-  // a proxy stripped the SSE upgrade or the server isn't up yet).
+  function tick() {
+    requestAnimationFrame(tick);
+    const s = lastState;
+    if (!s) return;
+    const t = s.track || {};
+
+    // Progress bar.
+    const dur = Number(t.duration_ms) || 0;
+    if (dur <= 0) {
+      $tcur.textContent = "";
+      $tdur.textContent = "";
+      $bar.style.transform = "scaleX(0)";
+      $bar.parentElement.style.visibility = "hidden";
+    } else {
+      $bar.parentElement.style.visibility = "visible";
+      const pos = Math.min(interpolatedPosMs(t), dur);
+      $bar.style.transform = `scaleX(${(pos / dur).toFixed(4)})`;
+      $tcur.textContent = fmtMs(pos);
+      $tdur.textContent = fmtMs(dur);
+    }
+
+    // Karaoke word index. Walks the line's words; finds the highest
+    // index whose time_ms <= interpolated position. updateKaraokeIdx
+    // bails when the index hasn't changed, so per-frame cost is just
+    // the loop — no DOM writes on stable frames.
+    if (karaokeWordSpans.length > 0 && karaokeWordsRef.length > 0) {
+      const pos = interpolatedPosMs(t);
+      let idx = -1;
+      for (let i = 0; i < karaokeWordsRef.length; i++) {
+        if (karaokeWordsRef[i].time_ms <= pos) {
+          idx = i;
+        } else {
+          break;
+        }
+      }
+      updateKaraokeIdx(idx);
+    }
+  }
+  tick();
+
+  // ── SSE + poll fallback ──────────────────────────────────────────────
   let sseOpen = false;
   let pollTimer = null;
 
@@ -470,8 +712,6 @@
       try { render(JSON.parse(ev.data)); } catch (_) {}
     });
     es.addEventListener("error", () => {
-      // EventSource reconnects on its own; only spin up polling if we
-      // never managed to open the stream at all.
       if (!sseOpen && !pollTimer) {
         startPollFallback();
       }

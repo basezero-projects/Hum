@@ -6,6 +6,24 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.5] - 2026-05-22
+
+### Added
+- **Karaoke-style per-word highlighting on the OBS browser source.** When the lyric source provides word-level timings (SimpMusic's `richSyncLyrics`, NetEase word-level data — already in `WordSpan` for the desktop overlay), each word in the current line now fills left-to-right with the text color as it's sung, instead of the whole line snapping to lit-color at once. Rendered as per-word `<span>` elements with a two-stop linear gradient (lit half / dim half) sized 200% wide, clipped to the glyphs via `background-clip: text`. Background-position transitions 100%→0% over each word's duration (next-word-time minus current-word-time, floored at 80ms so tightly-packed lyrics still register). Lines without per-word timings fall back to the existing line-level animation. Computed at rAF cadence client-side from the interpolated playback position — no extra server load, no SSE messages per word.
+- **Track-change stinger animation on the OBS browser source.** When the track key changes (title|artist diff), the album art slides in from the left with a small scale bounce (-18px → 0px, 0.92 → 1.0 scale, 600ms cubic-bezier), the metadata column fades in from the right with an 80ms delay (14px → 0px, 600ms cubic-bezier), and the lyric line uses the existing `.anim-in` lift-and-fade. Together they give a clear visual "moment" on song change that reads on stream. Removed automatically 800ms after the swap so the animation doesn't loop.
+- **URL params for streamer customization** — `http://127.0.0.1:<port>/overlay?<params>`:
+  - **`?theme=neon|retro|minimal|default`** — visual presets. Neon is electric magenta dim + cyan accent; retro is sepia parchment + orange accent; minimal kills the blur background + plate (full transparency) and uses pure white for accents; default keeps the existing monochrome dark + gold look. Applied via body classes that override CSS custom properties.
+  - **`?accent=hex`** — overrides the gold accent color directly. Accepts 3-8 hex chars with or without `#` prefix. Useful for matching the streamer's brand color exactly. Combines with `?theme=` (accent overrides whatever the theme set for `--gold`).
+  - **`?only=spotify|pandora|itunes|youtube|browser|...`** — render only when the active source matches. Substring match against the server's `source_label` (case-insensitive), so `?only=apple` matches both "Apple Music" and any source containing "apple". Lets streamers layer multiple OBS browser sources — one per service — and each filters to its own. Mismatched source = wrap is set to `visibility: hidden` (OBS sees nothing, but the page keeps polling so re-matches re-show without a reload).
+  - **`?nochrome=1`** — back to the v0.13.0 minimalist 3-line look (no album art, no metadata column, no blurred background, no plate). For streamers who want only the lyrics with everything else handled by their own OBS layout.
+
+### Changed
+- **OBS source's `<title>` is `Hum — OBS source`** to make it clear in OBS's source list which browser-source is the lyric overlay (vs other browser sources the streamer may have).
+- **Track-change detection guards against the empty-track edge case.** Previously the `(title || "") + "|" + (artist || "")` comparison fired on app boot when track was still loading (both empty), then immediately fired again when the real track arrived, triggering a stinger on the boot-to-first-song transition. Now skips when both fields are empty so the first song's stinger only fires when there's a real track to highlight.
+
+### Internal
+- **New `.claude/launch.json` config** for the preview tool to reach the streamer endpoint during dev verification. Points at port 38247 with a no-op `powershell sleep` runtimeExecutable since the Hum binary is independently launched. Used by the post-Write hook verification workflow.
+
 ## [0.13.4] - 2026-05-22
 
 ### Fixed
