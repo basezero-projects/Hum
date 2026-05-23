@@ -10,7 +10,7 @@ Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `sr
 
 ### Added — Ad-break detection + SYVR cross-promo overlay (full feature)
 
-This is the consolidated user-facing release entry for v0.12.0. Sub-entries 0.12.0-rc1 through 0.12.0-rc8 above this entry document the per-commit work; the bullets below summarize what's new for the user.
+This is the consolidated user-facing release entry for v0.12.0. Sub-entries 0.12.0-rc1 through 0.12.0-rc8 below this entry document the per-commit work; the bullets below summarize what's new for the user.
 
 - **Ad-break detection across Spotify, Pandora web, Pandora desktop, and YouTube web.** When an ad break is detected, the overlay's lyric area is replaced with a rotating SYVR Studios product promo card. The right-side metadata column stays visible so users see how much of the ad is left via the progress bar — the source-app badge swaps to an amber `AD BREAK` chip in place of `SPOTIFY` / `PANDORA` / `CHROME`. The Artist · Song · Album line is hidden during ads (showing the previous track's title would be misleading; the AD BREAK chip + promo card already explain what's happening).
 
