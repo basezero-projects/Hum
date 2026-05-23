@@ -842,7 +842,7 @@ export default function Overlay() {
               </>
             )}
           </div>
-          {track ? (
+          {track && lyrics?.status !== "unsupported" ? (
             <MetadataColumn
               track={track}
               textColor={effectiveTextColor}
@@ -855,7 +855,7 @@ export default function Overlay() {
             />
           ) : null}
         </div>
-        {lyrics?.status === "unsupported" ? null : watermark}
+        {watermark}
       </div>
     );
   }
@@ -873,7 +873,7 @@ export default function Overlay() {
           <BlurredAlbumBg dataUrl={albumArt!.data_url} tintColor={bgRgba} />
         ) : null}
         {showArt && albumArt ? <AlbumArtBadge dataUrl={albumArt.data_url} onClick={openArtistPanel} /> : null}
-        {openArtistPanel && (!showArt || !albumArt) ? (
+        {openArtistPanel && (!showArt || !albumArt) && lyrics?.status !== "unsupported" ? (
           <ArtistInfoDot onClick={openArtistPanel} />
         ) : null}
         {lyrics?.status === "ad" && settingsForRender.ad_break_promos_enabled ? (
@@ -920,7 +920,7 @@ export default function Overlay() {
             textShadow={effectiveTextShadow}
           />
         )}
-        {lyrics?.status === "unsupported" ? null : watermark}
+        {watermark}
       </div>
     );
   }
@@ -939,7 +939,7 @@ export default function Overlay() {
       <NudgeBanner banner={nudgeBanner} />
       <div {...dragProps} ref={setInnerRowEl} style={outerStackStyle}>
         <UpdateBanner state={updateState} onInstall={installUpdate} />
-        {openArtistPanel && (!showArt || !albumArt) ? (
+        {openArtistPanel && (!showArt || !albumArt) && lyrics?.status !== "unsupported" ? (
           <ArtistInfoDot onClick={openArtistPanel} />
         ) : null}
         <div {...dragProps} style={innerRowStyle}>
@@ -988,7 +988,7 @@ export default function Overlay() {
             </>
           )}
           </div>
-          {track ? (
+          {track && lyrics?.status !== "unsupported" ? (
             <MetadataColumn
               track={track}
               textColor={effectiveTextColor}
@@ -2011,41 +2011,47 @@ function UnsupportedBlock({
 
   const drag = dragRegion ? { "data-tauri-drag-region": true } : {};
 
-  // Hierarchy: small dim uppercase "WATCHING" supertitle + big bold
-  // brand-colored service name + smaller dim subline. When there's no
-  // lead (e.g. title alone, no service framing), the headline carries
-  // both the framing and the brand mark.
-  const headlineFontSize = Math.max(settings.font_size_px * 1.1, 22);
-  const supertitleFontSize = Math.max(headlineFontSize * 0.32, 10);
-  const sublineFontSize = Math.max(headlineFontSize * 0.42, 12);
+  // Visual hierarchy: small dim "Watching" cap above + GIANT brand
+  // headline + clear remaining-time line below. Sizes scale with the
+  // user's font_size_px so a user-shrunk overlay shrinks gracefully.
+  const headlineFontSize = Math.max(settings.font_size_px * 1.6, 32);
+  const captionFontSize = Math.max(headlineFontSize * 0.28, 11);
+  const sublineFontSize = Math.max(headlineFontSize * 0.4, 14);
+  // Soft halo behind the headline using the service brand color — adds
+  // a colored breath to the otherwise gray plate without taking over.
+  // Falls back to a neutral dark glow when there's no brand color.
+  const haloColor = serviceBrandColor(highlight);
+  const halo = haloColor
+    ? `0 0 64px ${haloColor}55, 0 0 22px ${haloColor}77`
+    : undefined;
 
   return (
     <div
       {...drag}
       style={{
-        // Full width within the lyrics column so the centered block
-        // doesn't collapse to its content width and stick to the left.
         alignSelf: "stretch",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        gap: 6,
+        gap: 4,
         position: "relative",
         width: "100%",
         maxWidth: "100%",
+        // Soft service-colored glow behind the block.
+        textShadow: halo,
       }}
     >
       {lead ? (
         <div
           style={{
-            fontSize: supertitleFontSize,
+            fontSize: captionFontSize,
             fontWeight: 600,
             color: settings.text_color_dim,
             textShadow,
-            letterSpacing: 1.5,
+            letterSpacing: 2,
             textTransform: "uppercase",
-            opacity: 0.85,
+            opacity: 0.7,
             lineHeight: 1.2,
             textAlign: "center",
           }}
@@ -2057,11 +2063,14 @@ function UnsupportedBlock({
         <div
           style={{
             fontSize: headlineFontSize,
-            fontWeight: 700,
+            fontWeight: 800,
             color,
-            textShadow,
-            letterSpacing: 0.5,
-            lineHeight: 1.15,
+            // Layered shadow: solid dark contact + the service-color halo.
+            textShadow: halo
+              ? `0 2px 4px rgba(0,0,0,0.95), 0 0 28px ${haloColor}88, 0 0 60px ${haloColor}55`
+              : textShadow,
+            letterSpacing: -0.5,
+            lineHeight: 1.05,
             transition: "color 220ms ease",
             whiteSpace: "nowrap",
             overflow: "hidden",
@@ -2077,12 +2086,12 @@ function UnsupportedBlock({
         <div
           style={{
             fontSize: sublineFontSize,
-            fontWeight: 400,
-            color: settings.text_color_dim,
-            textShadow,
+            fontWeight: 500,
+            color: settings.text_color,
+            textShadow: "0 1px 2px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.6)",
             letterSpacing: 0.3,
-            opacity: 0.9,
-            marginTop: 2,
+            opacity: 0.85,
+            marginTop: 6,
             textAlign: "center",
           }}
         >

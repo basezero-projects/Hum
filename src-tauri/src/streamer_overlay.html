@@ -325,29 +325,32 @@
      browser sources (one per service) and have them all pointing at
      the same Hum, each filtering its own source. */
   body.hidden #wrap { visibility: hidden; }
-  /* Unsupported-source state — "WATCHING" supertitle + brand-colored
-     service headline + "X min remaining" subline. Hide the watermark
-     in this state so it doesn't compete with the centered headline. */
-  body.unsupported #cur { text-align: center; }
-  body.unsupported #credit { display: none; }
+  /* Unsupported-source state — small uppercase caption + GIANT brand-
+     colored service headline + small bright remaining-time line. The
+     centered watermark stays visible behind the block so the Hum brand
+     is always present (just the meta column on the right gets hidden
+     since it'd repeat what the headline already says). */
+  body.unsupported #cur { text-align: center; line-height: 1; }
+  body.unsupported #meta { display: none; }
+  body.unsupported #bar { display: none; }
   .unsupported-supertitle {
     display: block;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     color: var(--text-dim);
-    letter-spacing: 1.5px;
+    letter-spacing: 2px;
     text-transform: uppercase;
-    opacity: 0.85;
+    opacity: 0.7;
     line-height: 1.2;
-    margin-bottom: 4px;
+    margin-bottom: 6px;
   }
   .unsupported-headline {
     display: block;
-    font-size: 28px;
-    font-weight: 700;
-    letter-spacing: 0.5px;
-    line-height: 1.15;
-    transition: color 220ms ease;
+    font-size: 48px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    line-height: 1.05;
+    transition: color 220ms ease, text-shadow 220ms ease;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -355,12 +358,13 @@
   }
   .unsupported-subline {
     display: block;
-    margin-top: 4px;
-    font-size: 12px;
-    font-weight: 400;
-    color: var(--text-dim);
+    margin-top: 8px;
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--text);
     letter-spacing: 0.3px;
-    opacity: 0.9;
+    opacity: 0.85;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95), 0 0 8px rgba(0, 0, 0, 0.6);
   }
   /* Watermark — opt-in via ?credit=1. Sits in the bottom-right corner
      so it doesn't compete with the lyric stack. Uses --gold so the
@@ -528,9 +532,24 @@
       );
     }
     if (highlight) {
-      const colorAttr = color ? ' style="color:' + color + '"' : "";
+      // Layered text shadow: dark contact for legibility + colored
+      // halo for visual interest. Falls back to dark-only when no
+      // brand color is known.
+      const styleParts = [];
+      if (color) {
+        styleParts.push("color:" + color);
+        styleParts.push(
+          "text-shadow:0 2px 4px rgba(0,0,0,0.95), 0 0 28px " + color
+          + "88, 0 0 60px " + color + "55"
+        );
+      } else {
+        styleParts.push(
+          "text-shadow:0 2px 4px rgba(0,0,0,0.95), 0 0 18px rgba(0,0,0,0.7)"
+        );
+      }
       parts.push(
-        "<div class=\"unsupported-headline\"" + colorAttr + ">"
+        "<div class=\"unsupported-headline\" style=\""
+        + styleParts.join(";") + "\">"
         + escape(highlight) + "</div>"
       );
     }

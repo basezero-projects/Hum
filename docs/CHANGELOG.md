@@ -6,6 +6,17 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.24] - 2026-05-22
+
+### Changed
+- **Unsupported-source view redesigned for impact and to clean up the redundant UI around it.** Three fixes wrapped into one slice:
+  - **Watermark stays visible.** v0.13.23 hid the Hum logo in the unsupported state on the assumption it'd compete with the centered headline. It didn't — losing the brand mark made the whole view feel impoverished. Now back, behind everything as before.
+  - **Artist-info dot is hidden in unsupported state.** Previously the gold "Artist info" pill rendered top-left whenever there was no album art — which was always the case for Netflix/Twitch/etc. It made the overlay look like it had a permanent indicator stuck on. There's no artist when watching a movie, so the affordance shouldn't be there.
+  - **Metadata column is hidden in unsupported state.** Previously the right side still showed "Netflix · CHROME · 65:57 / 94:56" alongside the new centered "Watching Netflix" headline — pure duplication that made the whole view look busy. Now the cur block carries the full story.
+- **Headline is much bigger and gets a service-colored halo glow.** Font scaled from `font_size_px * 1.1` to `font_size_px * 1.6` (minimum 32px desktop / 48px streamer), weight 700 → 800, letter-spacing tightened. Behind the headline a soft glow uses the service brand color (Netflix red, YouTube red, Twitch purple, etc.) — two layers of color-tinted text-shadow at low alpha give the headline a colored breath without taking over the plate. Falls back to a neutral dark halo when no brand color is known.
+- **Caption upgraded.** `WATCHING` supertitle: letter-spacing 1.5px → 2px, opacity 0.85 → 0.7 (more restrained, lets the headline carry the room). Headline: from "the same color as text" → brand color + halo. Subline ("X min remaining"): brighter and weightier (`text_color` at 0.85 instead of `text_color_dim`, weight 500, dark glow for legibility), pushed down 6px from the headline.
+- Applies to both the desktop overlay and the OBS browser source.
+
 ## [0.13.23] - 2026-05-22
 
 ### Changed
