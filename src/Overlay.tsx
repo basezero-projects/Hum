@@ -20,7 +20,7 @@ import { fmtMs } from "./types";
 
 const DEFAULT_SETTINGS: Settings = {
   last_mode: "edit",
-  anticipate_ms: 500,
+  anticipate_ms: 0,
   jitter_tolerance_ms: 2000,
   font_family: "Inter",
   font_size_px: 26,

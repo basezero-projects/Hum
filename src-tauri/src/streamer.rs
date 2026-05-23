@@ -46,6 +46,7 @@ use tauri::{AppHandle, Manager};
 use tokio::sync::oneshot;
 
 use crate::lyrics::{CurrentLyrics, SharedLyrics};
+use crate::settings::SharedSettings;
 use crate::smtc::{CurrentTrack, SharedAlbumArt, SharedSnapshot};
 
 #[derive(Clone)]
@@ -53,6 +54,7 @@ struct AppState {
     snapshot: SharedSnapshot,
     lyrics: SharedLyrics,
     art: SharedAlbumArt,
+    settings: SharedSettings,
 }
 
 /// Combined snapshot returned by /state and pushed by /events. Frontend
@@ -82,6 +84,7 @@ struct StateResponse {
 async fn build_state(s: &AppState) -> StateResponse {
     let snap = s.snapshot.read().await.clone();
     let lyrics = s.lyrics.read().await.clone();
+    let anticipate_ms = { s.settings.read().await.anticipate_ms };
 
     let now_ms = unix_ms_now();
     let pos_ms = if snap.state == crate::smtc::PlaybackState::Playing {
@@ -90,11 +93,21 @@ async fn build_state(s: &AppState) -> StateResponse {
     } else {
         snap.position_ms
     };
+    // Apply the global lyric offset the same way the live overlay does
+    // (`src/Overlay.tsx::lookupPositionMs`). Positive = lyrics show
+    // earlier; negative = lyrics show later. Saturate at 0 so a large
+    // negative offset on a track playing from the start can't underflow
+    // the u64 lookup.
+    let lookup_pos_ms = if anticipate_ms >= 0 {
+        pos_ms.saturating_add(anticipate_ms as u64)
+    } else {
+        pos_ms.saturating_sub((-anticipate_ms) as u64)
+    };
 
     let mut cursor: i32 = -1;
     if matches!(lyrics.status, crate::lyrics::Status::Synced) {
         for (i, line) in lyrics.lines.iter().enumerate() {
-            if line.time_ms as u64 <= pos_ms {
+            if line.time_ms as u64 <= lookup_pos_ms {
                 cursor = i as i32;
             } else {
                 break;
@@ -338,8 +351,13 @@ pub fn start(app: AppHandle, port: u16) -> Result<ServerHandle> {
         .context("SharedAlbumArt not managed")?
         .inner()
         .clone();
+    let settings = app
+        .try_state::<SharedSettings>()
+        .context("SharedSettings not managed")?
+        .inner()
+        .clone();
 
-    let state = AppState { snapshot, lyrics, art };
+    let state = AppState { snapshot, lyrics, art, settings };
 
     let app_router: Router = Router::new()
         .route("/state", get(get_state))

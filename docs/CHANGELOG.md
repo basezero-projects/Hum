@@ -6,6 +6,15 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.4] - 2026-05-22
+
+### Fixed
+- **Lyric timing no longer needs a per-song +500ms nudge on every track.** The Settings panel's "Anticipation" slider defaulted to 500ms, which meant lyrics were displayed 500ms BEFORE their LRC-tagged time on every song. For most Spotify users that's too aggressive — Spotify reports the decoder's position, which sits a few hundred ms ahead of the audio the user actually hears (decoder buffer + OS audio output buffer), so the 500ms anticipation stacked on top of the natural buffer made lyrics appear ~half-a-line early. Users were compensating with the per-song Ctrl+Alt+] nudge but that nudge resets on every track change by design (so a bad-LRC fix doesn't bleed). The fix: default is now **0ms** (display at LRC truth), and the slider is renamed "Lyric offset" with a range of **−2000 to +2000 ms** (was 0 to 1500) so users whose setup runs early or late can dial in once and never touch the per-song nudge. Help text now explains the directionality: positive = anticipate, negative = delay. The Rust backend's clamp was already [-2000, 5000] — only the frontend slider was blocking negative values.
+- **OBS browser-source overlay now respects the lyric-offset setting.** Previously the streamer's `/state` and `/events` cursor was computed from raw `position_ms` with no offset applied — so if your desktop overlay had `anticipate_ms = 500` saved, the OBS view ran 500ms behind it. Now `streamer.rs::build_state` reads `SharedSettings` and applies the same offset formula the live overlay does (`src/Overlay.tsx::lookupPositionMs`). Desktop and stream stay in sync.
+
+### Changed
+- **"Anticipation" slider in Settings is now labeled "Lyric offset"** with a clarified help blurb that names the direction (positive = earlier, negative = later) and the per-song hotkey escape valve (Ctrl+Alt+[ / Ctrl+Alt+]).
+
 ## [0.13.3] - 2026-05-22
 
 ### Changed

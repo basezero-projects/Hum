@@ -84,7 +84,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             last_mode: OverlayMode::default(),
-            anticipate_ms: 500,
+            anticipate_ms: 0,
             jitter_tolerance_ms: 2000,
             font_family: "Inter".to_string(),
             font_size_px: 26.0,

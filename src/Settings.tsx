@@ -74,14 +74,14 @@ export default function SettingsView() {
 
       <Section title="Lyrics timing">
         <Slider
-          label="Anticipation"
+          label="Lyric offset"
           suffix="ms"
-          min={0}
-          max={1500}
+          min={-2000}
+          max={2000}
           step={25}
           value={s.anticipate_ms}
           onChange={(v) => update("anticipate_ms", v)}
-          help="How far ahead to look up the active line. 500ms feels right for most songs."
+          help="Shifts every lyric relative to the source's reported position. Positive = lyrics show earlier (anticipate the audio); negative = lyrics show later (delay). Most Spotify setups want 0 or slightly negative — Spotify reports its decoder position, which is a few hundred ms ahead of the audio you actually hear. Per-song fine-tuning is Ctrl+Alt+[ / Ctrl+Alt+]."
         />
         <Slider
           label="Seek-jitter tolerance"
