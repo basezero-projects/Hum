@@ -2124,23 +2124,6 @@ function UnsupportedBlock({
     ? settings.text_color
     : (serviceBrandColor(highlight) ?? settings.text_color);
 
-  // Remaining time. Wall-clock interpolation while playing so the count
-  // updates between server pushes.
-  let remaining: string | null = null;
-  if (track && track.duration_ms > 0) {
-    let pos = track.position_ms;
-    if (track.state === "playing") {
-      pos = track.position_ms + Math.max(0, Date.now() - track.last_update_unix_ms);
-    }
-    const remainingMs = Math.max(0, track.duration_ms - pos);
-    const min = Math.round(remainingMs / 60000);
-    if (min >= 1) {
-      remaining = `${min} min remaining`;
-    } else if (remainingMs >= 5000) {
-      remaining = `less than a minute remaining`;
-    }
-  }
-
   const drag = dragRegion ? { "data-tauri-drag-region": true } : {};
 
   // Visual hierarchy: small dim "Watching" cap above + GIANT brand
@@ -2148,6 +2131,7 @@ function UnsupportedBlock({
   // user's font_size_px so a user-shrunk overlay shrinks gracefully.
   const headlineFontSize = Math.max(settings.font_size_px * 1.6, 32);
   const captionFontSize = Math.max(headlineFontSize * 0.28, 11);
+  // Subline size for the artist row (when present — e.g. YouTube channel name).
   const sublineFontSize = Math.max(headlineFontSize * 0.4, 14);
   // Soft halo using the service brand color — adds a colored breath to
   // the otherwise gray plate without taking over. When the bridge path
@@ -2279,22 +2263,6 @@ function UnsupportedBlock({
           }}
         >
           {artistText}
-        </div>
-      ) : null}
-      {remaining ? (
-        <div
-          style={{
-            fontSize: sublineFontSize,
-            fontWeight: 500,
-            color: settings.text_color,
-            textShadow: "0 1px 2px rgba(0,0,0,0.95), 0 0 8px rgba(0,0,0,0.6)",
-            letterSpacing: 0.3,
-            opacity: 0.85,
-            marginTop: 6,
-            textAlign: "left",
-          }}
-        >
-          {remaining}
         </div>
       ) : null}
     </div>

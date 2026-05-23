@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.35] - 2026-05-23
+
+### Removed
+- **"X min remaining" subline under the service logo.** Duplicated the progress-bar + timestamps already shown in the metadata column on the right, and tended to skew when SMTC reported a different total duration than what the player was actually playing (Netflix in particular). The progress bar is the source of truth now.
+
 ## [0.13.34] - 2026-05-23
 
 ### Changed

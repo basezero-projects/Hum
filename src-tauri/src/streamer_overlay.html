@@ -1029,26 +1029,15 @@
         else if (title && !titleIsJustSource) { highlight = title; }
         else if (src) { lead = "Hum's tuned in —"; highlight = src; }
         else { lead = "Hum's tuned in"; }
-        // Remaining-time subline. Uses the same wall-clock interpolation
-        // as the progress-bar tick so the count stays current between
-        // server pushes.
-        let subline = null;
-        const durMs = Number(t.duration_ms) || 0;
-        if (durMs > 0) {
-          let pos = Number(t.position_ms) || 0;
-          if (t.state === "playing") {
-            const last = Number(t.last_update_unix_ms) || 0;
-            if (last > 0) pos += Math.max(0, Date.now() - last);
-          }
-          const remainingMs = Math.max(0, durMs - pos);
-          const min = Math.round(remainingMs / 60000);
-          if (min >= 1) subline = min + " min remaining";
-          else if (remainingMs >= 5000) subline = "less than a minute remaining";
-        }
+        // No remaining-time subline here — the metadata column on the
+        // right already shows position/duration accurately via the
+        // progress bar. Subline was duplicate info and often skewed
+        // when SMTC's reported duration didn't match what the player
+        // was actually playing.
         setLine($prev, "", false, "");
         setLine($next, "", false, "");
         const artist = (t.artist || "").trim();
-        renderUnsupportedCur(lead, highlight, artist, subline, bridgeServiceName, trackChanged);
+        renderUnsupportedCur(lead, highlight, artist, null, bridgeServiceName, trackChanged);
       } else {
         let mid;
         switch (lyr.status) {
@@ -1098,22 +1087,6 @@
       $bar.style.transform = `scaleX(${(pos / dur).toFixed(4)})`;
       $tcur.textContent = fmtMs(pos);
       $tdur.textContent = fmtMs(dur);
-    }
-
-    // Unsupported-state subline ("X min remaining") — recompute from
-    // the interpolated position so it stays current between state
-    // pushes. DOM write only when the text actually changes.
-    if (s.lyrics && s.lyrics.status === "unsupported" && dur > 0) {
-      const sublineEl = $cur.querySelector(".unsupported-subline");
-      if (sublineEl) {
-        const pos2 = interpolatedPosMs(t);
-        const remainingMs = Math.max(0, dur - pos2);
-        const min = Math.round(remainingMs / 60000);
-        let next = "";
-        if (min >= 1) next = min + " min remaining";
-        else if (remainingMs >= 5000) next = "less than a minute remaining";
-        if (next && sublineEl.textContent !== next) sublineEl.textContent = next;
-      }
     }
 
     // Karaoke word index. Walks the line's words; finds the highest
