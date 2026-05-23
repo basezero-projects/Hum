@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.12] - 2026-05-22
+
+### Changed
+- **Watermark is now a centered ghost-mark instead of a small corner credit.** Moved from bottom-center to vertically + horizontally centered (`top: 50%; left: 0; right: 0; transform: translateY(-50%); text-align: center;`). Font size 28px → 64px. Opacity 0.4 → 0.18. Letter-spacing 0.5 → 1px to match the bigger size. Text-shadow removed (at opacity 0.18 a dark shadow would render darker than the text itself on busy backgrounds). The watermark now reads as a soft sponsor-style brand mark behind the lyric content rather than a small credit underneath it. Applies to both the desktop overlay and the OBS browser source. `z-index: 1` keeps it behind the streamer's `#row` lyric stack; on the desktop side it sits at the same level as the flex children but the low opacity makes the overlap a non-issue.
+
 ## [0.13.11] - 2026-05-22
 
 ### Changed
