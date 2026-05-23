@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.21] - 2026-05-22
+
+### Changed
+- **No more music note (`♪`) prefix on the "unsupported source" contextual messages.** v0.13.20 introduced `♪ Watching Netflix` / `♪ Hum's tuned in — Pandora` / etc., but the music note is semantically wrong for video content — when you're watching a movie there's no song to fail to find. Dropped the prefix from all five unsupported-branch outputs (Pandora-web, known video services, generic title, source-only, none). Music-status branches that ARE about lyrics — `♪ fetching`, `♪ no lyrics for X`, `♪ instrumental`, `♪ unsynced lyrics`, `♪ error fetching lyrics` — still keep `♪` because they describe an actual music situation. Applies to both the desktop overlay and the OBS browser source.
+
 ## [0.13.20] - 2026-05-22
 
 ### Changed

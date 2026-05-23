@@ -2064,25 +2064,30 @@ function statusLine(l: CurrentLyrics, t: CurrentTrack | null): string {
       const src = sourceLabel(t?.source_app_id ?? null, null);
       // Pandora web's tab title is the literal string "Now Playing on
       // Pandora", not a song — show a clear source line instead.
+      // No ♪ prefix on these — they're not about music. The cur line in
+      // the unsupported case describes what the user is doing (watching
+      // a video, on a non-music site), not "there's a song with no
+      // lyrics available." Music notes belong on the music-status
+      // branches (fetching, no_lyrics, instrumental, plain).
       if (title.endsWith("Now Playing on Pandora")) {
-        return "♪ Hum's tuned in — Pandora";
+        return "Hum's tuned in — Pandora";
       }
       // Known video services where the tab title equals the service name —
       // Chrome's media session doesn't expose the show name (DRM/policy),
       // so we get title = "Netflix" instead of title = "Stranger Things".
       // Frame as "Watching X" so it doesn't read as a song.
       if (title && KNOWN_VIDEO_SERVICES.test(title)) {
-        return `♪ Watching ${title}`;
+        return `Watching ${title}`;
       }
       // Generic case: show the title if it isn't just the source/site name,
       // otherwise frame by source.
       const titleIsJustSource =
         !!src && title.toLowerCase() === src.toLowerCase();
       if (title && !titleIsJustSource) {
-        return `♪ ${title}`;
+        return title;
       }
-      if (src) return `♪ Hum's tuned in — ${src}`;
-      return "♪ Hum's tuned in";
+      if (src) return `Hum's tuned in — ${src}`;
+      return "Hum's tuned in";
     }
     case "instrumental":
       return "♪ instrumental";

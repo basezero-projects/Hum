@@ -665,27 +665,23 @@
         case "instrumental": mid = "♪ instrumental"; break;
         case "plain":        mid = lyr.plain || "♪ unsynced lyrics"; break;
         case "unsupported": {
-          // Mirror of Overlay.tsx::statusLine. Surface what we CAN see
-          // instead of "source doesn't expose track metadata":
-          //   1. Pandora-web's literal "Now Playing on Pandora" tab title
-          //      → frame as the Pandora source.
-          //   2. Title equals a known video service name (Netflix, YouTube,
-          //      Twitch, …) → "Watching X" (DRM/policy hides the show name).
-          //   3. Title is meaningful and not just the source label → show it.
-          //   4. Otherwise frame by source label.
+          // Mirror of Overlay.tsx::statusLine. No ♪ prefix here — these
+          // messages describe what the user is doing (watching a video,
+          // on a non-music site), not a song with no lyrics. Music notes
+          // belong on the actual music-status branches above.
           const title = (t.title || "").trim();
           const src = s.source_label || "";
           const KNOWN_VIDEO = /^(netflix|youtube|twitch|hulu|disney\+|prime video|amazon prime|hbo|max|peacock|apple tv|paramount\+|crunchyroll)$/i;
           if (title.endsWith("Now Playing on Pandora")) {
-            mid = "♪ Hum's tuned in — Pandora";
+            mid = "Hum's tuned in — Pandora";
           } else if (title && KNOWN_VIDEO.test(title)) {
-            mid = "♪ Watching " + title;
+            mid = "Watching " + title;
           } else if (title && (!src || title.toLowerCase() !== src.toLowerCase())) {
-            mid = "♪ " + title;
+            mid = title;
           } else if (src) {
-            mid = "♪ Hum's tuned in — " + src;
+            mid = "Hum's tuned in — " + src;
           } else {
-            mid = "♪ Hum's tuned in";
+            mid = "Hum's tuned in";
           }
           break;
         }
