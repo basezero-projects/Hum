@@ -533,20 +533,20 @@ export default function Overlay() {
     }
   })();
 
-  // Service name driving the unsupported-state brand-color backdrop.
-  // Prefer the bridge identity (definitive — set by a probe that
-  // recognized the source) over the title-name heuristic (matches the
-  // pre-bridge fallback path where SMTC's title was the only signal).
-  const unsupportedServiceName = (() => {
-    if (lyrics?.status !== "unsupported") return null;
+  // Service name driving the brand-color background tint. Bridge
+  // identity wins (probe-recognized — Netflix/Twitch/etc.); otherwise
+  // fall back to the source label for the current app (Spotify, Chrome,
+  // Pandora, etc.). Same brand color also drives the unsupported
+  // headline + source-badge logo, so the whole overlay stays
+  // coordinated when art isn't available.
+  const ambientServiceName = (() => {
     if (bridgeServiceName) return bridgeServiceName;
     const t = (track?.title ?? "").trim();
-    const srcLabel = sourceLabel(track?.source_app_id ?? null, null);
     if (t.endsWith("Now Playing on Pandora")) return "Pandora";
-    if (t && KNOWN_VIDEO_SERVICES.test(t)) return t;
-    const titleIsJustSource = !!srcLabel && t.toLowerCase() === srcLabel.toLowerCase();
-    if (t && !titleIsJustSource) return t;
-    return srcLabel;
+    if (lyrics?.status === "unsupported" && t && KNOWN_VIDEO_SERVICES.test(t)) {
+      return t;
+    }
+    return sourceLabel(track?.source_app_id ?? null, null);
   })();
 
   // Translation under the current line — only when the user opted in AND the
@@ -841,8 +841,8 @@ export default function Overlay() {
         {showBlurBg ? (
           <BlurredAlbumBg dataUrl={albumArt!.data_url} tintColor={bgRgba} />
         ) : null}
-        {lyrics?.status === "unsupported" ? (
-          <UnsupportedBg serviceName={unsupportedServiceName} />
+        {!albumArt ? (
+          <ServiceBg serviceName={ambientServiceName} />
         ) : null}
         <div {...dragProps} style={innerRowStyle}>
           {showArt && albumArt ? (
@@ -918,8 +918,8 @@ export default function Overlay() {
         {showBlurBg ? (
           <BlurredAlbumBg dataUrl={albumArt!.data_url} tintColor={bgRgba} />
         ) : null}
-        {lyrics?.status === "unsupported" ? (
-          <UnsupportedBg serviceName={unsupportedServiceName} />
+        {!albumArt ? (
+          <ServiceBg serviceName={ambientServiceName} />
         ) : null}
         {showArt && albumArt ? <AlbumArtBadge dataUrl={albumArt.data_url} onClick={openArtistPanel} /> : null}
         {openArtistPanel && (!showArt || !albumArt) && lyrics?.status !== "unsupported" ? (
@@ -2269,11 +2269,14 @@ function UnsupportedBlock({
   );
 }
 
-// Service-brand-color gradient backdrop for the unsupported state. Soft
-// elliptical glow originating from the left (where the headline sits)
-// fading into the dark plate on the right. Adds chromatic interest to
-// what would otherwise be a flat gray panel, without taking over.
-function UnsupportedBg({ serviceName }: { serviceName: string | null }) {
+// Service-brand-color backdrop for any state where the user is on a
+// recognized service and there's no album art to paint a backdrop
+// from. Soft elliptical glow originating from the left fading into
+// the dark plate on the right. Adds chromatic interest to what would
+// otherwise be a flat gray panel without taking over. When album art
+// becomes available the BlurredAlbumBg layer renders instead and this
+// one is skipped — same dark transition either way.
+function ServiceBg({ serviceName }: { serviceName: string | null }) {
   const color = serviceBrandColor(serviceName);
   if (!color) return null;
   return (

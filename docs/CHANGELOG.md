@@ -6,6 +6,17 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.36] - 2026-05-23
+
+### Added
+- **Service-brand-color background tint as the default backdrop.** Previously the overlay was a flat gray plate whenever no album art was available. Now: when Hum knows what service is playing (Spotify, Pandora, Chrome, Netflix, Twitch, etc.) AND there's no album art to take over, the backdrop picks up that service's brand color as a soft elliptical glow originating from the left (Netflix red on Netflix, Spotify green on Spotify, Twitch purple on Twitch, etc.). Same gradient used in the v0.13.26 unsupported-state backdrop, now applied across all lyric states (synced/fetching/idle/unsupported) so the overlay always reflects the service identity when art isn't around to drive a color.
+- **Cross-fades to album-art-derived backdrop when art arrives.** When album art becomes available, the existing `BlurredAlbumBg` (or `#bg` on the streamer) takes over and the service backdrop fades to transparent (320ms ease). Same direction in reverse when art clears — Hum smoothly transitions from album-color to service-color rather than dropping to flat gray.
+
+### Internal
+- Renamed `UnsupportedBg` React component → `ServiceBg`; condition changed from `lyrics.status === "unsupported"` to `!albumArt` so it runs across all lyric states.
+- Streamer side renamed `#unsupported-bg` → `#service-bg`. New `body.has-art` class on the streamer fades the service backdrop out when album art is present.
+- New `ambientServiceName` resolution in `Overlay.tsx` parent: bridge identity first, source-label fallback, applies across all states (was previously gated on unsupported).
+
 ## [0.13.35] - 2026-05-23
 
 ### Removed

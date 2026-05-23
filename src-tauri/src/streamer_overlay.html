@@ -344,15 +344,14 @@
      since it'd repeat what the headline already says). */
   /* Unsupported state — headline left-aligned in the lyric column so
      the centered watermark behind it stays visible (lyrics text moves
-     out of the watermark's vertical centerline). Brand-color backdrop
-     fills the plate with a soft service-tinted glow. */
+     out of the watermark's vertical centerline). */
   body.unsupported #cur { text-align: left; line-height: 1; }
-  /* Service-brand-color backdrop. The radial gradient is centered on
-     the headline area (~22% from the left) and fades out by 72%,
-     leaving the right edge of the plate dark for the metadata column.
-     `--unsupported-bg` is set inline from JS per service. Defaults to
-     transparent so it has no effect when no brand color is known. */
-  #unsupported-bg {
+  /* Service-brand-color backdrop. Soft radial gradient originating
+     from the left (~22%) at low alpha — paints whenever we know what
+     service is active AND there's no album art to take over as the
+     backdrop. `--service-bg` is set inline from JS. Defaults to
+     transparent. */
+  #service-bg {
     position: absolute;
     inset: 0;
     pointer-events: none;
@@ -360,9 +359,12 @@
        so it paints over the dark veil, AND BEFORE #credit so the
        centered watermark still paints on top of the backdrop tint. */
     z-index: 1;
-    background: var(--unsupported-bg, transparent);
-    transition: background 320ms ease;
+    background: var(--service-bg, transparent);
+    transition: background 320ms ease, opacity 320ms ease;
   }
+  /* When album art is present, BlurredAlbumBg owns the backdrop —
+     fade the service backdrop out so the two don't fight. */
+  body.has-art #service-bg { opacity: 0; }
   .unsupported-supertitle {
     display: block;
     font-size: 11px;
@@ -445,7 +447,7 @@
 <div id="wrap">
   <div id="bg"></div>
   <div id="plate"></div>
-  <div id="unsupported-bg"></div>
+  <div id="service-bg"></div>
   <div id="row">
     <img id="art" alt="">
     <div id="col">
@@ -857,42 +859,40 @@
         $bg.classList.remove("on");
         $bg.style.backgroundImage = "";
       }
+      // body.has-art tells the #service-bg CSS to fade out when album
+      // art is present (BlurredAlbumBg is the backdrop then).
+      document.body.classList.toggle("has-art", !!artKey);
     }
 
-    // Brand-color backdrop for the unsupported state. Prefer the bridge
-    // identity from `lyr.source` — that's the definitive answer when a
-    // probe ran (NetflixProbe etc.). Falls back to the title-word
-    // heuristic for the pre-bridge code path.
-    const unsupportedBgEl = document.getElementById("unsupported-bg");
-    if (lyr.status === "unsupported") {
-      const title = (t.title || "").trim();
-      const srcLabel = s.source_label || "";
-      const KNOWN_VIDEO = /^(netflix|youtube|twitch|hulu|disney\+|prime video|amazon prime|hbo|max|peacock|apple tv|paramount\+|crunchyroll)$/i;
-      const BRIDGE_MAP = {
-        "netflix-web": "Netflix", "twitch-web": "Twitch",
-        "hulu-web": "Hulu", "disneyplus-web": "Disney+",
-        "prime-web": "Prime Video", "max-web": "Max",
-        "peacock-web": "Peacock", "paramount-web": "Paramount+",
-        "appletv-web": "Apple TV", "crunchyroll-web": "Crunchyroll",
-        "pandora-web": "Pandora", "youtube-web": "YouTube",
-      };
-      let svcName = BRIDGE_MAP[lyr.source] || "";
-      if (!svcName) {
-        if (title.endsWith("Now Playing on Pandora")) svcName = "Pandora";
-        else if (title && KNOWN_VIDEO.test(title)) svcName = title;
-        else if (title && (!srcLabel || title.toLowerCase() !== srcLabel.toLowerCase())) svcName = title;
-        else svcName = srcLabel;
-      }
-      const c = serviceBrandColor(svcName);
-      unsupportedBgEl.style.setProperty(
-        "--unsupported-bg",
-        c
-          ? "radial-gradient(ellipse 60% 120% at 22% 50%, " + c + "33 0%, " + c + "14 38%, transparent 72%)"
-          : "transparent"
-      );
-    } else {
-      unsupportedBgEl.style.setProperty("--unsupported-bg", "transparent");
+    // Service brand-color backdrop. Paints whenever we know what
+    // service is active AND there's no album art to take over the
+    // backdrop. Bridge identity wins (Netflix/Twitch/etc.); otherwise
+    // falls back to the source label (Spotify, Chrome, Pandora, etc.).
+    const serviceBgEl = document.getElementById("service-bg");
+    const BRIDGE_MAP = {
+      "netflix-web": "Netflix", "twitch-web": "Twitch",
+      "hulu-web": "Hulu", "disneyplus-web": "Disney+",
+      "prime-web": "Prime Video", "max-web": "Max",
+      "peacock-web": "Peacock", "paramount-web": "Paramount+",
+      "appletv-web": "Apple TV", "crunchyroll-web": "Crunchyroll",
+      "pandora-web": "Pandora", "youtube-web": "YouTube",
+    };
+    const KNOWN_VIDEO = /^(netflix|youtube|twitch|hulu|disney\+|prime video|amazon prime|hbo|max|peacock|apple tv|paramount\+|crunchyroll)$/i;
+    let ambientSvc = BRIDGE_MAP[lyr.source] || "";
+    if (!ambientSvc) {
+      const aTitle = (t.title || "").trim();
+      const aSrc = s.source_label || "";
+      if (aTitle.endsWith("Now Playing on Pandora")) ambientSvc = "Pandora";
+      else if (lyr.status === "unsupported" && aTitle && KNOWN_VIDEO.test(aTitle)) ambientSvc = aTitle;
+      else ambientSvc = aSrc;
     }
+    const ambientColor = serviceBrandColor(ambientSvc);
+    serviceBgEl.style.setProperty(
+      "--service-bg",
+      ambientColor
+        ? "radial-gradient(ellipse 60% 120% at 22% 50%, " + ambientColor + "33 0%, " + ambientColor + "14 38%, transparent 72%)"
+        : "transparent"
+    );
 
     // Ad-break promo card branch.
     if (lyr.status === "ad" && lyr.promo) {
