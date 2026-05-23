@@ -6,6 +6,13 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.12.2] - 2026-05-22
+
+### Fixed
+- **First ad of an ad break now reliably swaps to the SYVR promo card.** v0.12.1 fixed ads 2+ but the FIRST ad of a Spotify ad break still showed `"♪ no lyrics for —"` with just the AD BREAK chip firing alone. Root cause: Spotify's SMTC fires `MediaChanged` for the first ad before the duration metadata fully loads (initial `duration_ms = 0`), then `TimelineChanged` arrives ~hundreds of ms later with the real `duration_ms = ~15-30s`. The duration heuristic in `is_spotify_ad` doesn't match on the first wake (duration is 0), so `ad_active` stays false → the lyrics resolver runs LRCLib for the garbage title `"—"` → emits `status: "not_found"`. The subsequent TimelineChanged correctly sets `ad_active = true` on the shared snapshot, but the resolver wasn't subscribed to `timeline-changed` events — so it never woke to consult the fresh state until the NEXT track-change (i.e., ad 2). Subsequent ads worked because by then Spotify is in "ad mode" and full metadata is available on the first MediaChanged.
+
+  **Fix:** the lyrics resolver in `src-tauri/src/lyrics.rs::start` now also subscribes to `timeline-changed` events. Dedupe via `last_key` keeps the per-tick cost trivial during normal song playback (the resolver wakes ~1Hz, reads the snapshot, sees the same track key, and continues without doing any work). When ad_active flips on the late-arriving TimelineChanged, the resolver wakes, sees the new state, and emits the `Status::Ad` outcome with the picked promo.
+
 ## [0.12.1] - 2026-05-22
 
 ### Fixed

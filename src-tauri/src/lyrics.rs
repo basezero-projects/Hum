@@ -136,6 +136,23 @@ pub fn start(
         let _ = tx_track.send(());
     });
 
+    // Also wake on timeline-changed. This is the late-binding path for
+    // ad detection: Spotify's first MediaChanged for an ad often fires
+    // with duration_ms = 0 (full metadata hasn't loaded yet); the
+    // duration-heuristic in `is_spotify_ad` doesn't match → snap.ad_active
+    // stays false on the first track-changed wake. A few hundred ms later
+    // TimelineChanged arrives with duration_ms = ~15-30s, emit_blended
+    // re-runs is_spotify_ad (now matches) and writes ad_active = true to
+    // the shared snapshot — but without this listener the resolver never
+    // wakes to consult that fresh state, and the user sees "no lyrics for
+    // —" for the duration of the first ad. The dedupe via last_key keeps
+    // the per-tick cost trivial during normal song playback (timeline-
+    // changed fires ~1Hz; resolver reads snap, sees same key, continues).
+    let tx_timeline = tx.clone();
+    app.listen_any("timeline-changed", move |_event| {
+        let _ = tx_timeline.send(());
+    });
+
     // Bridge probes (web_bridge.rs) emit web-bridge-updated when they
     // read a new track from Chrome's UIA tree. Wake the resolver loop
     // through the same channel — the bridge-cache consultation below
