@@ -230,6 +230,7 @@ pub fn any_probe_detects(smtc_title: &str, smtc_app_id: &str) -> bool {
 static PROBES: &[&dyn WebPlayerProbe] = &[
     &PandoraProbe,
     &crate::pandora_desktop::PandoraDesktopProbe,
+    &crate::youtube_bridge::YouTubeProbe,
 ];
 
 /// Recognized Chromium-derived browser process names. UIA tree structure
@@ -295,6 +296,17 @@ fn find_chrome_windows<F: Fn(&str) -> bool>(predicate: F) -> Vec<HWND> {
     let _ = unsafe { EnumWindows(Some(enum_proc), LPARAM(ctx_ptr as isize)) };
 
     ctx.hits
+}
+
+/// Find the first visible Chromium window whose title contains `needle`
+/// (case-sensitive substring match). Used by YouTubeProbe to locate the
+/// YouTube tab's window handle without a full tab enumeration.
+///
+/// Returns `None` when no matching Chromium window is visible. The caller
+/// must check whether the returned window is actually a YouTube tab — the
+/// title match is a fast heuristic; the UIA walk in the probe confirms.
+pub(crate) fn find_chromium_window_with_title_substring(needle: &str) -> Option<HWND> {
+    find_chrome_windows(|title| title.contains(needle)).into_iter().next()
 }
 
 pub(crate) fn read_window_title(hwnd: HWND) -> String {

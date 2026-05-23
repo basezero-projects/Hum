@@ -6,6 +6,32 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.12.0] - 2026-05-22
+
+### Added — Ad-break detection + SYVR cross-promo overlay (full feature)
+
+This is the consolidated user-facing release entry for v0.12.0. Sub-entries 0.12.0-rc1 through 0.12.0-rc8 above this entry document the per-commit work; the bullets below summarize what's new for the user.
+
+- **Ad-break detection across Spotify, Pandora web, Pandora desktop, and YouTube web.** When an ad break is detected, the overlay's lyric area is replaced with a rotating SYVR Studios product promo card. The right-side metadata column stays visible so users see how much of the ad is left via the progress bar — the source-app badge swaps to an amber `AD BREAK` chip in place of `SPOTIFY` / `PANDORA` / `CHROME`. The Artist · Song · Album line is hidden during ads (showing the previous track's title would be misleading; the AD BREAK chip + promo card already explain what's happening).
+
+- **Promo cards rotate one product per ad break, weighted-random with last-shown cooldown.** Each card shows: a small "Brought to you by SYVR Studios" supertitle, an optional 32×32 product icon, the product name (same size as a lyric line), a dim tagline, and a clickable CTA. Default CTA is `Learn more →`; per-promo `cta_text` overrides are supported. Clicking anywhere on the card opens the promo's URL in the default browser. In edit mode the card is a window drag region instead of a click handler, mirroring the rest of the overlay's chrome behavior.
+
+- **Promo list lives at `https://syvrstudios.com/hum/promos.json` — hot-swappable without a Hum release.** Updates to the file go live on the next refresh (every 6 hours; immediate on app launch). Disk-cached at `%APPDATA%\com.syvr.hum\promos.json` so the first ad break of a session always has something to show even before the network call returns. Bundled `default_promos.json` ships with the app as the final fallback.
+
+- **New Settings toggle: "Show SYVR promo cards during ad breaks"** (default on). Toggling off shows a neutral "Ad break" centered text in place of the promo card. The progress bar + AD BREAK chip still show ad timing regardless.
+
+### Limitations
+
+- **YouTube ad detection requires the YouTube tab to be the foreground Chrome window.** Background-tab YouTube ads are not detected. Implementation reuses the same UIA tree-walking pattern as the Pandora bridges — the Chromium accessibility tree is only fully populated for the active tab.
+- **Pandora ad position interpolation falls back to a 30-second default duration** when the ad countdown widget can't be read from the UIA tree. The progress bar will jump to "complete" when the next real track is detected, which is acceptable for free-tier Pandora (most ads are 30s anyway).
+- **Spotify Premium users never see ads** so the promo card path is unreachable for them. Not a bug — by design.
+
+### Phase 2 (deferred — premium feature)
+
+User-supplied promos are designed for but not built. The architecture supports them (the `PromoSource` trait, the in-memory pool model), so they slot in cleanly as a paid feature for streamers and small-business owners who want their own promo content during music ad breaks. Tracking in the spec at `docs/superpowers/specs/2026-05-22-hum-ad-break-detection-design.md`.
+
+---
+
 ## [0.12.0-rc8] - 2026-05-22
 
 ### Added

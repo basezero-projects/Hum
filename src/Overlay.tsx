@@ -41,6 +41,7 @@ const DEFAULT_SETTINGS: Settings = {
   streamer_enabled: false,
   streamer_port: 38247,
   show_artist_info_panel: true,
+  ad_break_promos_enabled: true,
 };
 
 export default function Overlay() {
@@ -761,7 +762,7 @@ export default function Overlay() {
             <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} dragRegion={isEdit} onClick={openArtistPanel} />
           ) : null}
           <div {...dragProps} ref={setLyricsColEl} style={lyricsColStyle}>
-            {lyrics?.status === "ad" ? (
+            {lyrics?.status === "ad" && settingsForRender.ad_break_promos_enabled ? (
               <PromoCard
                 promo={lyrics.promo ?? null}
                 textColor={effectiveTextColor}
@@ -771,6 +772,10 @@ export default function Overlay() {
                 layoutMode={layoutMode}
                 dragRegion={isEdit}
               />
+            ) : lyrics?.status === "ad" ? (
+              <div style={{ color: effectiveTextColorDim, fontSize: settingsForRender.font_size_px * 0.6, textAlign: "center" }}>
+                Ad break
+              </div>
             ) : (
               <>
                 <LineRow
@@ -820,7 +825,7 @@ export default function Overlay() {
         {openArtistPanel && (!showArt || !albumArt) ? (
           <ArtistInfoDot onClick={openArtistPanel} />
         ) : null}
-        {lyrics?.status === "ad" ? (
+        {lyrics?.status === "ad" && settingsForRender.ad_break_promos_enabled ? (
           <PromoCard
             promo={lyrics.promo ?? null}
             textColor={effectiveTextColor}
@@ -830,6 +835,10 @@ export default function Overlay() {
             layoutMode={layoutMode}
             dragRegion={isEdit}
           />
+        ) : lyrics?.status === "ad" ? (
+          <div style={{ color: effectiveTextColorDim, fontSize: settingsForRender.font_size_px * 0.6, textAlign: "center" }}>
+            Ad break
+          </div>
         ) : hasLines ? (
           lyrics!.lines.map((line, i) => (
             <LineRow
@@ -878,7 +887,7 @@ export default function Overlay() {
             <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} dragRegion={isEdit} onClick={openArtistPanel} />
           ) : null}
           <div {...dragProps} ref={setLyricsColEl} style={lyricsColStyle}>
-          {lyrics?.status === "ad" ? (
+          {lyrics?.status === "ad" && settingsForRender.ad_break_promos_enabled ? (
             <PromoCard
               promo={lyrics.promo ?? null}
               textColor={effectiveTextColor}
@@ -888,6 +897,10 @@ export default function Overlay() {
               layoutMode={layoutMode}
               dragRegion={isEdit}
             />
+          ) : lyrics?.status === "ad" ? (
+            <div style={{ color: effectiveTextColorDim, fontSize: settingsForRender.font_size_px * 0.6, textAlign: "center" }}>
+              Ad break
+            </div>
           ) : (
             <>
               <LineRow text={prev?.text} kind="prev" dragRegion={isEdit} settings={settingsForRender} textShadow={effectiveTextShadow} />

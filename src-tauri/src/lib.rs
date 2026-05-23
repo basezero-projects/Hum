@@ -20,6 +20,9 @@ mod web_bridge;
 mod pandora_desktop;
 
 #[cfg(windows)]
+mod youtube_bridge;
+
+#[cfg(windows)]
 mod backdrop;
 
 mod contrast;

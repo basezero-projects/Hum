@@ -69,6 +69,15 @@ pub struct Settings {
     pub window_backdrop: BackdropKind,
     #[cfg(not(windows))]
     pub window_backdrop: String,
+    /// When true, the overlay shows a rotating SYVR Studios product promo card
+    /// in the lyric area during ad breaks (Spotify, Pandora, YouTube). When false,
+    /// a neutral "Ad break" text is shown instead. Default true.
+    #[serde(default = "default_ad_break_promos_enabled")]
+    pub ad_break_promos_enabled: bool,
+}
+
+fn default_ad_break_promos_enabled() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -106,6 +115,7 @@ impl Default for Settings {
             window_backdrop: BackdropKind::Acrylic,
             #[cfg(not(windows))]
             window_backdrop: String::from("acrylic"),
+            ad_break_promos_enabled: true,
         }
     }
 }

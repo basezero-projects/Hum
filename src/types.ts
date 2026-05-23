@@ -45,6 +45,7 @@ export type Settings = {
   streamer_enabled: boolean;
   streamer_port: number;
   show_artist_info_panel: boolean;
+  ad_break_promos_enabled: boolean;
 };
 
 export type TicketStatus = "available" | "sold_out";

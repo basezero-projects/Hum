@@ -247,6 +247,17 @@ export default function SettingsView() {
           when the desktop / app behind the overlay isn't predictably dark.
           Overrides the Text color settings while active.
         </Hint>
+        <Toggle
+          label="Show SYVR promo cards during ad breaks"
+          checked={s.ad_break_promos_enabled}
+          onChange={(v) => update("ad_break_promos_enabled", v)}
+        />
+        <Hint>
+          When on, the lyric area shows a rotating SYVR Studios product card
+          during ad breaks (Spotify, Pandora, YouTube). When off, a plain
+          "Ad break" label appears instead. The AD BREAK badge and progress
+          bar still show ad timing either way.
+        </Hint>
       </Section>
 
       <Section title="Artist info panel">
