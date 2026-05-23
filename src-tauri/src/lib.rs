@@ -213,6 +213,13 @@ pub fn run() {
                 let artist_cache = ArtistInfoCache::new(app.handle().clone());
                 app.manage(artist_cache);
 
+                // Prune the per-artist disk cache to its size cap in the
+                // background. Runs once per launch; non-blocking on cold start.
+                let handle_for_sweep = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    artist_info::sweep_disk_cache(&handle_for_sweep).await;
+                });
+
             #[cfg(windows)]
             {
                 smtc::start(

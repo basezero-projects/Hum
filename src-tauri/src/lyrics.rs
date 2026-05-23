@@ -11,16 +11,23 @@
 //!
 //! Network/5xx errors are NOT cached — only authoritative "not found" is.
 
-use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
+use lru::LruCache;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Listener, Manager};
 use tauri_plugin_store::StoreExt;
 use tokio::sync::{mpsc, RwLock};
+
+/// In-memory lyric cache capacity. At ~5KB typical / ~50KB worst-case per
+/// `CachedLyrics::Synced` entry, 256 entries bounds RSS growth from this
+/// cache to ~1–12 MB across a long listening session. The persistent
+/// `tauri-plugin-store` cache backs cold misses so eviction is cheap.
+const LYRICS_CACHE_CAP: usize = 256;
 
 #[cfg(windows)]
 use crate::smtc::SharedSnapshot;
@@ -173,8 +180,9 @@ pub fn start(
                 return;
             }
         };
-        let mem: Arc<RwLock<HashMap<String, CachedLyrics>>> =
-            Arc::new(RwLock::new(HashMap::new()));
+        let mem: Arc<RwLock<LruCache<String, CachedLyrics>>> = Arc::new(RwLock::new(
+            LruCache::new(NonZeroUsize::new(LYRICS_CACHE_CAP).expect("cap > 0")),
+        ));
         let mut last_key = String::new();
 
         // Wake on startup in case a track was already playing when we started.
@@ -323,12 +331,13 @@ pub fn start(
 async fn resolve_lyrics(
     app: &AppHandle,
     client: &reqwest::Client,
-    mem: &Arc<RwLock<HashMap<String, CachedLyrics>>>,
+    mem: &Arc<RwLock<LruCache<String, CachedLyrics>>>,
     track: &TrackEcho,
     key: &str,
 ) -> Outcome {
-    // 1. In-memory
-    if let Some(cached) = mem.read().await.get(key).cloned() {
+    // 1. In-memory. `LruCache::get` bumps MRU and so requires the write
+    // lock — fine because only the resolver task touches this map.
+    if let Some(cached) = mem.write().await.get(key).cloned() {
         return Outcome {
             cached,
             source: "memory".into(),
@@ -338,7 +347,7 @@ async fn resolve_lyrics(
     }
     // 2. Persistent store
     if let Some(cached) = read_store(app, key) {
-        mem.write().await.insert(key.to_string(), cached.clone());
+        mem.write().await.put(key.to_string(), cached.clone());
         return Outcome {
             cached,
             source: "store".into(),
@@ -395,7 +404,7 @@ async fn resolve_lyrics(
         .await
     {
         Ok((cached, source)) if !matches!(cached, CachedLyrics::NotFound) => {
-            mem.write().await.insert(key.to_string(), cached.clone());
+            mem.write().await.put(key.to_string(), cached.clone());
             return Outcome { cached, source, persist: true, errors: Vec::new() };
         }
         Ok(_) => {
@@ -411,7 +420,7 @@ async fn resolve_lyrics(
 
     match fetch_simpmusic(client, &cleaned_artist, &cleaned_title, track.duration_ms).await {
         Ok((cached, source)) if !matches!(cached, CachedLyrics::NotFound) => {
-            mem.write().await.insert(key.to_string(), cached.clone());
+            mem.write().await.put(key.to_string(), cached.clone());
             return Outcome { cached, source, persist: true, errors: Vec::new() };
         }
         Ok(_) => {
@@ -427,7 +436,7 @@ async fn resolve_lyrics(
 
     match fetch_netease(client, &cleaned_artist, &cleaned_title, track.duration_ms).await {
         Ok((cached, source)) if !matches!(cached, CachedLyrics::NotFound) => {
-            mem.write().await.insert(key.to_string(), cached.clone());
+            mem.write().await.put(key.to_string(), cached.clone());
             return Outcome { cached, source, persist: true, errors: Vec::new() };
         }
         Ok(_) => {

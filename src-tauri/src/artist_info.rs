@@ -595,6 +595,50 @@ async fn write_cache_file(app: &AppHandle, data: &CachedArtistData) -> Result<()
     Ok(())
 }
 
+/// Cap on the per-artist JSON files retained under `cache/artist/`.
+/// 500 artists × ~2KB typical = ~1MB. Heavy listeners exceed this over years
+/// — eviction is oldest-mtime first (effectively LRU since tour-dates refresh
+/// rewrites mtime every 12h for any artist still being listened to).
+const MAX_ARTIST_CACHE_FILES: usize = 500;
+
+/// Prune the artist disk cache to `MAX_ARTIST_CACHE_FILES` by deleting the
+/// oldest-mtime files. Intended to run once at startup off the main thread.
+/// Failures are logged and ignored — sweep is best-effort, never fatal.
+pub async fn sweep_disk_cache(app: &AppHandle) {
+    let Some(dir) = cache_dir(app) else { return };
+    let mut read_dir = match tokio::fs::read_dir(&dir).await {
+        Ok(rd) => rd,
+        Err(_) => return,
+    };
+    let mut files: Vec<(PathBuf, SystemTime)> = Vec::new();
+    while let Ok(Some(entry)) = read_dir.next_entry().await {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
+        let mtime = match entry.metadata().await {
+            Ok(m) => m.modified().unwrap_or(UNIX_EPOCH),
+            Err(_) => continue,
+        };
+        files.push((path, mtime));
+    }
+    if files.len() <= MAX_ARTIST_CACHE_FILES {
+        return;
+    }
+    files.sort_by_key(|(_, mtime)| *mtime);
+    let to_remove = files.len() - MAX_ARTIST_CACHE_FILES;
+    let total = files.len();
+    let mut removed = 0usize;
+    for (path, _) in files.iter().take(to_remove) {
+        if tokio::fs::remove_file(path).await.is_ok() {
+            removed += 1;
+        }
+    }
+    eprintln!(
+        "[artist_info] disk cache sweep: removed {removed} oldest of {total}"
+    );
+}
+
 // ── In-flight dedup + managed state ────────────────────────────────────────
 
 /// Tauri managed state for the artist-info fetch chain.

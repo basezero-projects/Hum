@@ -746,25 +746,29 @@ pub fn start(app: AppHandle, snapshot: SharedSnapshot, shared: SharedWebBridge) 
                                 matches!(s.state, crate::smtc::PlaybackState::Playing)
                                     && !s.title.trim().is_empty()
                             };
+                            // Sync ad_active back to the SHARED snapshot
+                            // UNCONDITIONALLY — decoupled from the position-
+                            // emit gate below. The active probe matched
+                            // SMTC's source_app_id, so SMTC and the bridge
+                            // are looking at the same app; the bridge owns
+                            // ad detection for sources SMTC can't classify
+                            // (Pandora URL trail, YouTube countdown, Pandora
+                            // desktop UIA). During a Pandora-in-Chrome ad
+                            // break SMTC keeps publishing the previous
+                            // song's title with state=Playing, so
+                            // smtc_actively_playing stays true through the
+                            // ad — the old gate skipped this writeback and
+                            // the resolver kept fetching lyrics for the
+                            // stale title. The position-emit gate below
+                            // still defers to SMTC's authoritative position
+                            // when it has one.
+                            let mut blended = { snapshot.read().await.clone() };
+                            blend_bridge_into_snapshot(&mut blended, &shared).await;
+                            {
+                                let mut s = snapshot.write().await;
+                                s.ad_active = blended.ad_active;
+                            }
                             if has_bridge_position && !smtc_actively_playing {
-                                let mut blended = { snapshot.read().await.clone() };
-                                blend_bridge_into_snapshot(&mut blended, &shared).await;
-                                // Sync ad_active back to the SHARED snapshot
-                                // — the lyrics resolver reads the shared
-                                // snapshot to decide ad-short-circuit, not
-                                // the emit payload. Without this write, the
-                                // frontend's `track` state (from the emit
-                                // payload) would correctly carry ad_active
-                                // = true while the resolver still sees the
-                                // stale false on shared, leading to the
-                                // AD BREAK chip firing but the lyric area
-                                // showing "fetching" / "no lyrics" instead
-                                // of the SYVR promo card. Same root cause
-                                // as the smtc::emit_blended sync — same fix.
-                                {
-                                    let mut s = snapshot.write().await;
-                                    s.ad_active = blended.ad_active;
-                                }
                                 let _ = app.emit("timeline-changed", &blended);
                             }
                             if new_title != last_emitted_title {

@@ -192,9 +192,15 @@ pub async fn update_settings(
 ) -> Result<Settings, String> {
     #[cfg(windows)]
     let backdrop_changed = patch.get("window_backdrop").is_some();
+    // Hold the write lock for the full read-merge-write so two windows
+    // (Overlay + Settings) calling `update_settings` concurrently can't
+    // clobber each other. Previously the read-clone happened under a
+    // released read lock, the merge ran lock-free, and the write lock was
+    // re-acquired at the end — leaving a window where a parallel call
+    // could read the same baseline and lose this update on its own write.
     let merged = {
-        let current = state.read().await.clone();
-        let mut current_value = serde_json::to_value(&current).map_err(|e| e.to_string())?;
+        let mut s = state.write().await;
+        let mut current_value = serde_json::to_value(&*s).map_err(|e| e.to_string())?;
         if let (Value::Object(target), Value::Object(updates)) = (&mut current_value, patch) {
             for (k, v) in updates {
                 target.insert(k, v);
@@ -203,13 +209,10 @@ pub async fn update_settings(
         let mut parsed: Settings =
             serde_json::from_value(current_value).map_err(|e| e.to_string())?;
         sanitize(&mut parsed);
+        *s = parsed.clone();
         parsed
     };
 
-    {
-        let mut s = state.write().await;
-        *s = merged.clone();
-    }
     save_to_store(&app, &merged);
     // React to streamer-enabled / port changes by starting or stopping the
     // local HTTP server. Idempotent if no streamer fields changed.
