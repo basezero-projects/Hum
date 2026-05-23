@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.16] - 2026-05-22
+
+### Changed
+- **Logo watermark is now significantly larger — the PNG canvas was cropped to the actual content.** The v0.13.15 file was 512×512 with the visible ellipse only occupying roughly the middle 47% × 65% of that canvas (the rest was transparent padding from the original source JPG). At `height: 85%` of the overlay container, the CSS was sizing the whole 512px canvas, not just the visible ellipse — so the rendered logo was much smaller than its container slot. New file is 241×333 (the bounding box of the actual logo pixels), so the same `height: 85%` now scales the visible ellipse to ~1.55× its previous rendered height. File size 5.8 KB → 4.7 KB.
+
 ## [0.13.15] - 2026-05-22
 
 ### Changed
