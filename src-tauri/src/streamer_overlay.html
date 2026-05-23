@@ -4,11 +4,30 @@
 <meta charset="utf-8">
 <title>Hum — OBS source</title>
 <style>
+  /*
+   * Streamer / OBS browser source.
+   * Mirrors the live overlay's three-column chrome (album art on the
+   * left, lyric stack in the middle, metadata column on the right) but
+   * without the edit-mode dashed border. Background is fully
+   * transparent so OBS compositing Just Works; a subtle dark plate
+   * sits behind the layout for legibility against bright captures.
+   * State updates arrive via Server-Sent Events (/events) with a poll
+   * fallback to /state if the stream drops. Progress bar interpolates
+   * locally between server pushes so it advances smoothly.
+   */
+  :root {
+    --text: #ffffff;
+    --text-dim: rgba(255, 255, 255, 0.55);
+    --text-faint: rgba(255, 255, 255, 0.35);
+    --gold: #d4af37;
+    --plate: rgba(0, 0, 0, 0.45);
+  }
+  * { box-sizing: border-box; }
   html, body {
     margin: 0;
     padding: 0;
     background: transparent;
-    color: #fff;
+    color: var(--text);
     font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     overflow: hidden;
     height: 100vh;
@@ -22,10 +41,33 @@
     display: flex;
     flex-direction: column;
     justify-content: center;
-    padding: 12px 16px;
-    box-sizing: border-box;
+    padding: 10px 16px;
+    overflow: hidden;
+  }
+  /* Blurred album art behind everything, mirrors BlurredAlbumBg. */
+  #bg {
+    position: absolute;
+    inset: -48px;
+    background-position: center;
+    background-size: cover;
+    filter: blur(40px) saturate(1.35) brightness(0.62);
+    opacity: 0;
+    transition: opacity 320ms ease;
+    z-index: 0;
+  }
+  #bg.on { opacity: 1; }
+  /* Subtle dark plate above the blur but below the text. Provides
+     legibility on the corner case where no art has loaded yet. */
+  #plate {
+    position: absolute;
+    inset: 0;
+    background: var(--plate);
+    z-index: 1;
+    pointer-events: none;
   }
   #row {
+    position: relative;
+    z-index: 2;
     display: flex;
     flex-direction: row;
     align-items: center;
@@ -35,44 +77,171 @@
   }
   #art {
     flex-shrink: 0;
+    height: calc(100vh - 24px);
+    width: calc(100vh - 24px);
+    max-width: 18vw;
+    max-height: 18vw;
     border-radius: 6px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.6);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
     object-fit: cover;
-    display: none; /* shown when src is set */
+    background: rgba(255, 255, 255, 0.04);
+    display: none; /* shown when art loads */
   }
+  #art.on { display: block; }
   #col {
     display: flex;
     flex-direction: column;
     flex: 1;
     min-width: 0;
-    align-items: flex-start;
-    gap: 6px;
+    gap: 4px;
   }
   .line {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     line-height: 1.2;
-    max-width: 92vw;
-    text-shadow: 0 2px 6px rgba(0,0,0,0.95), 0 0 14px rgba(0,0,0,0.65);
-    transition: opacity 220ms ease, color 220ms ease;
+    max-width: 100%;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 3px 10px rgba(0, 0, 0, 0.55);
   }
   .prev, .next {
     font-size: 16px;
     font-weight: 400;
-    color: rgba(255,255,255,0.45);
+    color: var(--text-dim);
   }
   .cur {
     font-size: 26px;
     font-weight: 600;
-    color: #ffffff;
+    color: var(--text);
     letter-spacing: 0.2px;
   }
-  .empty { opacity: 0.2; }
+  .empty { opacity: 0.25; }
+  .line.anim-in { animation: hum-line-in 340ms cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+  @keyframes hum-line-in {
+    0%   { transform: translateY(8px); opacity: 0; }
+    60%  { opacity: 1; }
+    100% { transform: translateY(0); opacity: 1; }
+  }
+  #meta {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+    max-width: 40ch;
+    min-width: 0;
+  }
+  #meta-text {
+    font-size: 11px;
+    color: var(--text-dim);
+    opacity: 0.85;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+    text-align: right;
+  }
+  #meta-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    font-size: 10px;
+    color: var(--text-faint);
+  }
+  #time-current, #time-duration {
+    font-variant-numeric: tabular-nums;
+  }
+  #bar {
+    width: 120px;
+    height: 2px;
+    background: rgba(127, 127, 127, 0.35);
+    border-radius: 1px;
+    overflow: hidden;
+    position: relative;
+  }
+  #bar-fill {
+    position: absolute;
+    inset: 0;
+    background: var(--text);
+    transform-origin: left center;
+    transform: scaleX(0);
+    transition: transform 120ms linear;
+  }
+  #badge {
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--text-dim);
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: rgba(127, 127, 127, 0.18);
+    border: 1px solid rgba(127, 127, 127, 0.25);
+    opacity: 0.85;
+    white-space: nowrap;
+  }
+  #badge.ad {
+    color: var(--gold);
+    background: rgba(212, 175, 55, 0.12);
+    border-color: rgba(212, 175, 55, 0.5);
+  }
+  /* Ad-break promo card render path. Replaces the lyric column when
+     status === "ad". Image-driven path renders the hero <img>; the
+     text-driven fallback layout sits inside #promo-text. */
+  #promo {
+    position: relative;
+    z-index: 2;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+  }
+  #promo.on { display: flex; }
+  #promo-img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    display: none;
+  }
+  #promo-img.on { display: block; }
+  #promo-text {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    text-align: center;
+    padding: 0 24px;
+  }
+  #promo-text.hidden { display: none; }
+  #promo-supertitle {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--text-faint);
+  }
+  #promo-product {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  #promo-tagline {
+    font-size: 14px;
+    color: var(--text-dim);
+  }
+  #promo-cta {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--gold);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+  }
 </style>
 </head>
 <body>
 <div id="wrap">
+  <div id="bg"></div>
+  <div id="plate"></div>
   <div id="row">
     <img id="art" alt="">
     <div id="col">
@@ -80,85 +249,249 @@
       <div id="cur" class="line cur empty">♪</div>
       <div id="next" class="line next empty">♪</div>
     </div>
+    <div id="meta">
+      <div id="meta-text"></div>
+      <div id="meta-row">
+        <span id="time-current"></span>
+        <div id="bar"><div id="bar-fill"></div></div>
+        <span id="time-duration"></span>
+        <span id="badge"></span>
+      </div>
+    </div>
+  </div>
+  <div id="promo">
+    <img id="promo-img" alt="">
+    <div id="promo-text">
+      <div id="promo-supertitle">Brought to you by SYVR Studios</div>
+      <div id="promo-product"></div>
+      <div id="promo-tagline"></div>
+      <div id="promo-cta"></div>
+    </div>
   </div>
 </div>
 <script>
 (() => {
+  const $bg   = document.getElementById("bg");
+  const $art  = document.getElementById("art");
   const $prev = document.getElementById("prev");
   const $cur  = document.getElementById("cur");
   const $next = document.getElementById("next");
-  const $art  = document.getElementById("art");
+  const $row  = document.getElementById("row");
+  const $meta = document.getElementById("meta-text");
+  const $tcur = document.getElementById("time-current");
+  const $tdur = document.getElementById("time-duration");
+  const $bar  = document.getElementById("bar-fill");
+  const $badge = document.getElementById("badge");
+  const $promo = document.getElementById("promo");
+  const $promoImg = document.getElementById("promo-img");
+  const $promoText = document.getElementById("promo-text");
+  const $promoProduct = document.getElementById("promo-product");
+  const $promoTagline = document.getElementById("promo-tagline");
+  const $promoCta = document.getElementById("promo-cta");
 
-  // The streamer page is intentionally simple: poll, render. No rAF
-  // interpolation (the server already computes the cursor for us).
-  // OBS browser-source doesn't need 60fps text animation — 4Hz polling
-  // looks the same to viewers since lines change every few seconds.
-  const POLL_MS = 250;
   let lastTrackKey = "";
   let lastArtKey = "";
+  let lastCursor = -2;
+  let lastPromoId = "";
+  let lastState = null;
 
-  function setLine(el, text) {
-    if (text && text.trim()) {
-      el.textContent = text;
-      el.classList.remove("empty");
-    } else {
-      el.textContent = "♪";
-      el.classList.add("empty");
+  function fmtMs(ms) {
+    if (!ms || ms < 0 || !isFinite(ms)) return "0:00";
+    const total = Math.floor(ms / 1000);
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  }
+
+  function setLine(el, text, animate) {
+    const newText = text && text.trim() ? text : "♪";
+    const isEmpty = !(text && text.trim());
+    if (el.textContent === newText && el.classList.contains("empty") === isEmpty) {
+      return;
+    }
+    el.textContent = newText;
+    el.classList.toggle("empty", isEmpty);
+    if (animate) {
+      el.classList.remove("anim-in");
+      // Force reflow so the animation restarts cleanly.
+      void el.offsetWidth;
+      el.classList.add("anim-in");
     }
   }
 
-  async function poll() {
-    try {
-      const res = await fetch("/state", { cache: "no-store" });
-      if (!res.ok) return;
-      const s = await res.json();
-      const t = s.track || {};
-      const lyr = s.lyrics || {};
-      const cursor = typeof s.cursor === "number" ? s.cursor : -1;
+  function render(s) {
+    lastState = s;
+    const t = s.track || {};
+    const lyr = s.lyrics || {};
+    const cursor = typeof s.cursor === "number" ? s.cursor : -1;
 
-      const trackKey = (t.title || "") + "|" + (t.artist || "");
-      const trackChanged = trackKey !== lastTrackKey;
-      lastTrackKey = trackKey;
+    const trackKey = (t.title || "") + "|" + (t.artist || "");
+    const trackChanged = trackKey !== lastTrackKey;
+    lastTrackKey = trackKey;
 
-      // Album art: fetched separately by the desktop app and broadcast
-      // via the album-art-loaded Tauri event — NOT in /state. For the
-      // browser-source we'd need a /art endpoint to serve it. Hide for
-      // v1; add /art in a follow-up if streamers ask.
-      $art.style.display = "none";
-
-      const lines = Array.isArray(lyr.lines) ? lyr.lines : [];
-      const isSynced = lyr.status === "synced" && lines.length > 0 && cursor >= 0;
-      if (isSynced) {
-        const prev = cursor > 0 ? lines[cursor - 1] : null;
-        const cur  = lines[cursor];
-        const next = cursor + 1 < lines.length ? lines[cursor + 1] : null;
-        setLine($prev, prev ? prev.text : "");
-        setLine($cur,  cur  ? cur.text  : "");
-        setLine($next, next ? next.text : "");
+    const artKey = s.art_key || "";
+    if (artKey !== lastArtKey) {
+      lastArtKey = artKey;
+      if (artKey) {
+        const src = "/art?k=" + encodeURIComponent(artKey);
+        $art.src = src;
+        $art.classList.add("on");
+        $bg.style.backgroundImage = `url("${src}")`;
+        $bg.classList.add("on");
       } else {
-        // Status fallback so the overlay doesn't render blank between songs.
-        let mid;
-        switch (lyr.status) {
-          case "fetching":     mid = t.title ? "♪ fetching — " + t.title : "♪ fetching…"; break;
-          case "not_found":    mid = t.title ? "♪ no lyrics for " + t.title : "♪ no lyrics"; break;
-          case "instrumental": mid = "♪ instrumental"; break;
-          case "plain":        mid = "♪ unsynced lyrics"; break;
-          case "error":        mid = "♪ error fetching lyrics"; break;
-          case "idle":
-          default:             mid = t.title ? "♪ " + t.title : "♪";
-        }
-        setLine($prev, "");
-        setLine($cur, mid);
-        setLine($next, "");
+        $art.classList.remove("on");
+        $art.removeAttribute("src");
+        $bg.classList.remove("on");
+        $bg.style.backgroundImage = "";
       }
-    } catch (e) {
-      // Server not reachable yet, or transient network blip. Keep
-      // polling — never crash the loop.
+    }
+
+    // Ad-break promo card branch.
+    if (lyr.status === "ad" && lyr.promo) {
+      $row.style.display = "none";
+      $promo.classList.add("on");
+      const p = lyr.promo;
+      const promoId = p.id || (p.product_name || "");
+      const promoChanged = promoId !== lastPromoId;
+      lastPromoId = promoId;
+      if (p.image_url) {
+        $promoImg.src = p.image_url;
+        $promoImg.classList.add("on");
+        $promoText.classList.add("hidden");
+      } else {
+        $promoImg.classList.remove("on");
+        $promoImg.removeAttribute("src");
+        $promoText.classList.remove("hidden");
+        $promoProduct.textContent = p.product_name || "";
+        $promoTagline.textContent = p.tagline || "";
+        $promoCta.textContent = p.cta_text || "";
+        if (p.accent_color) {
+          $promoCta.style.color = p.accent_color;
+        }
+      }
+      if (promoChanged) {
+        $promo.classList.remove("anim-in");
+        void $promo.offsetWidth;
+        $promo.classList.add("anim-in");
+      }
+      $badge.textContent = "Ad Break";
+      $badge.classList.add("ad");
+      $meta.textContent = "";
+      return;
+    } else {
+      $row.style.display = "flex";
+      $promo.classList.remove("on");
+      $badge.classList.remove("ad");
+    }
+
+    // Source badge + metadata header.
+    const metaParts = [t.artist, t.title, t.album].filter(x => x && x.trim());
+    $meta.textContent = metaParts.join(" · ");
+    const label = s.source_label || "";
+    $badge.textContent = label;
+    $badge.style.display = label ? "inline-block" : "none";
+
+    // Lyric rendering.
+    const lines = Array.isArray(lyr.lines) ? lyr.lines : [];
+    const isSynced = lyr.status === "synced" && lines.length > 0 && cursor >= 0;
+    const cursorChanged = cursor !== lastCursor;
+    lastCursor = cursor;
+    if (isSynced) {
+      const prev = cursor > 0 ? lines[cursor - 1] : null;
+      const cur  = lines[cursor];
+      const next = cursor + 1 < lines.length ? lines[cursor + 1] : null;
+      setLine($prev, prev ? prev.text : "", false);
+      setLine($cur,  cur  ? cur.text  : "", cursorChanged);
+      setLine($next, next ? next.text : "", false);
+    } else {
+      let mid;
+      switch (lyr.status) {
+        case "fetching":     mid = t.title ? "♪ fetching — " + t.title : "♪ fetching…"; break;
+        case "not_found":    mid = t.title ? "♪ no lyrics for " + t.title : "♪ no lyrics"; break;
+        case "instrumental": mid = "♪ instrumental"; break;
+        case "plain":        mid = lyr.plain || "♪ unsynced lyrics"; break;
+        case "unsupported":  mid = "♪ source doesn't expose track metadata"; break;
+        case "error":        mid = "♪ error fetching lyrics"; break;
+        case "idle":
+        default:             mid = t.title ? "♪ " + t.title : "♪";
+      }
+      setLine($prev, "", false);
+      setLine($cur, mid, trackChanged);
+      setLine($next, "", false);
     }
   }
 
-  poll();
-  setInterval(poll, POLL_MS);
+  // Local position interpolation. The server pushes state only when
+  // change-relevant fields flip — the progress bar advances between
+  // pushes by extrapolating from track.position_ms + (now -
+  // last_update_unix_ms). Runs at rAF cadence; no network cost.
+  function tickProgress() {
+    requestAnimationFrame(tickProgress);
+    const s = lastState;
+    if (!s) return;
+    const t = s.track || {};
+    const dur = Number(t.duration_ms) || 0;
+    if (dur <= 0) {
+      $tcur.textContent = "";
+      $tdur.textContent = "";
+      $bar.style.transform = "scaleX(0)";
+      $bar.parentElement.style.visibility = "hidden";
+      return;
+    }
+    $bar.parentElement.style.visibility = "visible";
+    let pos = Number(t.position_ms) || 0;
+    if (t.state === "playing") {
+      const last = Number(t.last_update_unix_ms) || 0;
+      if (last > 0) {
+        pos += Math.max(0, Date.now() - last);
+      }
+    }
+    pos = Math.min(pos, dur);
+    const frac = pos / dur;
+    $bar.style.transform = `scaleX(${frac.toFixed(4)})`;
+    $tcur.textContent = fmtMs(pos);
+    $tdur.textContent = fmtMs(dur);
+  }
+  tickProgress();
+
+  // Server-Sent Events stream. EventSource auto-reconnects on disconnect;
+  // poll fallback only fires if the initial connection never opens (e.g.
+  // a proxy stripped the SSE upgrade or the server isn't up yet).
+  let sseOpen = false;
+  let pollTimer = null;
+
+  function startSse() {
+    const es = new EventSource("/events");
+    es.addEventListener("open", () => {
+      sseOpen = true;
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    });
+    es.addEventListener("state", (ev) => {
+      try { render(JSON.parse(ev.data)); } catch (_) {}
+    });
+    es.addEventListener("error", () => {
+      // EventSource reconnects on its own; only spin up polling if we
+      // never managed to open the stream at all.
+      if (!sseOpen && !pollTimer) {
+        startPollFallback();
+      }
+    });
+  }
+
+  function startPollFallback() {
+    const POLL_MS = 500;
+    async function poll() {
+      try {
+        const res = await fetch("/state", { cache: "no-store" });
+        if (!res.ok) return;
+        render(await res.json());
+      } catch (_) {}
+    }
+    poll();
+    pollTimer = setInterval(poll, POLL_MS);
+  }
+
+  startSse();
 })();
 </script>
 </body>

@@ -2,13 +2,22 @@
 //!
 //! Spawns an axum server bound to 127.0.0.1:<port> that exposes:
 //!
-//! - `GET  /state` — JSON snapshot of current track + lyrics + cursor.
-//!   Polled by the /overlay page; can also be hit by external tools that
-//!   want to display lyrics elsewhere.
-//! - `GET  /overlay` — Self-contained HTML page (inline CSS + JS) that
-//!   polls /state every 250ms and renders the same 3-line look the desktop
-//!   overlay does. Background is fully transparent so OBS browser-source
-//!   layering Just Works without chroma-key tricks.
+//! - `GET  /state`   — JSON snapshot of current track + lyrics + cursor.
+//!   Stateless poll endpoint; used as a fallback when the SSE stream is
+//!   unavailable and by external tools that want a one-shot read.
+//! - `GET  /events`  — Server-Sent Events stream. Pushes the same state
+//!   payload as `/state` whenever any change-relevant field flips (track,
+//!   lyrics status, cursor, ad_active, playback state, album art). Position
+//!   ticks are NOT pushed — the client interpolates locally from
+//!   `position_ms + (now - last_update_unix_ms)` so the progress bar
+//!   advances smoothly without the server flooding the wire.
+//! - `GET  /art`     — Current album art image bytes. Decoded from the
+//!   `data:image/...` URL the desktop fetch chain produces, with the right
+//!   Content-Type so `<img src="/art">` Just Works.
+//! - `GET  /overlay` — Self-contained HTML page rendering the same chrome
+//!   (album art, metadata, progress bar, source badge, gold dashed border)
+//!   as the desktop overlay. Background is fully transparent so OBS
+//!   browser-source layering needs no chroma-key tricks.
 //! - `GET  /healthz` — Minimal liveness probe ("ok").
 //!
 //! The server is gated by `settings.streamer_enabled` — when off, no
@@ -18,31 +27,38 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::{
     extract::State,
     http::{header, HeaderValue, StatusCode},
-    response::{IntoResponse, Response},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse, Response,
+    },
     routing::get,
     Json, Router,
 };
+use base64::Engine;
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 use tokio::sync::oneshot;
 
 use crate::lyrics::{CurrentLyrics, SharedLyrics};
-use crate::smtc::{CurrentTrack, SharedSnapshot};
+use crate::smtc::{CurrentTrack, SharedAlbumArt, SharedSnapshot};
 
 #[derive(Clone)]
 struct AppState {
     snapshot: SharedSnapshot,
     lyrics: SharedLyrics,
+    art: SharedAlbumArt,
 }
 
-/// Combined snapshot returned by /state. Frontend (the embedded overlay
-/// HTML, or any third-party consumer) renders from this.
-#[derive(Serialize)]
+/// Combined snapshot returned by /state and pushed by /events. Frontend
+/// (the embedded overlay HTML, or any third-party consumer) renders from
+/// this.
+#[derive(Clone, Serialize)]
 struct StateResponse {
     track: CurrentTrack,
     lyrics: CurrentLyrics,
@@ -54,14 +70,19 @@ struct StateResponse {
     /// (track.last_update_unix_ms - server_now_ms))" if they want
     /// sub-poll-tick accuracy.
     server_now_ms: i64,
+    /// Stable key for the current art payload. When this changes, the
+    /// browser source's `<img>` element should re-request `/art` (e.g.
+    /// `src="/art?k={art_key}"`). Empty when no art is currently cached.
+    art_key: String,
+    /// User-facing source label derived from `source_app_id`. Mirrors the
+    /// labelling in `src/Overlay.tsx::sourceLabel`. Empty when unknown.
+    source_label: String,
 }
 
-async fn get_state(State(s): State<AppState>) -> impl IntoResponse {
+async fn build_state(s: &AppState) -> StateResponse {
     let snap = s.snapshot.read().await.clone();
     let lyrics = s.lyrics.read().await.clone();
 
-    // Compute current cursor based on interpolated position. Mirrors the
-    // logic in src/Overlay.tsx::tick so /state consumers don't have to.
     let now_ms = unix_ms_now();
     let pos_ms = if snap.state == crate::smtc::PlaybackState::Playing {
         let elapsed = (now_ms - snap.last_update_unix_ms).max(0);
@@ -81,12 +102,87 @@ async fn get_state(State(s): State<AppState>) -> impl IntoResponse {
         }
     }
 
-    let body = StateResponse {
+    let (art_key, _) = {
+        let art = s.art.read().await;
+        match &*art {
+            Some(a) => (format!("{}|{}", a.artist, a.title), true),
+            None => (String::new(), false),
+        }
+    };
+
+    let source_label = source_label_for(snap.source_app_id.as_deref().unwrap_or(""));
+
+    StateResponse {
         track: snap,
         lyrics,
         cursor,
         server_now_ms: now_ms,
-    };
+        art_key,
+        source_label,
+    }
+}
+
+/// Maps `source_app_id` (e.g. `Spotify.exe`, `chrome.exe`) to a
+/// presentable label. Mirrors `sourceLabel` in `src/Overlay.tsx`.
+fn source_label_for(app_id: &str) -> String {
+    let lower = app_id.to_lowercase();
+    if lower.is_empty() {
+        return String::new();
+    }
+    if lower.contains("spotify") {
+        return "Spotify".into();
+    }
+    if lower.contains("pandora") {
+        return "Pandora".into();
+    }
+    if lower.contains("itunes") {
+        return "iTunes".into();
+    }
+    if lower.contains("apple") && lower.contains("music") {
+        return "Apple Music".into();
+    }
+    if lower.contains("apple") {
+        return "Apple Music".into();
+    }
+    if lower.contains("youtube") {
+        return "YouTube Music".into();
+    }
+    if lower.contains("chrome") || lower.contains("edge") || lower.contains("firefox") {
+        return "Browser".into();
+    }
+    // Strip ".exe" + capitalize first char as a fallback.
+    let stem = app_id.strip_suffix(".exe").unwrap_or(app_id);
+    let mut chars = stem.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+/// Fingerprint of the change-relevant fields. Used by `/events` to
+/// suppress pushes that would only carry a position-tick (the client
+/// interpolates the progress bar locally). Two state snapshots with the
+/// same fingerprint render identically apart from the progress bar's
+/// elapsed milliseconds.
+fn change_fingerprint(s: &StateResponse) -> String {
+    let lines_hash = s.lyrics.line_count;
+    format!(
+        "{}|{}|{}|{}|{:?}|{:?}|{}|{}|{}|{}",
+        s.track.title,
+        s.track.artist,
+        s.track.album,
+        s.track.ad_active,
+        s.track.state,
+        s.lyrics.status,
+        lines_hash,
+        s.cursor,
+        s.art_key,
+        s.lyrics.source.as_deref().unwrap_or(""),
+    )
+}
+
+async fn get_state(State(s): State<AppState>) -> impl IntoResponse {
+    let body = build_state(&s).await;
     (
         StatusCode::OK,
         [
@@ -97,16 +193,92 @@ async fn get_state(State(s): State<AppState>) -> impl IntoResponse {
     )
 }
 
+/// SSE stream that pushes `StateResponse` on change. Internal cadence is
+/// 100 ms (cheap RwLock reads); HTTP pushes happen only on fingerprint
+/// change, plus a heartbeat every 15 s to keep proxies / browser sources
+/// from idling out the connection.
+async fn get_events(State(s): State<AppState>) -> impl IntoResponse {
+    let stream = async_stream::stream! {
+        // Initial push so a freshly-connected client renders immediately.
+        let initial = build_state(&s).await;
+        let mut last_fp = change_fingerprint(&initial);
+        let initial_json = serde_json::to_string(&initial).unwrap_or_else(|_| "{}".into());
+        yield Ok::<Event, std::convert::Infallible>(Event::default().event("state").data(initial_json));
+
+        let mut tick = tokio::time::interval(Duration::from_millis(100));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tick.tick().await;
+            let body = build_state(&s).await;
+            let fp = change_fingerprint(&body);
+            if fp == last_fp {
+                continue;
+            }
+            last_fp = fp;
+            let json = serde_json::to_string(&body).unwrap_or_else(|_| "{}".into());
+            yield Ok::<Event, std::convert::Infallible>(Event::default().event("state").data(json));
+        }
+    };
+
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    )
+}
+
+/// Decode the cached `data:image/...;base64,...` URL into raw image bytes
+/// and serve with the right Content-Type. 404 when no art is cached.
+async fn get_art(State(s): State<AppState>) -> Response {
+    let payload = { s.art.read().await.clone() };
+    let Some(payload) = payload else {
+        return (StatusCode::NOT_FOUND, "no art").into_response();
+    };
+
+    let Some((mime, b64)) = parse_data_url(&payload.data_url) else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "bad data url").into_response();
+    };
+
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(b64) {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "bad base64").into_response(),
+    };
+
+    let mut resp = (StatusCode::OK, bytes).into_response();
+    let headers = resp.headers_mut();
+    if let Ok(v) = HeaderValue::from_str(mime) {
+        headers.insert(header::CONTENT_TYPE, v);
+    }
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("*"),
+    );
+    // The browser will cache per URL; the embedded overlay appends
+    // ?k={art_key} so a new track invalidates naturally.
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=3600"),
+    );
+    resp
+}
+
+/// Extract `(mime, base64_body)` from a `data:<mime>;base64,<body>` URL.
+/// Returns None on any structural mismatch — caller falls back to 500.
+fn parse_data_url(url: &str) -> Option<(&str, &str)> {
+    let rest = url.strip_prefix("data:")?;
+    let (header_part, body) = rest.split_once(',')?;
+    let (mime, encoding) = header_part.split_once(';').unwrap_or((header_part, ""));
+    if !encoding.eq_ignore_ascii_case("base64") {
+        return None;
+    }
+    Some((mime, body))
+}
+
 async fn get_healthz() -> &'static str {
     "ok"
 }
 
 async fn get_overlay() -> Response {
-    // Self-contained HTML with inline CSS + JS. Polls /state every 250ms
-    // and renders prev / cur / next lines + album art (when present). No
-    // build step, no external assets. OBS browser source URL: set width
-    // ~1100, height ~200, custom CSS empty, "Refresh browser when scene
-    // becomes active" recommended.
     let html = include_str!("streamer_overlay.html");
     let mut resp = (StatusCode::OK, html).into_response();
     resp.headers_mut().insert(
@@ -161,11 +333,18 @@ pub fn start(app: AppHandle, port: u16) -> Result<ServerHandle> {
         .context("SharedLyrics not managed")?
         .inner()
         .clone();
+    let art = app
+        .try_state::<SharedAlbumArt>()
+        .context("SharedAlbumArt not managed")?
+        .inner()
+        .clone();
 
-    let state = AppState { snapshot, lyrics };
+    let state = AppState { snapshot, lyrics, art };
 
     let app_router: Router = Router::new()
         .route("/state", get(get_state))
+        .route("/events", get(get_events))
+        .route("/art", get(get_art))
         .route("/overlay", get(get_overlay))
         .route("/", get(get_overlay))
         .route("/healthz", get(get_healthz))
