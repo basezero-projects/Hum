@@ -146,6 +146,13 @@ pub async fn blend_bridge_into_snapshot(
         return;
     }
 
+    // Explicit clear: the bridge has a real (non-ad) track, so the
+    // previously-set ad flag must drop. Without this, transitioning from
+    // a Pandora ad to the next song would leave `ad_active = true` on the
+    // snapshot — the overlay would keep showing the promo card and the
+    // AD BREAK chip even though the bridge already reported the new song.
+    snap.ad_active = false;
+
     snap.title = bt.title;
     snap.artist = bt.artist;
     snap.album = bt.album;
@@ -742,6 +749,22 @@ pub fn start(app: AppHandle, snapshot: SharedSnapshot, shared: SharedWebBridge) 
                             if has_bridge_position && !smtc_actively_playing {
                                 let mut blended = { snapshot.read().await.clone() };
                                 blend_bridge_into_snapshot(&mut blended, &shared).await;
+                                // Sync ad_active back to the SHARED snapshot
+                                // — the lyrics resolver reads the shared
+                                // snapshot to decide ad-short-circuit, not
+                                // the emit payload. Without this write, the
+                                // frontend's `track` state (from the emit
+                                // payload) would correctly carry ad_active
+                                // = true while the resolver still sees the
+                                // stale false on shared, leading to the
+                                // AD BREAK chip firing but the lyric area
+                                // showing "fetching" / "no lyrics" instead
+                                // of the SYVR promo card. Same root cause
+                                // as the smtc::emit_blended sync — same fix.
+                                {
+                                    let mut s = snapshot.write().await;
+                                    s.ad_active = blended.ad_active;
+                                }
                                 let _ = app.emit("timeline-changed", &blended);
                             }
                             if new_title != last_emitted_title {

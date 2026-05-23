@@ -6,6 +6,21 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.12.1] - 2026-05-22
+
+### Fixed
+- **Spotify third-party ads (Hotels.com, TikTok, BINI promos, etc.) now actually swap the overlay to the SYVR promo card.** v0.12.0 only detected Spotify's own house ads (the "Listen to music, ad-free" prompts) because the heuristic looked for literal `"Advertisement"` / `"Spotify"` strings in the SMTC title/artist fields. Third-party ads come through with arbitrary titles like `"—"` (em-dash) or `"LISTEN NOW"` paired with the advertiser's brand name in the artist slot, and weren't matched. The detector now also flags any Spotify-sourced playing track with `duration_ms < 35_000` as an ad — real Spotify songs are virtually never under ~60s, so the new heuristic catches third-party ads without false-positive on real songs. Five new unit tests cover the duration cases.
+
+  **False-positive caveat:** legitimate sub-35s tracks (intro tracks, skits, sound effects) would be mis-classified as ads. Rare on Spotify; acceptable trade-off.
+
+- **SYVR promo card now renders during ad breaks instead of just the AD BREAK chip firing alone.** v0.12.0 shipped with a race where the AD BREAK chip (in the right-side metadata column) would correctly show during an ad, but the lyric area would keep showing `"♪ fetching"` or `"♪ no lyrics for —"` instead of the SYVR promo card. Root cause: the `emit_blended` helper in `src-tauri/src/smtc.rs` was mutating its own local copy of the snapshot to set `ad_active = true`, but never wrote that flag back to the shared snapshot. The frontend's `track` state (read from the emit payload) correctly received `ad_active = true` → AD BREAK chip fired. The lyrics resolver (which reads the shared snapshot, not the emit payload) saw stale `ad_active = false` → didn't short-circuit → went through LRCLib resolution → emitted `status: "fetching"`/`"not_found"`. The PromoCard render condition (`lyrics.status === "ad"`) never matched. Fixed by writing `snap.ad_active` to the shared snapshot inside `emit_blended` after both the Spotify heuristic AND the bridge blend.
+
+- **Same race fixed in the bridge worker's emit path** (`src-tauri/src/web_bridge.rs`). The bridge worker (drives Pandora desktop + Pandora web + YouTube probes) was building a locally-blended snapshot for its `timeline-changed` emits without syncing `ad_active` back to the shared snapshot. Now it writes `blended.ad_active` after the blend so the resolver sees the flag through the same code path.
+
+- **Ad-end transition for bridge sources** — `blend_bridge_into_snapshot` now explicitly clears `snap.ad_active = false` when the bridge reports a real (non-ad) track. Previously the flag only flipped to true on `bt.is_ad`, never back to false, so a Pandora ad → next song transition would leave the overlay stuck on the promo card.
+
+  **What you'll see fixed:** Spotify free ads (any kind) now swap to the SYVR promo card within the snapshot tick of the ad starting. When the ad break ends and music resumes, the card disappears and lyrics resume. Same flow for Pandora web/desktop and YouTube ads.
+
 ## [0.12.0] - 2026-05-22
 
 ### Added — Ad-break detection + SYVR cross-promo overlay (full feature)

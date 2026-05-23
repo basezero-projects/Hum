@@ -99,11 +99,31 @@ pub(crate) fn is_spotify_ad(t: &CurrentTrack) -> bool {
     let title = t.title.trim();
     let artist = t.artist.trim();
 
+    // Spotify's own house ads ("Listen to music, ad-free", etc.) use
+    // explicit signals in the title/artist slots.
     if title.eq_ignore_ascii_case("Advertisement") { return true; }
     if title.eq_ignore_ascii_case("Spotify") { return true; }
     if artist.eq_ignore_ascii_case("Spotify") && !title.is_empty() { return true; }
 
     if title.is_empty() && artist.is_empty() && t.state == PlaybackState::Playing {
+        return true;
+    }
+
+    // Third-party Spotify ads (Hotels.com, TikTok, BINI promos, etc.) DON'T
+    // get any of the explicit signals above — Spotify publishes them with
+    // arbitrary title/artist strings (`"—"`, `"LISTEN NOW"`, etc.) and the
+    // advertiser's own branding. The remaining reliable signal is duration:
+    // Spotify ads are typically 15-30s; real songs are virtually never under
+    // ~60s. Combined with the source-is-spotify gate above and an actively-
+    // playing state, sub-35s tracks are ads.
+    //
+    // False-positive risk: legitimate sub-35s songs (intro tracks, skits,
+    // sound effects). Rare on Spotify; acceptable trade-off vs the much more
+    // common case of third-party ads going undetected.
+    if t.duration_ms > 0
+        && t.duration_ms < 35_000
+        && t.state == PlaybackState::Playing
+    {
         return true;
     }
 
@@ -204,13 +224,35 @@ pub fn start(
 /// regular blended emit — keeping the original "Pandora-in-Chrome
 /// bridge fills in title; SMTC owns position" behavior for the
 /// `PandoraProbe` (Chrome) case.
-async fn emit_blended(app: &AppHandle, event: &str, mut snap: CurrentTrack) {
+async fn emit_blended(
+    app: &AppHandle,
+    snapshot: &SharedSnapshot,
+    event: &str,
+    mut snap: CurrentTrack,
+) {
     use tauri::Manager;
 
     // Spotify ad detection runs before the tier-1 priority check so that
     // the ad_active flag rides on the snapshot regardless of playback state.
     if is_spotify_ad(&snap) {
         snap.ad_active = true;
+    }
+
+    // Sync the SMTC-derived ad_active to the shared snapshot. The lyrics
+    // resolver reads the shared snapshot (not the local emit-path `snap`)
+    // and short-circuits on `ad_active` to render the SYVR promo card.
+    // Without this write, the frontend's `track` state (from the emit
+    // payload below) would correctly show `ad_active = true` (driving the
+    // AD BREAK chip in MetadataColumn) while the resolver still sees the
+    // stale `false` on the shared snapshot — leading to the chip firing
+    // but the lyric area showing the "fetching" / "no lyrics" status line
+    // instead of the promo card. Sync ALWAYS, regardless of which tier
+    // emits below (tier-2 returns early without emitting; the bridge
+    // worker's parallel emit path also writes ad_active back — see
+    // web_bridge.rs).
+    {
+        let mut shared = snapshot.write().await;
+        shared.ad_active = snap.ad_active;
     }
 
     // Tier 1: SMTC has a real actively-playing session (Spotify / iTunes /
@@ -232,6 +274,12 @@ async fn emit_blended(app: &AppHandle, event: &str, mut snap: CurrentTrack) {
             return;
         }
         crate::web_bridge::blend_bridge_into_snapshot(&mut snap, bridge_state.inner()).await;
+        // Bridge blend may have flipped ad_active to true via bt.is_ad
+        // (Pandora ad detection). Re-sync to shared so the resolver sees it.
+        {
+            let mut shared = snapshot.write().await;
+            shared.ad_active = snap.ad_active;
+        }
     }
     // Tier 3: nothing claimed authority — emit whatever SMTC has (possibly
     // stale, possibly Paused/Stopped from an idle app).
@@ -326,8 +374,8 @@ async fn run(
                         *snap = CurrentTrack::default();
                         snap.clone()
                     };
-                    emit_blended(&app, "track-changed", emit_snap.clone()).await;
-                    emit_blended(&app, "playback-state-changed", emit_snap).await;
+                    emit_blended(&app, &snapshot, "track-changed", emit_snap.clone()).await;
+                    emit_blended(&app, &snapshot, "playback-state-changed", emit_snap).await;
                     eprintln!("[smtc] no active session, snapshot cleared");
                 }
             }
@@ -348,7 +396,7 @@ async fn run(
                                 snap.duration_ms = track.duration_ms;
                                 snap.clone()
                             };
-                            emit_blended(&app, "track-changed", emit_snap).await;
+                            emit_blended(&app, &snapshot, "track-changed", emit_snap).await;
                             spawn_art_fetch(app.clone(), art.clone(), h.session.clone(), title, artist);
                         }
                         Err(e) => {
@@ -371,7 +419,7 @@ async fn run(
                                 snap.last_update_unix_ms = last_update;
                                 snap.clone()
                             };
-                            emit_blended(&app, "timeline-changed", emit_snap).await;
+                            emit_blended(&app, &snapshot, "timeline-changed", emit_snap).await;
                         }
                         Err(e) => {
                             eprintln!("[smtc] Msg::TimelineChanged → read_timeline failed: {e:#}");
@@ -390,7 +438,7 @@ async fn run(
                                 snap.state = state;
                                 snap.clone()
                             };
-                            emit_blended(&app, "playback-state-changed", emit_snap).await;
+                            emit_blended(&app, &snapshot, "playback-state-changed", emit_snap).await;
                         }
                         Err(e) => {
                             eprintln!("[smtc] Msg::PlaybackChanged → read_state failed: {e:#}");
@@ -478,9 +526,9 @@ async fn emit_full(
             );
             snap.clone()
         };
-        emit_blended(app, "track-changed", emit_snap.clone()).await;
-        emit_blended(app, "timeline-changed", emit_snap.clone()).await;
-        emit_blended(app, "playback-state-changed", emit_snap.clone()).await;
+        emit_blended(app, snapshot, "track-changed", emit_snap.clone()).await;
+        emit_blended(app, snapshot, "timeline-changed", emit_snap.clone()).await;
+        emit_blended(app, snapshot, "playback-state-changed", emit_snap.clone()).await;
         (emit_snap.title.clone(), emit_snap.artist.clone())
     };
 
@@ -1087,7 +1135,10 @@ mod is_spotify_ad_tests {
 
     #[test]
     fn spotify_real_song_never_ad() {
-        let t = snap_with("Mr. Brightside", "The Killers", "Spotify.exe", PlaybackState::Playing);
+        // Normal song length (3:42) — explicit so the duration heuristic
+        // can't accidentally flag this as an ad if its threshold tightens.
+        let mut t = snap_with("Mr. Brightside", "The Killers", "Spotify.exe", PlaybackState::Playing);
+        t.duration_ms = 222_000;
         assert!(!is_spotify_ad(&t));
     }
 
@@ -1107,6 +1158,55 @@ mod is_spotify_ad_tests {
     #[test]
     fn spotify_empty_while_paused_not_ad() {
         let t = snap_with("", "", "Spotify.exe", PlaybackState::Paused);
+        assert!(!is_spotify_ad(&t));
+    }
+
+    // --- Duration heuristic — catches third-party ads that don't use
+    // --- Spotify's explicit "Advertisement" / "Spotify" string signals.
+
+    #[test]
+    fn spotify_third_party_ad_with_short_duration_matches() {
+        // Observed in real Spotify free ads: title is the advertiser's CTA,
+        // artist is the advertiser's brand, duration is sub-30s.
+        let mut t = snap_with("LISTEN NOW", "BINI", "Spotify.exe", PlaybackState::Playing);
+        t.duration_ms = 29_000;
+        assert!(is_spotify_ad(&t));
+    }
+
+    #[test]
+    fn spotify_emdash_title_short_duration_matches() {
+        // Hotels.com-style ad observed: title is just "—" (em-dash placeholder).
+        let mut t = snap_with("—", "", "Spotify.exe", PlaybackState::Playing);
+        t.duration_ms = 17_000;
+        assert!(is_spotify_ad(&t));
+    }
+
+    #[test]
+    fn spotify_short_duration_while_paused_not_ad() {
+        // Don't flag paused tracks even when short — the heuristic gates on
+        // Playing so a sub-35s paused track (e.g. user paused mid-intro) is
+        // not mistaken for an active ad break.
+        let mut t = snap_with("LISTEN NOW", "BINI", "Spotify.exe", PlaybackState::Paused);
+        t.duration_ms = 29_000;
+        assert!(!is_spotify_ad(&t));
+    }
+
+    #[test]
+    fn spotify_zero_duration_does_not_trip_heuristic() {
+        // Fresh track-changed events sometimes arrive with duration_ms = 0
+        // before the full media properties resolve. Don't false-positive on
+        // that — the explicit signals above still apply if present, but a
+        // zero-duration track alone shouldn't be classified as an ad.
+        let t = snap_with("Some Song", "Some Artist", "Spotify.exe", PlaybackState::Playing);
+        assert_eq!(t.duration_ms, 0);
+        assert!(!is_spotify_ad(&t));
+    }
+
+    #[test]
+    fn spotify_duration_at_threshold_not_ad() {
+        // Exactly 35s: should NOT match (the comparison is `< 35_000`).
+        let mut t = snap_with("Short Song", "Artist", "Spotify.exe", PlaybackState::Playing);
+        t.duration_ms = 35_000;
         assert!(!is_spotify_ad(&t));
     }
 }
