@@ -628,7 +628,7 @@ fn read_value_pattern(elem: &uiautomation::UIElement) -> Option<String> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PandoraUrlKind {
+pub(crate) enum PandoraUrlKind {
     Track,
     Artist,
     Album,
@@ -643,7 +643,7 @@ enum PandoraUrlKind {
 ///
 /// Anything else (search URLs, station URLs, lyrics URLs, account URLs)
 /// returns `None`.
-fn classify_pandora_url(url: &str) -> Option<PandoraUrlKind> {
+pub(crate) fn classify_pandora_url(url: &str) -> Option<PandoraUrlKind> {
     const PREFIX: &str = "https://www.pandora.com/artist/";
     if !url.starts_with(PREFIX) {
         return None;

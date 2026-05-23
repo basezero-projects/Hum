@@ -471,9 +471,10 @@ fn collect_pandora_web_data(
         }
 
         // URL collection via ValuePattern (Hyperlinks used for ad detection).
+        // Shared with the desktop probe — same Pandora URL semantics.
         if let Ok(vp) = node.get_pattern::<UIValuePattern>() {
             if let Ok(value) = vp.get_value() {
-                if value.starts_with("https://www.pandora.com/artist/") {
+                if crate::pandora_desktop::classify_pandora_url(&value).is_some() {
                     urls.push(value);
                 }
             }
