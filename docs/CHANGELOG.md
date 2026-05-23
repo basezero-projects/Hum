@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.9] - 2026-05-22
+
+### Changed
+- **Watermark is now bottom-center, much larger, and softer.** Moved from the bottom-right corner to bottom-center (full-width, `text-align: center`). Font size 13px → 28px. Opacity 0.7 → 0.55 for a more "behind the content" feel. Letter-spacing 0.4px → 0.5px (slight bump to balance the bigger font). Color, gold (`#d4af37`), and the dual text-shadow stay the same. Applies to both the desktop overlay (all three layout modes) and the OBS browser source.
+
 ## [0.13.8] - 2026-05-22
 
 ### Changed
