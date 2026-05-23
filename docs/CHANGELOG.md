@@ -6,6 +6,14 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.11] - 2026-05-22
+
+### Changed
+- **Watermark is thicker and more transparent.** Font weight 400 → 700 (bold), opacity 0.55 → 0.4. The heavier weight reads as a clearer brand mark at the new size while the lower opacity keeps it pushed behind the lyric content. Applies to the desktop overlay and the OBS browser source.
+
+### Fixed
+- **Metadata text and timestamps are now legible over bright/busy backgrounds.** The artist · title · album line and the m:ss / m:ss timestamps were disappearing on tracks with bright blurred album-art backgrounds (e.g. yellow/orange covers like "Breakeven" by The Script). Streamer side was the worst case — `#meta-text` and `#meta-row` had `color: var(--text-dim)` / `var(--text-faint)` with NO text-shadow, so once the background went bright they vanished. Desktop side had the lyric text-shadow applied but it was tuned for the bigger lyric font and wasn't enough for the smaller metadata. Both surfaces now use a triple-stack halo shadow on the metadata: `0 1px 2px rgba(0,0,0,1), 0 0 6px rgba(0,0,0,0.85), 0 3px 10px rgba(0,0,0,0.55)` — solid 1px contact shadow + 6px black halo + 10px soft spread. The halo is what does the work against bright backgrounds; reads as a subtle glow but keeps the text crisp.
+
 ## [0.13.10] - 2026-05-22
 
 ### Changed

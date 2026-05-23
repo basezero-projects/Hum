@@ -695,10 +695,11 @@ export default function Overlay() {
         textAlign: "center",
         zIndex: 5,
         fontSize: 28,
+        fontWeight: 700,
         letterSpacing: "0.5px",
         color: "#ffffff",
         textShadow: "0 1px 2px rgba(0,0,0,0.9), 0 2px 6px rgba(0,0,0,0.55)",
-        opacity: 0.55,
+        opacity: 0.4,
         pointerEvents: "none",
         userSelect: "none",
         fontFamily: `"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`,
@@ -1449,7 +1450,11 @@ function MetadataColumn({
         marginLeft: 14,
       }}
     >
-      {/* Artist line: hidden during ads so it doesn't clash with the promo card */}
+      {/* Artist line: hidden during ads so it doesn't clash with the promo card.
+          Uses a stronger halo shadow than the lyric `textShadow` so it stays
+          legible over bright blurred-art backgrounds (the lyric column has
+          the lyrics' own larger fonts to help; the metadata is small dim text
+          that disappears against busy backgrounds without a halo). */}
       {!adActive && metaText ? (
         <div
           title={metaText}
@@ -1457,7 +1462,7 @@ function MetadataColumn({
             fontSize: 11,
             letterSpacing: 0.3,
             color: textColorDim,
-            textShadow,
+            textShadow: "0 1px 2px rgba(0,0,0,1), 0 0 6px rgba(0,0,0,0.85), 0 3px 10px rgba(0,0,0,0.55)",
             opacity: 0.85,
             whiteSpace: "nowrap",
             overflow: "hidden",
@@ -1532,7 +1537,7 @@ function ProgressBar({
         style={{
           fontSize: 10,
           color: textColorDim,
-          textShadow,
+          textShadow: "0 1px 2px rgba(0,0,0,1), 0 0 6px rgba(0,0,0,0.85), 0 3px 10px rgba(0,0,0,0.55)",
           fontVariantNumeric: "tabular-nums",
           letterSpacing: 0.4,
           opacity: 0.85,
