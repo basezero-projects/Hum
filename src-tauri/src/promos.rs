@@ -49,7 +49,7 @@ pub fn pick_next_promo<'a>(pool: &'a [Promo], last_shown_id: Option<&str>) -> Op
 
     let after_cooldown: Vec<&Promo> = active.iter()
         .copied()
-        .filter(|p| last_shown_id.map_or(true, |id| p.id != id))
+        .filter(|p| last_shown_id.is_none_or(|id| p.id != id))
         .collect();
 
     let candidates: &[&Promo] = if after_cooldown.is_empty() {
@@ -82,6 +82,7 @@ const FETCH_TIMEOUT_SECS: u64 = 5;
 const REFRESH_INTERVAL_HOURS: u64 = 6;
 
 /// A source of promos. Phase 2 introduces UserLocalSource alongside this.
+#[allow(dead_code)]
 pub trait PromoSource: Send + Sync {
     fn name(&self) -> &'static str;
     /// Returns a snapshot of the current pool.
@@ -122,7 +123,7 @@ impl SyvrRemoteSource {
             _ => bundled_defaults(),
         };
         let pool_arc = self.pool.clone();
-        let _guard = tauri::async_runtime::block_on(async move {
+        tauri::async_runtime::block_on(async move {
             let mut w = pool_arc.write().await;
             *w = pool;
         });

@@ -1045,12 +1045,13 @@ mod is_spotify_ad_tests {
     use super::*;
 
     fn snap_with(title: &str, artist: &str, app_id: &str, state: PlaybackState) -> CurrentTrack {
-        let mut t = CurrentTrack::default();
-        t.title = title.into();
-        t.artist = artist.into();
-        t.state = state;
-        t.source_app_id = if app_id.is_empty() { None } else { Some(app_id.into()) };
-        t
+        CurrentTrack {
+            title: title.into(),
+            artist: artist.into(),
+            state,
+            source_app_id: if app_id.is_empty() { None } else { Some(app_id.into()) },
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -1181,7 +1182,7 @@ mod tests {
         // Empty validation_artist passes the first record through (matches
         // variant (c) call sites where the caller deliberately disables
         // validation — though those don't happen in current code).
-        let results = vec![
+        let results = [
             serde_json::json!({ "artistName": "T-Pain", "id": 1 }),
             serde_json::json!({ "artistName": "Lil Wayne", "id": 2 }),
         ];
@@ -1198,7 +1199,7 @@ mod tests {
         // Simulates the Lil Wayne case: iTunes returns a T-Pain track
         // first, the real Lil Wayne track second. Validation must skip
         // T-Pain and pick the Lil Wayne record.
-        let results = vec![
+        let results = [
             serde_json::json!({ "artistName": "T-Pain", "id": 1 }),
             serde_json::json!({ "artistName": "Lil Wayne", "id": 2 }),
         ];

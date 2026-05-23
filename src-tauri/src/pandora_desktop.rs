@@ -746,6 +746,7 @@ mod ad_detection_tests {
     }
 
     #[test]
+    #[allow(non_snake_case)]
     fn url_set_with_TR_link_is_not_ad() {
         let urls = vec!["https://www.pandora.com/artist/x/y/TR123abc".into()];
         let result = classify_pandora_state(&urls, None);

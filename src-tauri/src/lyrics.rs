@@ -30,7 +30,7 @@ use crate::smtc::SharedSnapshot;
 
 const STORE_FILE: &str = "lyrics-cache.json";
 const USER_AGENT: &str =
-    "hum/0.11.8 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
+    "hum/0.12.0 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WordSpan {
@@ -2119,12 +2119,14 @@ mod ad_short_circuit_tests {
 
     #[tokio::test]
     async fn ad_active_skips_network_and_emits_ad_status() {
-        let mut snap = crate::smtc::CurrentTrack::default();
-        snap.title = "Advertisement".into();
-        snap.artist = "Spotify".into();
-        snap.duration_ms = 30_000;
-        snap.ad_active = true;
-        snap.source_app_id = Some("Spotify.exe".into());
+        let snap = crate::smtc::CurrentTrack {
+            title: "Advertisement".into(),
+            artist: "Spotify".into(),
+            duration_ms: 30_000,
+            ad_active: true,
+            source_app_id: Some("Spotify.exe".into()),
+            ..Default::default()
+        };
 
         // Use a temp cache dir for the source so the test doesn't
         // pollute the real %APPDATA%.
