@@ -70,6 +70,16 @@ export default function SettingsView() {
           />
         </Row>
         <Hint>Hotkey to cycle modes: Ctrl+Alt+L (system-wide).</Hint>
+        <Toggle
+          label="Launch Hum when I sign into my PC"
+          checked={s.launch_on_startup}
+          onChange={(v) => update("launch_on_startup", v)}
+        />
+        <Hint>
+          When on, Hum starts automatically with Windows. Off by default. Toggles
+          the standard Windows Startup Apps entry — you can also manage it from
+          Settings → Apps → Startup if you prefer.
+        </Hint>
       </Section>
 
       <Section title="Lyrics timing">

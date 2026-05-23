@@ -42,6 +42,7 @@ const DEFAULT_SETTINGS: Settings = {
   streamer_port: 38247,
   show_artist_info_panel: true,
   ad_break_promos_enabled: true,
+  launch_on_startup: false,
 };
 
 export default function Overlay() {
@@ -1480,7 +1481,6 @@ function MetadataColumn({
           track={track}
           textColor={textColor}
           textColorDim={textColorDim}
-          textShadow={textShadow}
         />
       ) : null}
       {adActive ? (
@@ -1505,12 +1505,10 @@ function ProgressBar({
   track,
   textColor,
   textColorDim,
-  textShadow,
 }: {
   track: CurrentTrack;
   textColor: string;
   textColorDim: string;
-  textShadow: string;
 }) {
   const duration = Math.max(0, track.duration_ms);
   // Wall-clock interpolation while playing; freeze at the reported

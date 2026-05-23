@@ -176,6 +176,14 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_store::Builder::new().build())
+        // Launch-on-PC-startup. Plugin owns the Windows registry Run key /
+        // macOS LaunchAgent / Linux .desktop entry. The setting itself is
+        // toggled via the Settings UI (settings.rs::update_settings syncs
+        // the plugin state on every save).
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         // Save / restore position + size for the OVERLAY window only.
         // Dev console and settings windows are not tracked — they always
         // open at the position tauri.conf.json declares (centered).
@@ -209,6 +217,10 @@ pub fn run() {
             // Capture streamer fields before move so we can apply after manage.
             let streamer_enabled_at_start = loaded_settings.streamer_enabled;
             let streamer_port_at_start = loaded_settings.streamer_port;
+            // Reconcile OS autostart with saved setting on every launch — picks
+            // up any external drift (e.g. user removed Hum from Windows Startup
+            // Apps via OS settings while the file still says launch_on_startup = true).
+            settings::sync_autostart(app.handle(), loaded_settings.launch_on_startup);
             app.manage::<SharedSettings>(Arc::new(RwLock::new(loaded_settings)));
                 let artist_cache = ArtistInfoCache::new(app.handle().clone());
                 app.manage(artist_cache);

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Manager, Wry};
+use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_store::StoreExt;
 use tokio::sync::RwLock;
 
@@ -74,6 +75,13 @@ pub struct Settings {
     /// a neutral "Ad break" text is shown instead. Default true.
     #[serde(default = "default_ad_break_promos_enabled")]
     pub ad_break_promos_enabled: bool,
+    /// When true, Hum launches automatically when the user signs into their PC.
+    /// Off by default — opt-in. The actual OS-level registration is handled by
+    /// tauri-plugin-autostart (Windows registry Run key, macOS LaunchAgent,
+    /// Linux .desktop). Settings is the source of truth; `update_settings`
+    /// syncs the plugin state on every save.
+    #[serde(default)]
+    pub launch_on_startup: bool,
 }
 
 fn default_ad_break_promos_enabled() -> bool {
@@ -116,6 +124,7 @@ impl Default for Settings {
             #[cfg(not(windows))]
             window_backdrop: String::from("acrylic"),
             ad_break_promos_enabled: true,
+            launch_on_startup: false,
         }
     }
 }
@@ -135,6 +144,37 @@ pub fn load_from_store(app: &AppHandle) -> Settings {
     // settings.json that bypasses the update_settings sanitize() path.
     sanitize(&mut loaded);
     loaded
+}
+
+/// Reconcile the OS-level autostart registration with the saved setting.
+/// Called from `update_settings` on every save and from app setup on launch
+/// so externally-edited registry / LaunchAgent state can't drift out of sync.
+/// Errors are logged but non-fatal — the user can still use Hum if registry
+/// writes fail (e.g. locked-down work machine).
+pub fn sync_autostart(app: &AppHandle, enabled: bool) {
+    let manager = app.autolaunch();
+    let is_enabled = match manager.is_enabled() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[autostart] is_enabled() failed: {e}");
+            // Try the requested action anyway — best-effort.
+            false
+        }
+    };
+    if is_enabled == enabled {
+        return;
+    }
+    let result = if enabled {
+        manager.enable()
+    } else {
+        manager.disable()
+    };
+    if let Err(e) = result {
+        eprintln!(
+            "[autostart] {} failed: {e}",
+            if enabled { "enable" } else { "disable" }
+        );
+    }
 }
 
 pub fn save_to_store(app: &AppHandle, settings: &Settings) {
@@ -217,6 +257,11 @@ pub async fn update_settings(
     // React to streamer-enabled / port changes by starting or stopping the
     // local HTTP server. Idempotent if no streamer fields changed.
     crate::streamer::apply_settings(&app, merged.streamer_enabled, merged.streamer_port);
+    // Sync the OS-level autostart registration with the saved setting. Idempotent
+    // — calling enable/disable when already in that state is a no-op for the
+    // plugin. Errors are non-fatal (e.g. user without write access to the
+    // registry); we log and move on so the settings save itself still succeeds.
+    sync_autostart(&app, merged.launch_on_startup);
     #[cfg(windows)]
     if backdrop_changed {
         if let Some(overlay) = app.get_webview_window("overlay") {

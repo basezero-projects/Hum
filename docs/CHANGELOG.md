@@ -6,6 +6,15 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.19] - 2026-05-22
+
+### Added
+- **"Launch Hum when I sign into my PC" toggle in Settings → Mode & startup.** Off by default — opt-in. When enabled, Hum registers itself in the standard Windows Startup Apps so the app launches automatically when the user signs in (no manual launch needed; it'll be in the system tray on the new mode-tinted Hum icon, with the overlay window showing whatever the saved Last Mode was — Edit / Locked / Ghost). Toggle lives below the Last Mode dropdown in the "Mode & startup" Settings section with a hint explaining that the same entry shows up under Settings → Apps → Startup in Windows. Cross-platform: same toggle controls Windows registry Run key, macOS LaunchAgent, and Linux .desktop entry via `tauri-plugin-autostart`. Settings is the source of truth — the OS-level registration is reconciled with the saved setting on every Settings save AND on every Hum launch, so externally-edited drift (e.g. removing Hum from Windows Startup Apps while the saved setting still says on) self-heals on the next Hum launch.
+
+### Internal
+- **`tauri-plugin-autostart` plugin added** for cross-platform startup-launch registration. JS bindings (`@tauri-apps/plugin-autostart`) installed too but the frontend never calls them directly — Rust owns reconciliation via `settings::sync_autostart()` so the saved `launch_on_startup` field is the single source of truth.
+- **Removed a stale `textShadow` prop on `ProgressBar`** in `Overlay.tsx` — v0.13.11 inlined a stronger metadata shadow but left the now-unused prop dangling. Caught by `tsc` while wiring autostart.
+
 ## [0.13.18] - 2026-05-22
 
 ### Changed
