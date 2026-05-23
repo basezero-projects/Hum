@@ -17,8 +17,9 @@
 //! The cache value is a `WebBridgeTrack` with a `last_seen_unix_ms`
 //! timestamp. Resolver treats values older than ~5s as stale.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
+use regex::Regex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::RwLock;
@@ -32,6 +33,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::smtc::SharedSnapshot;
+
+/// Unix epoch milliseconds at the current moment. Inline helper used by both
+/// the web and desktop probes — keeps the call sites readable.
+fn now_unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
 
 #[derive(Clone, Debug, Serialize, Default)]
 pub struct WebBridgeTrack {
@@ -369,19 +379,58 @@ pub(crate) fn read_process_name_for_window(hwnd: HWND) -> String {
 // matching node's Name property. Stable across Pandora's React rebuilds
 // because the substring is derived from CSS Module source slot names.
 
-/// Walk the descendants of `root` and return the `Name` property of the
-/// first element whose `ClassName` contains `class_substr` (case-
-/// insensitive). Returns `None` if no element matches or the property
-/// reads fail. Bails after MAX_NODES nodes to keep worst-case latency
-/// bounded — Pandora's tree is well under that.
-fn find_text_by_class_substr(
+/// Combined single-pass DFS over the Chrome UIA tree for a Pandora.com tab.
+///
+/// Collects in one walk:
+/// - `title_raw`  — `Name` of the first element whose class contains
+///   `__current__trackName`
+/// - `artist_raw` — class `__current__artistName`
+/// - `album_raw`  — class `__current__albumName`
+/// - `urls`       — all Hyperlink `Value` URLs (for ad/track classification)
+/// - `countdown`  — first text node matching `M:SS` (ad countdown timer)
+///
+/// Replaces the previous three separate `find_text_by_class_substr` calls
+/// with a single O(n) walk — three DFS passes was flagged as a performance
+/// hazard in BUGS.md.
+struct PandoraWebData {
+    title_raw: String,
+    artist_raw: String,
+    album_raw: String,
+    urls: Vec<String>,
+    countdown: Option<String>,
+}
+
+fn collect_pandora_web_data(
     automation: &uiautomation::UIAutomation,
     root: &uiautomation::UIElement,
-    class_substr: &str,
-) -> Option<String> {
-    const MAX_NODES: usize = 5_000;
-    let walker = automation.get_control_view_walker().ok()?;
-    let needle = class_substr.to_lowercase();
+) -> PandoraWebData {
+    use uiautomation::patterns::UIValuePattern;
+
+    static COUNTDOWN_RE: OnceLock<Regex> = OnceLock::new();
+    let countdown_re = COUNTDOWN_RE.get_or_init(|| {
+        Regex::new(r"^\d+:\d{2}$").expect("countdown regex is valid")
+    });
+
+    const MAX_NODES: usize = 10_000;
+    let walker = match automation.get_control_view_walker() {
+        Ok(w) => w,
+        Err(_) => {
+            return PandoraWebData {
+                title_raw: String::new(),
+                artist_raw: String::new(),
+                album_raw: String::new(),
+                urls: Vec::new(),
+                countdown: None,
+            }
+        }
+    };
+
+    let mut title_raw = String::new();
+    let mut artist_raw = String::new();
+    let mut album_raw = String::new();
+    let mut urls: Vec<String> = Vec::new();
+    let mut countdown: Option<String> = None;
+
     let mut stack: Vec<uiautomation::UIElement> = vec![root.clone()];
     let mut visited = 0_usize;
 
@@ -389,24 +438,57 @@ fn find_text_by_class_substr(
         visited += 1;
         if visited > MAX_NODES {
             eprintln!(
-                "[web_bridge] PandoraProbe: tree walk hit MAX_NODES={MAX_NODES} cap looking for {class_substr:?}"
+                "[web_bridge] PandoraProbe: collect_pandora_web_data hit MAX_NODES={MAX_NODES}"
             );
-            return None;
+            break;
         }
 
+        // Class-based text reads (track name / artist / album).
         if let Ok(class) = node.get_classname() {
-            if class.to_lowercase().contains(&needle) {
+            let class_lower = class.to_lowercase();
+            if class_lower.contains("__current__trackname") && title_raw.is_empty() {
                 if let Ok(name) = node.get_name() {
                     let trimmed = name.trim();
                     if !trimmed.is_empty() {
-                        return Some(trimmed.to_string());
+                        title_raw = trimmed.to_string();
+                    }
+                }
+            } else if class_lower.contains("__current__artistname") && artist_raw.is_empty() {
+                if let Ok(name) = node.get_name() {
+                    let trimmed = name.trim();
+                    if !trimmed.is_empty() {
+                        artist_raw = trimmed.to_string();
+                    }
+                }
+            } else if class_lower.contains("__current__albumname") && album_raw.is_empty() {
+                if let Ok(name) = node.get_name() {
+                    let trimmed = name.trim();
+                    if !trimmed.is_empty() {
+                        album_raw = trimmed.to_string();
                     }
                 }
             }
         }
 
-        // Push children in reverse so the visit order remains
-        // document order (depth-first, leftmost-first).
+        // URL collection via ValuePattern (Hyperlinks used for ad detection).
+        if let Ok(vp) = node.get_pattern::<UIValuePattern>() {
+            if let Ok(value) = vp.get_value() {
+                if value.starts_with("https://www.pandora.com/artist/") {
+                    urls.push(value);
+                }
+            }
+        }
+
+        // Countdown text (ad timer, e.g. "0:23").
+        if countdown.is_none() {
+            if let Ok(name) = node.get_name() {
+                if countdown_re.is_match(name.trim()) {
+                    countdown = Some(name.trim().to_string());
+                }
+            }
+        }
+
+        // Enqueue children in reverse for left-to-right DFS.
         let mut children: Vec<uiautomation::UIElement> = Vec::new();
         if let Ok(first) = walker.get_first_child(&node) {
             let mut cur = Some(first);
@@ -419,7 +501,8 @@ fn find_text_by_class_substr(
             stack.push(c);
         }
     }
-    None
+
+    PandoraWebData { title_raw, artist_raw, album_raw, urls, countdown }
 }
 
 /// Pandora's track-title `Name` property sometimes contains the visible
@@ -509,32 +592,56 @@ impl WebPlayerProbe for PandoraProbe {
                 Err(_) => continue,
             };
 
-            let title_raw = find_text_by_class_substr(&automation, &root, "__current__trackName")
-                .unwrap_or_default();
-            let artist_raw = find_text_by_class_substr(&automation, &root, "__current__artistName")
-                .unwrap_or_default();
-            let album_raw = find_text_by_class_substr(&automation, &root, "__current__albumName")
-                .unwrap_or_default();
+            // Single combined DFS: collects title/artist/album (class-based),
+            // Pandora hyperlink URLs (for ad classification), and countdown
+            // text (ad timer). Replaces the prior three separate walks.
+            let data = collect_pandora_web_data(&automation, &root);
 
-            let title = dedupe_doubled(&title_raw);
-            let artist = dedupe_doubled(&artist_raw);
-            let album = dedupe_doubled(&album_raw);
+            // Ad classification — check URLs first.
+            let ad_state = crate::pandora_desktop::classify_pandora_state(
+                &data.urls,
+                data.countdown.as_deref(),
+            );
+
+            if ad_state.is_ad {
+                // Mirror Task 7's simpler position_ms approach: position = 0,
+                // duration = current countdown value (shrinks over the ad).
+                // Accurate initial-duration tracking would require caching
+                // per-ad-key across polls — deferred, same rationale as Task 7.
+                let dur_ms = ad_state
+                    .countdown_seconds
+                    .map(|s| s * 1_000)
+                    .unwrap_or(30_000); // 30s fallback when countdown unreadable
+                return Ok(Some(WebBridgeTrack {
+                    title: String::new(),
+                    artist: String::new(),
+                    album: String::new(),
+                    source: "pandora-web".into(),
+                    last_seen_unix_ms: now_unix_ms(),
+                    position_ms: Some(0),
+                    // pandora-web doesn't track its own playback state;
+                    // SMTC handles that via Chrome's MediaSession.
+                    state: None,
+                    is_ad: true,
+                    duration_ms: Some(dur_ms),
+                }));
+            }
+
+            // Normal track path — use the class-based title/artist/album.
+            let title = dedupe_doubled(&data.title_raw);
+            let artist = dedupe_doubled(&data.artist_raw);
+            let album = dedupe_doubled(&data.album_raw);
 
             if title.is_empty() {
                 continue;
             }
-
-            let now_unix_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
 
             return Ok(Some(WebBridgeTrack {
                 title,
                 artist,
                 album,
                 source: self.name().to_string(),
-                last_seen_unix_ms: now_unix_ms,
+                last_seen_unix_ms: now_unix_ms(),
                 // Pandora-in-Chrome leaves position + state to SMTC —
                 // Chrome itself publishes timeline data, so SMTC's
                 // position/state are already correct for this case.

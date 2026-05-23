@@ -6,6 +6,13 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.12.0-rc8] - 2026-05-22
+
+### Added
+- **Pandora web ad-break detection.** Free-tier Pandora.com ads in Chromium browsers (Chrome, Edge, Brave, Opera, Vivaldi) now also trigger the SYVR promo card with countdown. Shares the same `classify_pandora_state` decision helper as the desktop probe (Task 7) — the only difference is where the UIA tree comes from (Chrome's tab vs the Pandora.exe window).
+
+  **Implementation:** Extended `PandoraProbe::read` in `src-tauri/src/web_bridge.rs`. Added a new `collect_pandora_web_data` function that walks the Chrome accessibility tree in a single DFS pass collecting: class-based track/artist/album text (previously three separate walks), Pandora Hyperlink URLs (for ad classification via `classify_pandora_state`), and countdown text (`M:SS` regex match). Replaces the previous three separate `find_text_by_class_substr` calls — eliminating the triple-DFS performance hazard flagged in BUGS.md. Constructs an `is_ad: true` `WebBridgeTrack` when no `/TR…` URLs are present. `position_ms` mirrors Task 7's simpler approach (always 0) — initial-duration caching deferred for the same reason as the desktop probe. Manual live verification skipped — no Pandora Free available; the shared classifier is covered by Task 7's unit tests.
+
 ## [0.12.0-rc7] - 2026-05-22
 
 ### Added
