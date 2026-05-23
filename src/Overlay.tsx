@@ -818,6 +818,14 @@ export default function Overlay() {
               <div style={{ color: effectiveTextColorDim, fontSize: settingsForRender.font_size_px * 0.6, textAlign: "center" }}>
                 Ad break
               </div>
+            ) : lyrics?.status === "unsupported" ? (
+              <UnsupportedBlock
+                track={track}
+                sourceLabelText={sourceLabel(track?.source_app_id ?? null, null)}
+                settings={settingsForRender}
+                textShadow={effectiveTextShadow}
+                dragRegion={isEdit}
+              />
             ) : (
               <>
                 <LineRow
@@ -882,6 +890,14 @@ export default function Overlay() {
           <div style={{ color: effectiveTextColorDim, fontSize: settingsForRender.font_size_px * 0.6, textAlign: "center" }}>
             Ad break
           </div>
+        ) : lyrics?.status === "unsupported" ? (
+          <UnsupportedBlock
+            track={track}
+            sourceLabelText={sourceLabel(track?.source_app_id ?? null, null)}
+            settings={settingsForRender}
+            textShadow={effectiveTextShadow}
+            dragRegion={isEdit}
+          />
         ) : hasLines ? (
           lyrics!.lines.map((line, i) => (
             <LineRow
@@ -945,6 +961,14 @@ export default function Overlay() {
             <div style={{ color: effectiveTextColorDim, fontSize: settingsForRender.font_size_px * 0.6, textAlign: "center" }}>
               Ad break
             </div>
+          ) : lyrics?.status === "unsupported" ? (
+            <UnsupportedBlock
+              track={track}
+              sourceLabelText={sourceLabel(track?.source_app_id ?? null, null)}
+              settings={settingsForRender}
+              textShadow={effectiveTextShadow}
+              dragRegion={isEdit}
+            />
           ) : (
             <>
               <LineRow text={prev?.text} kind="prev" dragRegion={isEdit} settings={settingsForRender} textShadow={effectiveTextShadow} />
@@ -1914,6 +1938,132 @@ function TranslationRow({
   );
 }
 
+// Replaces the prev/cur/next lyric stack when status === "unsupported".
+// The user is doing something we can't lyric (watching Netflix, on
+// Pandora-web, browsing). Instead of three empty ♪ placeholders we show:
+//   • a centered "<lead> <highlight>" line where the service portion is
+//     painted in its brand color (Netflix red, Twitch purple, etc.)
+//   • a smaller "X min remaining" line below if the source exposed a
+//     duration (Netflix in Chrome does — the metadata column already
+//     shows MM:SS / MM:SS; this is the at-a-glance version).
+// The component re-renders on `progressTick` state changes (passed via
+// `tickKey` so React invalidates) so the remaining-minutes count updates
+// without a per-component timer.
+function UnsupportedBlock({
+  track,
+  sourceLabelText,
+  settings,
+  textShadow,
+  dragRegion,
+}: {
+  track: CurrentTrack | null;
+  sourceLabelText: string | null;
+  settings: Settings;
+  textShadow: string;
+  dragRegion: boolean;
+}) {
+  const title = (track?.title ?? "").trim();
+  const isPandoraTab = title.endsWith("Now Playing on Pandora");
+  const isVideoService = !!title && KNOWN_VIDEO_SERVICES.test(title);
+  const titleIsJustSource =
+    !!sourceLabelText && title.toLowerCase() === sourceLabelText.toLowerCase();
+
+  // Decide the "lead text + highlight word" split that matches the
+  // statusLine() string but keeps the service name separable so we can
+  // brand-color just that token.
+  let lead = "";
+  let highlight = "";
+  if (isPandoraTab) {
+    lead = "Hum's tuned in —";
+    highlight = "Pandora";
+  } else if (isVideoService) {
+    lead = "Watching";
+    highlight = title;
+  } else if (title && !titleIsJustSource) {
+    lead = "";
+    highlight = title;
+  } else if (sourceLabelText) {
+    lead = "Hum's tuned in —";
+    highlight = sourceLabelText;
+  } else {
+    lead = "Hum's tuned in";
+    highlight = "";
+  }
+
+  const color = serviceBrandColor(highlight) ?? settings.text_color;
+
+  // Remaining time. Wall-clock interpolation while playing so the count
+  // updates between server pushes.
+  let remaining: string | null = null;
+  if (track && track.duration_ms > 0) {
+    let pos = track.position_ms;
+    if (track.state === "playing") {
+      pos = track.position_ms + Math.max(0, Date.now() - track.last_update_unix_ms);
+    }
+    const remainingMs = Math.max(0, track.duration_ms - pos);
+    const min = Math.round(remainingMs / 60000);
+    if (min >= 1) {
+      remaining = `${min} min remaining`;
+    } else if (remainingMs >= 5000) {
+      remaining = `less than a minute remaining`;
+    }
+  }
+
+  const drag = dragRegion ? { "data-tauri-drag-region": true } : {};
+
+  return (
+    <div
+      {...drag}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 6,
+        position: "relative",
+        maxWidth: "92vw",
+      }}
+    >
+      <div
+        style={{
+          fontSize: settings.font_size_px,
+          fontWeight: settings.font_weight,
+          color: settings.text_color,
+          textShadow,
+          letterSpacing: 0.2,
+          lineHeight: 1.2,
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          maxWidth: "100%",
+          textAlign: "center",
+        }}
+      >
+        {lead ? <span>{lead}{" "}</span> : null}
+        {highlight ? (
+          <span style={{ color, transition: "color 220ms ease" }}>
+            {highlight}
+          </span>
+        ) : null}
+      </div>
+      {remaining ? (
+        <div
+          style={{
+            fontSize: Math.max(11, settings.font_size_px * 0.5),
+            fontWeight: 400,
+            color: settings.text_color_dim,
+            textShadow,
+            letterSpacing: 0.3,
+            opacity: 0.95,
+          }}
+        >
+          {remaining}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function LineRow({
   text,
   kind,
@@ -2046,6 +2196,31 @@ function wordDurationMs(words: WordSpan[], idx: number, lineEndMs: number): numb
 // DRM or service policy). Frame these as "Watching X" rather than
 // rendering "Netflix" as if it were a song name.
 const KNOWN_VIDEO_SERVICES = /^(netflix|youtube|twitch|hulu|disney\+|prime video|amazon prime|hbo|max|peacock|apple tv|paramount\+|crunchyroll)$/i;
+
+// Brand colors for the unsupported-state "Watching X" / "Hum's tuned in
+// — X" lines. Keyed by lowercase service name. Returns null for unknown
+// services; the caller falls back to the user's text color.
+function serviceBrandColor(name: string | null | undefined): string | null {
+  if (!name) return null;
+  const k = name.toLowerCase();
+  if (k === "netflix") return "#e50914";
+  if (k === "youtube") return "#ff0000";
+  if (k === "twitch") return "#9146ff";
+  if (k === "hulu") return "#1ce783";
+  if (k === "disney+") return "#1f80e0";
+  if (k === "prime video" || k === "amazon prime") return "#00a8e1";
+  if (k === "hbo" || k === "max") return "#6e2da3";
+  if (k === "peacock") return "#fa6400";
+  if (k === "apple tv") return "#e8e8e8";
+  if (k === "paramount+") return "#0064ff";
+  if (k === "crunchyroll") return "#f47521";
+  if (k === "pandora") return "#3668ff";
+  if (k === "spotify") return "#1ed760";
+  if (k === "youtube music") return "#ff0000";
+  if (k === "apple music") return "#fa5760";
+  if (k === "tidal") return "#000000";
+  return null;
+}
 
 function statusLine(l: CurrentLyrics, t: CurrentTrack | null): string {
   switch (l.status) {

@@ -325,6 +325,21 @@
      browser sources (one per service) and have them all pointing at
      the same Hum, each filtering its own source. */
   body.hidden #wrap { visibility: hidden; }
+  /* Unsupported-source state — "Watching Netflix" / "Hum's tuned in — X".
+     The subline ("X min remaining") sits under the cur headline at a
+     smaller dimmer size. .cur already controls the headline. */
+  .unsupported-subline {
+    display: block;
+    margin-top: 4px;
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--text-dim);
+    letter-spacing: 0.3px;
+    opacity: 0.95;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   /* Watermark — opt-in via ?credit=1. Sits in the bottom-right corner
      so it doesn't compete with the lyric stack. Uses --gold so the
      ?accent= override re-tints it. Lives inside #wrap so the source
@@ -437,8 +452,9 @@
     return `${m}:${s.toString().padStart(2, "0")}`;
   }
 
-  function setLine(el, text, animate) {
-    const newText = text && text.trim() ? text : "♪";
+  function setLine(el, text, animate, placeholder) {
+    if (placeholder === undefined) placeholder = "♪";
+    const newText = text && text.trim() ? text : placeholder;
     const isEmpty = !(text && text.trim());
     if (el.textContent === newText && el.classList.contains("empty") === isEmpty) {
       return;
@@ -449,6 +465,61 @@
       el.classList.remove("anim-in");
       void el.offsetWidth;
       el.classList.add("anim-in");
+    }
+  }
+
+  // Brand color map for the unsupported-state highlight. Mirror of
+  // src/Overlay.tsx::serviceBrandColor.
+  function serviceBrandColor(name) {
+    if (!name) return null;
+    const k = name.toLowerCase();
+    if (k === "netflix") return "#e50914";
+    if (k === "youtube" || k === "youtube music") return "#ff0000";
+    if (k === "twitch") return "#9146ff";
+    if (k === "hulu") return "#1ce783";
+    if (k === "disney+") return "#1f80e0";
+    if (k === "prime video" || k === "amazon prime") return "#00a8e1";
+    if (k === "hbo" || k === "max") return "#6e2da3";
+    if (k === "peacock") return "#fa6400";
+    if (k === "apple tv") return "#e8e8e8";
+    if (k === "paramount+") return "#0064ff";
+    if (k === "crunchyroll") return "#f47521";
+    if (k === "pandora") return "#3668ff";
+    if (k === "spotify") return "#1ed760";
+    if (k === "apple music") return "#fa5760";
+    return null;
+  }
+
+  // Renders the cur line for the unsupported state. Bypasses setLine so
+  // we can inject a brand-colored <span> around the highlight token
+  // (e.g. "Watching <span style='color:#e50914'>Netflix</span>"). Also
+  // appends a "X min remaining" subline when duration is known.
+  function renderUnsupportedCur(lead, highlight, subline, animate) {
+    const escape = (s) => String(s).replace(/[&<>"']/g, (c) =>
+      ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[c]
+    );
+    const color = serviceBrandColor(highlight);
+    const headlineParts = [];
+    if (lead) headlineParts.push(escape(lead) + " ");
+    if (highlight) {
+      if (color) {
+        headlineParts.push(
+          "<span style=\"color:" + color + ";transition:color 220ms ease\">"
+          + escape(highlight) + "</span>"
+        );
+      } else {
+        headlineParts.push(escape(highlight));
+      }
+    }
+    const subHtml = subline
+      ? "<div class=\"unsupported-subline\">" + escape(subline) + "</div>"
+      : "";
+    $cur.innerHTML = headlineParts.join("") + subHtml;
+    $cur.classList.remove("empty");
+    if (animate) {
+      $cur.classList.remove("anim-in");
+      void $cur.offsetWidth;
+      $cur.classList.add("anim-in");
     }
   }
 
@@ -658,40 +729,56 @@
       setLine($next, next ? next.text : "", false);
     } else {
       clearKaraoke();
-      let mid;
-      switch (lyr.status) {
-        case "fetching":     mid = t.title ? "♪ fetching — " + t.title : "♪ fetching…"; break;
-        case "not_found":    mid = t.title ? "♪ no lyrics for " + t.title : "♪ no lyrics"; break;
-        case "instrumental": mid = "♪ instrumental"; break;
-        case "plain":        mid = lyr.plain || "♪ unsynced lyrics"; break;
-        case "unsupported": {
-          // Mirror of Overlay.tsx::statusLine. No ♪ prefix here — these
-          // messages describe what the user is doing (watching a video,
-          // on a non-music site), not a song with no lyrics. Music notes
-          // belong on the actual music-status branches above.
-          const title = (t.title || "").trim();
-          const src = s.source_label || "";
-          const KNOWN_VIDEO = /^(netflix|youtube|twitch|hulu|disney\+|prime video|amazon prime|hbo|max|peacock|apple tv|paramount\+|crunchyroll)$/i;
-          if (title.endsWith("Now Playing on Pandora")) {
-            mid = "Hum's tuned in — Pandora";
-          } else if (title && KNOWN_VIDEO.test(title)) {
-            mid = "Watching " + title;
-          } else if (title && (!src || title.toLowerCase() !== src.toLowerCase())) {
-            mid = title;
-          } else if (src) {
-            mid = "Hum's tuned in — " + src;
-          } else {
-            mid = "Hum's tuned in";
+      if (lyr.status === "unsupported") {
+        // Mirror of Overlay.tsx::UnsupportedBlock — branded "Watching X"
+        // / "Hum's tuned in — X" with no ♪ placeholders on prev/next and
+        // a small "X min remaining" subline when duration is known.
+        const title = (t.title || "").trim();
+        const src = s.source_label || "";
+        const KNOWN_VIDEO = /^(netflix|youtube|twitch|hulu|disney\+|prime video|amazon prime|hbo|max|peacock|apple tv|paramount\+|crunchyroll)$/i;
+        const isPandoraTab = title.endsWith("Now Playing on Pandora");
+        const isVideoSvc = !!title && KNOWN_VIDEO.test(title);
+        const titleIsJustSource = !!src && title.toLowerCase() === src.toLowerCase();
+        let lead = "", highlight = "";
+        if (isPandoraTab) { lead = "Hum's tuned in —"; highlight = "Pandora"; }
+        else if (isVideoSvc) { lead = "Watching"; highlight = title; }
+        else if (title && !titleIsJustSource) { highlight = title; }
+        else if (src) { lead = "Hum's tuned in —"; highlight = src; }
+        else { lead = "Hum's tuned in"; }
+        // Remaining-time subline. Uses the same wall-clock interpolation
+        // as the progress-bar tick so the count stays current between
+        // server pushes.
+        let subline = null;
+        const durMs = Number(t.duration_ms) || 0;
+        if (durMs > 0) {
+          let pos = Number(t.position_ms) || 0;
+          if (t.state === "playing") {
+            const last = Number(t.last_update_unix_ms) || 0;
+            if (last > 0) pos += Math.max(0, Date.now() - last);
           }
-          break;
+          const remainingMs = Math.max(0, durMs - pos);
+          const min = Math.round(remainingMs / 60000);
+          if (min >= 1) subline = min + " min remaining";
+          else if (remainingMs >= 5000) subline = "less than a minute remaining";
         }
-        case "error":        mid = "♪ error fetching lyrics"; break;
-        case "idle":
-        default:             mid = t.title ? "♪ " + t.title : "♪";
+        setLine($prev, "", false, "");
+        setLine($next, "", false, "");
+        renderUnsupportedCur(lead, highlight, subline, trackChanged);
+      } else {
+        let mid;
+        switch (lyr.status) {
+          case "fetching":     mid = t.title ? "♪ fetching — " + t.title : "♪ fetching…"; break;
+          case "not_found":    mid = t.title ? "♪ no lyrics for " + t.title : "♪ no lyrics"; break;
+          case "instrumental": mid = "♪ instrumental"; break;
+          case "plain":        mid = lyr.plain || "♪ unsynced lyrics"; break;
+          case "error":        mid = "♪ error fetching lyrics"; break;
+          case "idle":
+          default:             mid = t.title ? "♪ " + t.title : "♪";
+        }
+        setLine($prev, "", false);
+        setLine($cur, mid, trackChanged);
+        setLine($next, "", false);
       }
-      setLine($prev, "", false);
-      setLine($cur, mid, trackChanged);
-      setLine($next, "", false);
     }
   }
 
@@ -726,6 +813,22 @@
       $bar.style.transform = `scaleX(${(pos / dur).toFixed(4)})`;
       $tcur.textContent = fmtMs(pos);
       $tdur.textContent = fmtMs(dur);
+    }
+
+    // Unsupported-state subline ("X min remaining") — recompute from
+    // the interpolated position so it stays current between state
+    // pushes. DOM write only when the text actually changes.
+    if (s.lyrics && s.lyrics.status === "unsupported" && dur > 0) {
+      const sublineEl = $cur.querySelector(".unsupported-subline");
+      if (sublineEl) {
+        const pos2 = interpolatedPosMs(t);
+        const remainingMs = Math.max(0, dur - pos2);
+        const min = Math.round(remainingMs / 60000);
+        let next = "";
+        if (min >= 1) next = min + " min remaining";
+        else if (remainingMs >= 5000) next = "less than a minute remaining";
+        if (next && sublineEl.textContent !== next) sublineEl.textContent = next;
+      }
     }
 
     // Karaoke word index. Walks the line's words; finds the highest

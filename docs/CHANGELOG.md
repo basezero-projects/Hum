@@ -6,6 +6,18 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.22] - 2026-05-22
+
+### Changed
+- **Unsupported-source view is now a proper non-lyric display, not three empty `♪` placeholders with a single status line.** When Hum can't fetch lyrics for what's playing (Netflix in Chrome, YouTube, Twitch, Pandora-web, etc.) the lyric column now renders:
+  - **A centered headline** with the service name brand-colored — Netflix red `#e50914`, YouTube red `#ff0000`, Twitch purple `#9146ff`, Hulu green `#1ce783`, Disney+ blue `#1f80e0`, Prime Video / Amazon Prime cyan `#00a8e1`, HBO / Max purple `#6e2da3`, Peacock orange `#fa6400`, Apple TV light `#e8e8e8`, Paramount+ blue `#0064ff`, Crunchyroll orange `#f47521`, Pandora blue `#3668ff`, Spotify green `#1ed760`, Apple Music coral `#fa5760`, YouTube Music red `#ff0000`. Unknown services fall back to the user's text color.
+  - **A smaller "X min remaining" subline** below the headline when the source exposed a duration (e.g. Netflix in Chrome reports a duration via media session). Uses wall-clock interpolation so the count stays current between state pushes — falls to "less than a minute remaining" under 1 minute, hides entirely under 5 seconds.
+  - **No `♪` placeholders** on the prev/next slots — they don't apply when there's no lyric content. Previously the empty-state default was `♪`, which left two stray music notes flanking the centered message even after dropping the prefix from the cur line. New `setLine(el, text, animate, placeholder)` arg defaults to `♪` but the unsupported branch passes `""` so the prev/next slots truly blank.
+- Applies to all three desktop overlay layout modes (single-line, full-page, default 3-line) AND the OBS browser source. Streamer side uses a parallel implementation in `streamer_overlay.html` with the same brand-color map and the subline ticking on the rAF render.
+
+### Internal
+- New `UnsupportedBlock` React component owns the no-music render path on the desktop side (replaces the prev/cur/next LineRow stack when `lyrics.status === "unsupported"`). Mirror in the streamer's vanilla JS: `renderUnsupportedCur()` + `serviceBrandColor()` helpers.
+
 ## [0.13.21] - 2026-05-22
 
 ### Changed
