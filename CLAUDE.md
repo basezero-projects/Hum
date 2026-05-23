@@ -106,4 +106,4 @@ Tauri desktop app — `git push` only when Wes asks. Auto-push is **off**.
 
 ## Icons
 
-Currently using Wren's icon set as a stand-in (SYVR Studios branded). Replace with a Hum icon via `pnpm tauri icon path/to/source.png` before any release.
+Hum's own brand mark — white HUM glyph in a vertical ellipse on a black square. Generated via `pnpm tauri icon <source-1024.png>`. Source was a 6159×6159 JPG provided by Wes (HUM circle-letter logo), downsized to 1024×1024 PNG. The watermark overlay (`public/hum-logo.png`) is the same mark with the black removed via luminance-as-alpha.

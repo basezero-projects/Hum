@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.17] - 2026-05-22
+
+### Changed
+- **App icon is now Hum's own brand mark.** Previously Hum shipped with Wren's icon set as a stand-in (SYVR Studios branded but not Hum-specific). New icon is the white HUM circle-letter logo (ellipse glyph) on a black square — same mark used for the overlay watermark, but with the black background preserved here so it reads cleanly in Windows Start menu, taskbar, system tray, and Alt+Tab. Generated via `pnpm tauri icon` from a 1024×1024 source. Regenerates all platform sizes: Windows (`icon.ico`, square logos for Microsoft Store), macOS (`icon.icns`), Linux (PNG sizes), iOS (AppIcon variants), Android (mipmap launchers). CLAUDE.md note about the Wren stand-in has been updated.
+
 ## [0.13.16] - 2026-05-22
 
 ### Changed
