@@ -6,6 +6,17 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.20] - 2026-05-22
+
+### Changed
+- **The "unsupported source" lyric-line message is now contextual instead of a dead-end "track info unavailable for this source."** When Hum can't fetch lyrics for what's playing (e.g. Netflix in Chrome, Twitch streams, YouTube videos, Pandora web), the overlay's cur line now shows one of:
+  - **Pandora-web tab** (literal title "Now Playing on Pandora") → `♪ Hum's tuned in — Pandora`
+  - **Known video service** as the tab title (Netflix, YouTube, Twitch, Hulu, Disney+, Prime Video, HBO, Max, Peacock, Apple TV, Paramount+, Crunchyroll) → `♪ Watching <Service>` (e.g. `♪ Watching Netflix`). Frames it correctly when the DRM/service policy hides the actual show title behind the service name.
+  - **Title is meaningful** (a real show/video name, not just the site/source) → `♪ <title>` (e.g. `♪ Stranger Things S04E01` if a service exposes the episode name).
+  - **Title is just the source name** (e.g. title="Chrome" when on a no-media-session page) → `♪ Hum's tuned in — Chrome`.
+  - **Truly nothing** → `♪ Hum's tuned in`.
+- Applies to both the desktop overlay and the OBS browser source — same heuristic in both surfaces.
+
 ## [0.13.19] - 2026-05-22
 
 ### Added

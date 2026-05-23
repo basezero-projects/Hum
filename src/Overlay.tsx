@@ -2041,6 +2041,12 @@ function wordDurationMs(words: WordSpan[], idx: number, lineEndMs: number): numb
   return Math.max(80, nextStart - w.time_ms);
 }
 
+// Tab titles equal to one of these mean the user is on the service but
+// the media session didn't expose the actual show/video title (usually
+// DRM or service policy). Frame these as "Watching X" rather than
+// rendering "Netflix" as if it were a song name.
+const KNOWN_VIDEO_SERVICES = /^(netflix|youtube|twitch|hulu|disney\+|prime video|amazon prime|hbo|max|peacock|apple tv|paramount\+|crunchyroll)$/i;
+
 function statusLine(l: CurrentLyrics, t: CurrentTrack | null): string {
   switch (l.status) {
     case "fetching":
@@ -2049,15 +2055,35 @@ function statusLine(l: CurrentLyrics, t: CurrentTrack | null): string {
       return t?.title
         ? `♪ no lyrics for ${t.title}`
         : "♪ no lyrics on LRCLib";
-    case "unsupported":
-      // Source publishes audio but no metadata Hum can decode — Pandora
-      // web is the motivating case. Show a clear reason rather than
-      // pretending we just couldn't find lyrics for "Now Playing on
-      // Pandora" (which is the browser tab title, not a song).
-      if (l.source === "unsupported-source" && t?.title?.endsWith("Now Playing on Pandora")) {
-        return "♪ Pandora web — track info unavailable";
+    case "unsupported": {
+      // Source publishes audio but no metadata Hum can decode (Pandora web)
+      // OR exposes a page/app title that isn't a song (Netflix, YouTube,
+      // Chrome on a random site). Surface what we CAN see instead of
+      // dead-ending with "track info unavailable for this source".
+      const title = (t?.title ?? "").trim();
+      const src = sourceLabel(t?.source_app_id ?? null, null);
+      // Pandora web's tab title is the literal string "Now Playing on
+      // Pandora", not a song — show a clear source line instead.
+      if (title.endsWith("Now Playing on Pandora")) {
+        return "♪ Hum's tuned in — Pandora";
       }
-      return "♪ track info unavailable for this source";
+      // Known video services where the tab title equals the service name —
+      // Chrome's media session doesn't expose the show name (DRM/policy),
+      // so we get title = "Netflix" instead of title = "Stranger Things".
+      // Frame as "Watching X" so it doesn't read as a song.
+      if (title && KNOWN_VIDEO_SERVICES.test(title)) {
+        return `♪ Watching ${title}`;
+      }
+      // Generic case: show the title if it isn't just the source/site name,
+      // otherwise frame by source.
+      const titleIsJustSource =
+        !!src && title.toLowerCase() === src.toLowerCase();
+      if (title && !titleIsJustSource) {
+        return `♪ ${title}`;
+      }
+      if (src) return `♪ Hum's tuned in — ${src}`;
+      return "♪ Hum's tuned in";
+    }
     case "instrumental":
       return "♪ instrumental";
     case "plain":

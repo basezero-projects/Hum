@@ -1,6 +1,6 @@
 [package]
 name = "hum"
-version = "0.13.19"
+version = "0.13.20"
 description = "Real-time synced lyrics overlay for any Windows media source"
 authors = ["SYVR Studios"]
 edition = "2021"
