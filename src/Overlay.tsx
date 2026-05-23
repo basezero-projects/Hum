@@ -529,9 +529,19 @@ export default function Overlay() {
     lyrics?.track?.title?.trim()
       ? lyrics.track
       : track;
+  // Active ad break? PromoCard is the visual focus — suppress the album-art
+  // square AND the blurred-bg layer below so the overlay doesn't visually
+  // anchor to whatever song was playing before the ad started. Without this,
+  // the prior track's cover art lingers on the left and its dominant-color
+  // tint persists in the background through the entire ad break, making it
+  // look like "your song is still playing."
+  const adActive = lyrics?.status === "ad";
+
   // Album art only shows for the *currently playing* track — past art lingers
-  // in state until the next album-art-loaded event arrives.
+  // in state until the next album-art-loaded event arrives. During an ad
+  // break, hide it regardless (see `adActive` above).
   const showArt =
+    !adActive &&
     settings.show_album_art &&
     !!albumArt &&
     !!artMatchTrack &&
@@ -617,6 +627,7 @@ export default function Overlay() {
   // hasn't turned the setting off. The user's bg_color paints on top so
   // the opacity slider still works as a darkening tint.
   const showBlurBg =
+    !adActive &&
     settings.blur_album_art_background &&
     !!albumArt &&
     !!artMatchTrack &&

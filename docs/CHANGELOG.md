@@ -6,6 +6,18 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.12.3] - 2026-05-22
+
+### Fixed
+- **Overlay correctly returns to the lyric view when a Spotify ad break ends.** v0.12.2 and earlier left the overlay stuck on the SYVR promo card with the AD BREAK chip after the ad break completed — even with the real song actively playing (e.g. "One Man Band — Old Dominion" 3:06 in the Spotify player while Hum still showed "Brought to you by SYVR Studios — Trellis — Try free"). Root cause: the SMTC ad-detection in `src-tauri/src/smtc.rs::emit_blended` was set-only (`if is_spotify_ad { snap.ad_active = true; }`) and never cleared the flag. When MediaChanged fired for the new real song, the cloned snapshot inherited `ad_active = true` from the prior ad, `is_spotify_ad` returned false for the real song (~3-min duration trips the duration heuristic's exclusion), but the conditional didn't execute → the flag persisted across the transition and the shared-snapshot sync kept writing `true` to the resolver.
+
+  **Fix:** replaced the set-only conditional with explicit set/clear semantics. When `is_spotify_ad` matches → set true. When the source is Spotify AND duration ≥ 35s (i.e. a confident real song) → clear to false. Non-Spotify SMTC sources (Chrome with a Pandora tab, iTunes, etc.) leave `ad_active` alone — the bridge worker in `web_bridge.rs` owns the flag for those via its own emit-and-sync path, and an unconditional clear here would clobber legitimate Pandora-web ad detections.
+
+### Changed
+- **Album art square and blurred-background tint are now hidden during an ad break.** Before this release the prior song's album cover stayed visible on the left of the overlay and its dominant-color tint continued blurring the background through the entire ad break, making it visually look like "your song is still playing." Now when `lyrics.status === "ad"`, both `AlbumArtSide` and `BlurredAlbumBg` are skipped — the PromoCard becomes the visual focus on the left and the background reverts to whatever your `bg_color` / `bg_opacity` settings normally produce (typically transparent or a flat dark). When the ad ends and the next song loads its art, both come back.
+
+  **Implementation:** added a single `adActive = lyrics?.status === "ad"` derived flag in `src/Overlay.tsx`, gated both `showArt` and `showBlurBg` on `!adActive`.
+
 ## [0.12.2] - 2026-05-22
 
 ### Fixed

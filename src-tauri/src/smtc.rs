@@ -234,8 +234,33 @@ async fn emit_blended(
 
     // Spotify ad detection runs before the tier-1 priority check so that
     // the ad_active flag rides on the snapshot regardless of playback state.
-    if is_spotify_ad(&snap) {
+    //
+    // Set / clear semantics:
+    //   - Spotify ad detected → ad_active = true
+    //   - Spotify real song (source is Spotify, duration ≥ 35s) → ad_active
+    //     = false. This clear is critical: without it, transitioning from
+    //     a Spotify ad break to the next real song would leave the overlay
+    //     stuck on the SYVR promo card forever (emit_snap inherits the
+    //     prior ad_active = true through snapshot.clone(), is_spotify_ad
+    //     returns false for the new real song, and any conditional like
+    //     `if is_spotify_ad { = true }` would never clear it).
+    //   - Non-Spotify source (Chrome with Pandora tab, iTunes, etc.) →
+    //     LEAVE ad_active alone. The bridge worker (web_bridge.rs) owns
+    //     the flag for those sources via its own emit-and-sync path; if
+    //     we unconditionally cleared here, a Pandora-web ad detected by
+    //     the bridge would be clobbered by SMTC's parallel MediaChanged
+    //     emit for the same Chrome session.
+    let detected_ad = is_spotify_ad(&snap);
+    let is_spotify_source = snap
+        .source_app_id
+        .as_deref()
+        .unwrap_or("")
+        .to_lowercase()
+        .contains("spotify");
+    if detected_ad {
         snap.ad_active = true;
+    } else if is_spotify_source && snap.duration_ms >= 35_000 {
+        snap.ad_active = false;
     }
 
     // Sync the SMTC-derived ad_active to the shared snapshot. The lyrics
