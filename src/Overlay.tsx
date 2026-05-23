@@ -2127,26 +2127,44 @@ function UnsupportedBlock({
         flexShrink: 0,
       }}
     >
-      {lead ? (
-        <div
-          style={{
-            fontSize: captionFontSize,
-            fontWeight: 700,
-            color: leadColor ?? settings.text_color_dim,
-            textShadow: leadColor
-              ? `0 1px 2px rgba(0,0,0,0.95), 0 0 14px ${leadColor}88, 0 0 28px ${leadColor}44`
-              : textShadow,
-            letterSpacing: 2,
-            textTransform: "uppercase",
-            opacity: leadColor ? 0.95 : 0.7,
-            lineHeight: 1.2,
-            textAlign: "left",
-            transition: "color 220ms ease",
-          }}
-        >
-          {lead.replace(/[—\s]+$/, "")}
-        </div>
-      ) : null}
+      {(() => {
+        // Prefer the real service logo over brand-colored text when we
+        // have one. `bridgeServiceName` is the canonical service identity
+        // emitted by the web-bridge probes; `leadColor` and `lead` are
+        // already brand-derived in the parent. Logo height matches the
+        // headline so it reads as the visual "label" for the show below.
+        const logoSlug = serviceLogoSlug(bridgeServiceName);
+        if (logoSlug && leadColor) {
+          return (
+            <ServiceLogo
+              slug={logoSlug}
+              color={leadColor}
+              height={Math.max(headlineFontSize * 0.6, 24)}
+            />
+          );
+        }
+        if (!lead) return null;
+        return (
+          <div
+            style={{
+              fontSize: captionFontSize,
+              fontWeight: 700,
+              color: leadColor ?? settings.text_color_dim,
+              textShadow: leadColor
+                ? `0 1px 2px rgba(0,0,0,0.95), 0 0 14px ${leadColor}88, 0 0 28px ${leadColor}44`
+                : textShadow,
+              letterSpacing: 2,
+              textTransform: "uppercase",
+              opacity: leadColor ? 0.95 : 0.7,
+              lineHeight: 1.2,
+              textAlign: "left",
+              transition: "color 220ms ease",
+            }}
+          >
+            {lead.replace(/[—\s]+$/, "")}
+          </div>
+        );
+      })()}
       {highlight ? (
         <div
           style={{
@@ -2364,6 +2382,60 @@ function wordDurationMs(words: WordSpan[], idx: number, lineEndMs: number): numb
 // DRM or service policy). Frame these as "Watching X" rather than
 // rendering "Netflix" as if it were a song name.
 const KNOWN_VIDEO_SERVICES = /^(netflix|youtube|twitch|hulu|disney\+|prime video|amazon prime|hbo|max|peacock|apple tv|paramount\+|crunchyroll)$/i;
+
+// Maps a service display name to a logo slug under /logos/. Returns null
+// for services without a logo file (Hulu, Disney+, Prime Video, Peacock
+// — simple-icons doesn't ship these). Caller falls back to brand-colored
+// text in that case.
+function serviceLogoSlug(name: string | null | undefined): string | null {
+  if (!name) return null;
+  const k = name.toLowerCase();
+  if (k === "netflix") return "netflix";
+  if (k === "twitch") return "twitch";
+  if (k === "youtube" || k === "youtube music") return "youtube";
+  if (k === "pandora") return "pandora";
+  if (k === "spotify") return "spotify";
+  if (k === "crunchyroll") return "crunchyroll";
+  if (k === "paramount+") return "paramountplus";
+  if (k === "max") return "max";
+  if (k === "apple tv" || k === "apple music") return "appletv";
+  if (k === "hbo") return "hbomax";
+  return null;
+}
+
+// Renders a brand SVG via CSS masking so the monochrome simple-icons
+// silhouette picks up the service brand color from a colored background.
+// Falls back to nothing when there's no logo (caller renders text).
+function ServiceLogo({
+  slug,
+  color,
+  height,
+}: {
+  slug: string;
+  color: string;
+  height: number;
+}) {
+  return (
+    <div
+      aria-hidden
+      style={{
+        height,
+        width: height,
+        backgroundColor: color,
+        WebkitMaskImage: `url(/logos/${slug}.svg)`,
+        maskImage: `url(/logos/${slug}.svg)`,
+        WebkitMaskRepeat: "no-repeat",
+        maskRepeat: "no-repeat",
+        WebkitMaskPosition: "center",
+        maskPosition: "center",
+        WebkitMaskSize: "contain",
+        maskSize: "contain",
+        filter: `drop-shadow(0 0 14px ${color}88) drop-shadow(0 0 28px ${color}44)`,
+        transition: "background-color 220ms ease",
+      }}
+    />
+  );
+}
 
 // Brand colors for the unsupported-state "Watching X" / "Hum's tuned in
 // — X" lines. Keyed by lowercase service name. Returns null for unknown

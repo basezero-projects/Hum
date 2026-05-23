@@ -6,6 +6,17 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.30] - 2026-05-23
+
+### Added
+- **Real platform logos in the unsupported-source view** instead of brand-colored "WATCHING NETFLIX" text. When the web-bridge probe identified the service AND there's a logo file for it, the supertitle slot now renders the actual brand mark (Netflix N, Twitch glyph, YouTube play button, etc.) painted in the service's brand color via CSS mask. Logos sourced from the `simple-icons` package (MIT-licensed catalog of monochrome brand SVGs; nominative use for "now watching X" identification is standard practice). Services with bundled logos: **Netflix, Twitch, YouTube, Pandora, Spotify, Crunchyroll, Paramount+, Max, Apple TV, HBO**. Services without one (Hulu, Disney+, Prime Video, Peacock — not in the simple-icons catalog) fall back to the previous brand-colored uppercase text supertitle.
+
+### Internal
+- New `public/logos/<slug>.svg` directory holding the 10 brand SVGs.
+- New `/logos/{slug}` route on the streamer endpoint that serves the embedded SVGs via `include_bytes!` — same self-contained model as `/hum-logo.png`. Wildcard slug param so adding a new logo only requires dropping the SVG into `public/logos/` and appending one entry to `SERVICE_LOGOS` in `streamer.rs`.
+- React side: new `<ServiceLogo>` component that uses `mask-image` to colorize the monochrome SVG. Streamer side mirrors with a `.unsupported-logo` CSS class + CSS-custom-property-driven mask URL + background color.
+- `serviceLogoSlug()` helper in both surfaces maps a display name to the SVG slug.
+
 ## [0.13.29] - 2026-05-23
 
 ### Added

@@ -362,6 +362,18 @@
     line-height: 1.2;
     margin-bottom: 6px;
   }
+  /* Real service logo (Netflix / Twitch / etc.) — masks the brand-color
+     background through the monochrome simple-icons SVG silhouette so
+     the logo paints in the brand color regardless of the SVG's default
+     fill. `--logo-svg` and `--logo-color` are set inline by the JS. */
+  .unsupported-logo {
+    display: block;
+    margin-bottom: 8px;
+    background-color: var(--logo-color, #ffffff);
+    -webkit-mask: var(--logo-svg) center / contain no-repeat;
+    mask: var(--logo-svg) center / contain no-repeat;
+    transition: background-color 220ms ease;
+  }
   .unsupported-headline {
     display: block;
     font-size: 48px;
@@ -527,6 +539,26 @@
     }
   }
 
+  // Maps a service display name to a logo slug under /logos/. Mirror of
+  // src/Overlay.tsx::serviceLogoSlug. Returns null for services without
+  // a logo file (Hulu / Disney+ / Prime Video / Peacock — simple-icons
+  // doesn't ship these); the caller falls back to brand-colored text.
+  function serviceLogoSlug(name) {
+    if (!name) return null;
+    const k = name.toLowerCase();
+    if (k === "netflix") return "netflix";
+    if (k === "twitch") return "twitch";
+    if (k === "youtube" || k === "youtube music") return "youtube";
+    if (k === "pandora") return "pandora";
+    if (k === "spotify") return "spotify";
+    if (k === "crunchyroll") return "crunchyroll";
+    if (k === "paramount+") return "paramountplus";
+    if (k === "max") return "max";
+    if (k === "apple tv" || k === "apple music") return "appletv";
+    if (k === "hbo") return "hbomax";
+    return null;
+  }
+
   // Brand color map for the unsupported-state highlight. Mirror of
   // src/Overlay.tsx::serviceBrandColor.
   function serviceBrandColor(name) {
@@ -564,10 +596,26 @@
     const headlineColor = leadColor ? null : serviceBrandColor(highlight);
     const cleanLead = (lead || "").replace(/[—\s]+$/, "").trim();
     const parts = [];
-    if (cleanLead) {
-      // When the bridge identified the service, paint the supertitle
-      // in the service brand color with a soft matching halo. Else use
-      // the default dim text-color (no halo).
+    // Prefer the real service logo over brand-colored text when one
+    // exists. Logo size scales off the headline so it reads as the
+    // visual "label" for the show name below.
+    const logoSlug = leadServiceName ? serviceLogoSlug(leadServiceName) : null;
+    if (logoSlug && leadColor) {
+      const logoHeight = 30;
+      const logoStyle = [
+        "width:" + logoHeight + "px",
+        "height:" + logoHeight + "px",
+        "--logo-color:" + leadColor,
+        "--logo-svg:url(/logos/" + logoSlug + ".svg)",
+        "filter:drop-shadow(0 0 14px " + leadColor + "88) drop-shadow(0 0 28px " + leadColor + "44)",
+      ].join(";");
+      parts.push(
+        "<div class=\"unsupported-logo\" style=\"" + logoStyle + "\"></div>"
+      );
+    } else if (cleanLead) {
+      // No logo for this service (Hulu / Disney+ / Peacock / Prime
+      // Video — simple-icons doesn't ship these). Fall back to brand-
+      // colored uppercase text.
       const styleParts = [];
       if (leadColor) {
         styleParts.push("color:" + leadColor);

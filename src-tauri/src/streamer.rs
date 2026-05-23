@@ -326,6 +326,53 @@ async fn get_logo() -> Response {
     resp
 }
 
+// Service brand logos (Netflix / Twitch / YouTube / etc.). Embedded as
+// bytes so the streamer endpoint stays self-contained; the desktop
+// overlay loads the same files via Vite's `public/` static-serve.
+// Each entry is a `(slug, svg-bytes)` pair — adding a new logo means
+// dropping the SVG into `public/logos/` and adding an entry below.
+const SERVICE_LOGOS: &[(&str, &[u8])] = &[
+    ("netflix", include_bytes!("../../public/logos/netflix.svg")),
+    ("twitch", include_bytes!("../../public/logos/twitch.svg")),
+    ("youtube", include_bytes!("../../public/logos/youtube.svg")),
+    ("pandora", include_bytes!("../../public/logos/pandora.svg")),
+    ("spotify", include_bytes!("../../public/logos/spotify.svg")),
+    ("crunchyroll", include_bytes!("../../public/logos/crunchyroll.svg")),
+    ("paramountplus", include_bytes!("../../public/logos/paramountplus.svg")),
+    ("max", include_bytes!("../../public/logos/max.svg")),
+    ("appletv", include_bytes!("../../public/logos/appletv.svg")),
+    ("hbomax", include_bytes!("../../public/logos/hbomax.svg")),
+];
+
+async fn get_service_logo(axum::extract::Path(slug): axum::extract::Path<String>) -> Response {
+    // Strip the .svg extension if present so /logos/netflix.svg and
+    // /logos/netflix both work.
+    let needle = slug.strip_suffix(".svg").unwrap_or(&slug);
+    // Defensive: reject path traversal attempts (`..`, `/`, `\`). The
+    // axum path matcher already restricts to a single segment, but a
+    // belt-and-suspenders check doesn't cost anything.
+    if needle.contains('/') || needle.contains('\\') || needle.contains("..") {
+        return (StatusCode::BAD_REQUEST, "bad slug").into_response();
+    }
+    let Some((_, bytes)) = SERVICE_LOGOS.iter().find(|(n, _)| *n == needle) else {
+        return (StatusCode::NOT_FOUND, "no such logo").into_response();
+    };
+    let mut resp = (StatusCode::OK, bytes.to_vec()).into_response();
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("image/svg+xml"),
+    );
+    resp.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=31536000, immutable"),
+    );
+    resp.headers_mut().insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("*"),
+    );
+    resp
+}
+
 fn unix_ms_now() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -387,6 +434,7 @@ pub fn start(app: AppHandle, port: u16) -> Result<ServerHandle> {
         .route("/overlay", get(get_overlay))
         .route("/", get(get_overlay))
         .route("/hum-logo.png", get(get_logo))
+        .route("/logos/{slug}", get(get_service_logo))
         .route("/healthz", get(get_healthz))
         .with_state(state);
 

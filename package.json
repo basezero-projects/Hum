@@ -1,6 +1,6 @@
 {
   "name": "hum",
-  "version": "0.13.29",
+  "version": "0.13.30",
   "private": true,
   "type": "module",
   "scripts": {
@@ -21,6 +21,7 @@
     "lucide-react": "^0.469.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "simple-icons": "^16.20.0",
     "tailwind-merge": "^2.6.0"
   },
   "devDependencies": {
