@@ -21,7 +21,11 @@
    *   ?accent=ff00aa                       — overrides --gold (hex, no #)
    *   ?only=spotify|pandora|youtube|...    — render only this source
    *   ?nochrome=1                          — minimalist 3-line mode (no art, no meta column)
-   *   ?credit=1                            — show "hum.syvr.dev" watermark in bottom-right
+   *
+   * The "hum.syvr.dev" watermark in the bottom-right corner is on by
+   * default — same brand mark that appears on the desktop overlay. The
+   * eventual Pro tier will toggle it from Settings (free keeps it, Pro
+   * can hide it). No URL param for it.
    */
   :root {
     --text: #ffffff;
@@ -331,9 +335,7 @@
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 2px 6px rgba(0, 0, 0, 0.55);
     opacity: 0.7;
     pointer-events: none;
-    display: none;
   }
-  body.credit-on #credit { display: block; }
 </style>
 </head>
 <body>
@@ -384,9 +386,6 @@
   }
   if (params.get("nochrome") === "1") {
     document.body.classList.add("no-chrome");
-  }
-  if (params.get("credit") === "1") {
-    document.body.classList.add("credit-on");
   }
   const onlySource = (params.get("only") || "").toLowerCase().trim();
 

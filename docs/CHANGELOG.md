@@ -6,6 +6,12 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.7] - 2026-05-22
+
+### Changed
+- **`hum.syvr.dev` watermark now lives on the overlay itself, not just the OBS browser source.** Previously v0.13.6 added the watermark only to the streamer endpoint (`http://127.0.0.1:38247/overlay`) and gated it behind `?credit=1`. That model assumed every streamer would set up the OBS browser source — but many capture Hum via window capture or display capture of the desktop overlay window itself, which never touched the browser-source URL and so never saw the credit. New model: the watermark is drawn directly on the desktop overlay container in the bottom-right corner (small gold text, 9.5px, letter-spacing 0.4px, opacity 0.7, twin text-shadows for legibility — same visual as the streamer version). Appears in all three overlay layout modes (single-line, full-page, default 3-line), sits above the lyric content via `z-index: 5`, doesn't intercept pointer events, doesn't compete with the lyric column. Same mark also still paints on the OBS browser source — now default-on instead of `?credit=1`-gated, so a streamer who uses the browser source URL gets the credit without configuration. Net effect: however a streamer captures Hum, viewers see "hum.syvr.dev" in the bottom-right corner.
+- **`?credit=1` URL param is no longer honored** — the watermark is unconditional on the streamer endpoint now. Param is quietly ignored if present (no error, no breakage for anyone who already pasted that URL).
+
 ## [0.13.6] - 2026-05-22
 
 ### Added

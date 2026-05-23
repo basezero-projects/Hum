@@ -680,6 +680,32 @@ export default function Overlay() {
   // Outer frame for all layouts: full window, visual chrome, vertical centering
   // of the inner content. The inner row (3-line / single-line) OR the inner
   // scrolling column (full-page) controls horizontal layout.
+  // SYVR brand credit. Sits in the bottom-right corner of the overlay
+  // container so it gets captured no matter how the streamer pulls Hum
+  // onto stream — OBS browser source, window capture, display capture.
+  // Always visible for now; the eventual Pro tier will toggle this from
+  // Settings (free tier keeps the credit, Pro hides it).
+  const watermark = (
+    <div
+      style={{
+        position: "absolute",
+        bottom: 4,
+        right: 8,
+        zIndex: 5,
+        fontSize: 9.5,
+        letterSpacing: "0.4px",
+        color: "#d4af37",
+        textShadow: "0 1px 2px rgba(0,0,0,0.9), 0 2px 6px rgba(0,0,0,0.55)",
+        opacity: 0.7,
+        pointerEvents: "none",
+        userSelect: "none",
+        fontFamily: `"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`,
+      }}
+    >
+      hum.syvr.dev
+    </div>
+  );
+
   const containerStyle: React.CSSProperties = {
     position: "relative",
     height: "100vh",
@@ -816,6 +842,7 @@ export default function Overlay() {
             />
           ) : null}
         </div>
+        {watermark}
       </div>
     );
   }
@@ -872,6 +899,7 @@ export default function Overlay() {
             textShadow={effectiveTextShadow}
           />
         )}
+        {watermark}
       </div>
     );
   }
@@ -945,6 +973,7 @@ export default function Overlay() {
           ) : null}
         </div>
       </div>
+      {watermark}
     </div>
   );
 }
