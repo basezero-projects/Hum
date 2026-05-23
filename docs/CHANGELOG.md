@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.6] - 2026-05-22
+
+### Added
+- **Optional `hum.syvr.dev` watermark on the OBS browser source** — opt-in via the new **`?credit=1`** URL param. When enabled, the text `hum.syvr.dev` appears in the bottom-right corner of the OBS browser source in small letterspaced gold (9.5px, letter-spacing 0.4px, opacity 0.7, subtle dark text-shadow for legibility over bright captures). Default is OFF — streamers who want to credit Hum on stream add `?credit=1` to the browser source URL; streamers who want a clean overlay leave it off. The watermark color uses `--gold`, so a `?accent=hex` override re-tints it (e.g. `?credit=1&accent=ff00aa` paints the credit magenta). Sits inside the `#wrap` container so the `?only=` source filter blanks it along with the rest of the layout when the active source doesn't match, and stays put under both the lyric/metadata row and the ad-break PromoCard branch. Orthogonal to `?nochrome=1` — streamers can run minimalist mode and still keep the credit. Eventually a Pro tier will toggle this from the Settings panel; until then it's URL-param only.
+
 ## [0.13.5] - 2026-05-22
 
 ### Added

@@ -21,6 +21,7 @@
    *   ?accent=ff00aa                       — overrides --gold (hex, no #)
    *   ?only=spotify|pandora|youtube|...    — render only this source
    *   ?nochrome=1                          — minimalist 3-line mode (no art, no meta column)
+   *   ?credit=1                            — show "hum.syvr.dev" watermark in bottom-right
    */
   :root {
     --text: #ffffff;
@@ -314,6 +315,25 @@
      browser sources (one per service) and have them all pointing at
      the same Hum, each filtering its own source. */
   body.hidden #wrap { visibility: hidden; }
+  /* Watermark — opt-in via ?credit=1. Sits in the bottom-right corner
+     so it doesn't compete with the lyric stack. Uses --gold so the
+     ?accent= override re-tints it. Lives inside #wrap so the source
+     filter (body.hidden) blanks it along with the rest of the layout,
+     and so it stays put under both #row and #promo branches. */
+  #credit {
+    position: absolute;
+    bottom: 4px;
+    right: 8px;
+    z-index: 3;
+    font-size: 9.5px;
+    letter-spacing: 0.4px;
+    color: var(--gold);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 2px 6px rgba(0, 0, 0, 0.55);
+    opacity: 0.7;
+    pointer-events: none;
+    display: none;
+  }
+  body.credit-on #credit { display: block; }
 </style>
 </head>
 <body>
@@ -346,6 +366,7 @@
       <div id="promo-cta"></div>
     </div>
   </div>
+  <div id="credit">hum.syvr.dev</div>
 </div>
 <script>
 (() => {
@@ -363,6 +384,9 @@
   }
   if (params.get("nochrome") === "1") {
     document.body.classList.add("no-chrome");
+  }
+  if (params.get("credit") === "1") {
+    document.body.classList.add("credit-on");
   }
   const onlySource = (params.get("only") || "").toLowerCase().trim();
 
