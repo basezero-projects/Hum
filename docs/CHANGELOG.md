@@ -6,6 +6,18 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.23] - 2026-05-22
+
+### Changed
+- **Unsupported-source view now centers properly and uses a layered typography.** v0.13.22 introduced the brand-colored "Watching Netflix" line but left it stuck to the left edge (the block's internal centering didn't fill the lyric column width). New layout:
+  - **`alignSelf: stretch` + `width: 100%`** so the block fills the lyric column horizontally and the centered content actually sits in the middle.
+  - **Supertitle / headline / subline stack** — small uppercase letterspaced `WATCHING` (10-13px, dim) on top, big bold brand-colored service name (~28px+, scales with font_size_px) in the middle, optional small dim `X min remaining` (~12px) below. Reads as an intentional "now showing" card rather than three left-aligned text lines.
+  - **Em-dash trailing characters trimmed** from the supertitle ("Hum's tuned in —" → "HUM'S TUNED IN") so the uppercase styling doesn't end on punctuation.
+- **Watermark hidden in unsupported state.** The HUM brand-mark was sitting directly behind the centered headline. In every other state (synced, fetching, ad, idle) it's still there.
+
+### Internal
+- Streamer side uses a new `body.unsupported` class toggled at the top of `render()` so the CSS (`#cur` centered, `#credit` hidden, `.unsupported-supertitle/-headline/-subline` typography) can target the state. Toggle runs unconditionally on every render so both into-unsupported AND out-of-unsupported transitions update correctly.
+
 ## [0.13.22] - 2026-05-22
 
 ### Changed

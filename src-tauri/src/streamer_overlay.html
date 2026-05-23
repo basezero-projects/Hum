@@ -325,20 +325,42 @@
      browser sources (one per service) and have them all pointing at
      the same Hum, each filtering its own source. */
   body.hidden #wrap { visibility: hidden; }
-  /* Unsupported-source state — "Watching Netflix" / "Hum's tuned in — X".
-     The subline ("X min remaining") sits under the cur headline at a
-     smaller dimmer size. .cur already controls the headline. */
-  .unsupported-subline {
+  /* Unsupported-source state — "WATCHING" supertitle + brand-colored
+     service headline + "X min remaining" subline. Hide the watermark
+     in this state so it doesn't compete with the centered headline. */
+  body.unsupported #cur { text-align: center; }
+  body.unsupported #credit { display: none; }
+  .unsupported-supertitle {
     display: block;
-    margin-top: 4px;
-    font-size: 13px;
-    font-weight: 400;
+    font-size: 10px;
+    font-weight: 600;
     color: var(--text-dim);
-    letter-spacing: 0.3px;
-    opacity: 0.95;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    opacity: 0.85;
+    line-height: 1.2;
+    margin-bottom: 4px;
+  }
+  .unsupported-headline {
+    display: block;
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    line-height: 1.15;
+    transition: color 220ms ease;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    max-width: 100%;
+  }
+  .unsupported-subline {
+    display: block;
+    margin-top: 4px;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text-dim);
+    letter-spacing: 0.3px;
+    opacity: 0.9;
   }
   /* Watermark — opt-in via ?credit=1. Sits in the bottom-right corner
      so it doesn't compete with the lyric stack. Uses --gold so the
@@ -491,30 +513,33 @@
   }
 
   // Renders the cur line for the unsupported state. Bypasses setLine so
-  // we can inject a brand-colored <span> around the highlight token
-  // (e.g. "Watching <span style='color:#e50914'>Netflix</span>"). Also
-  // appends a "X min remaining" subline when duration is known.
+  // we can layer a small uppercase supertitle ("WATCHING") above the
+  // brand-colored headline ("Netflix") plus a "X min remaining" subline.
   function renderUnsupportedCur(lead, highlight, subline, animate) {
     const escape = (s) => String(s).replace(/[&<>"']/g, (c) =>
       ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[c]
     );
     const color = serviceBrandColor(highlight);
-    const headlineParts = [];
-    if (lead) headlineParts.push(escape(lead) + " ");
-    if (highlight) {
-      if (color) {
-        headlineParts.push(
-          "<span style=\"color:" + color + ";transition:color 220ms ease\">"
-          + escape(highlight) + "</span>"
-        );
-      } else {
-        headlineParts.push(escape(highlight));
-      }
+    const cleanLead = (lead || "").replace(/[—\s]+$/, "").trim();
+    const parts = [];
+    if (cleanLead) {
+      parts.push(
+        "<div class=\"unsupported-supertitle\">" + escape(cleanLead) + "</div>"
+      );
     }
-    const subHtml = subline
-      ? "<div class=\"unsupported-subline\">" + escape(subline) + "</div>"
-      : "";
-    $cur.innerHTML = headlineParts.join("") + subHtml;
+    if (highlight) {
+      const colorAttr = color ? ' style="color:' + color + '"' : "";
+      parts.push(
+        "<div class=\"unsupported-headline\"" + colorAttr + ">"
+        + escape(highlight) + "</div>"
+      );
+    }
+    if (subline) {
+      parts.push(
+        "<div class=\"unsupported-subline\">" + escape(subline) + "</div>"
+      );
+    }
+    $cur.innerHTML = parts.join("");
     $cur.classList.remove("empty");
     if (animate) {
       $cur.classList.remove("anim-in");
@@ -697,6 +722,11 @@
     const lines = Array.isArray(lyr.lines) ? lyr.lines : [];
     const isSynced = lyr.status === "synced" && lines.length > 0 && cursor >= 0;
     const cursorChanged = cursor !== lastCursor;
+    // Body class so the unsupported-state CSS (centered cur, hidden
+    // watermark, supertitle/headline/subline typography) can target
+    // selectively. Updated on every render so transitions both into
+    // and out of the unsupported branch flip the class correctly.
+    document.body.classList.toggle("unsupported", lyr.status === "unsupported");
     lastCursor = cursor;
     if (isSynced) {
       const prev = cursor > 0 ? lines[cursor - 1] : null;

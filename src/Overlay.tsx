@@ -855,7 +855,7 @@ export default function Overlay() {
             />
           ) : null}
         </div>
-        {watermark}
+        {lyrics?.status === "unsupported" ? null : watermark}
       </div>
     );
   }
@@ -920,7 +920,7 @@ export default function Overlay() {
             textShadow={effectiveTextShadow}
           />
         )}
-        {watermark}
+        {lyrics?.status === "unsupported" ? null : watermark}
       </div>
     );
   }
@@ -1002,7 +1002,7 @@ export default function Overlay() {
           ) : null}
         </div>
       </div>
-      {watermark}
+      {lyrics?.status === "unsupported" ? null : watermark}
     </div>
   );
 }
@@ -2011,50 +2011,79 @@ function UnsupportedBlock({
 
   const drag = dragRegion ? { "data-tauri-drag-region": true } : {};
 
+  // Hierarchy: small dim uppercase "WATCHING" supertitle + big bold
+  // brand-colored service name + smaller dim subline. When there's no
+  // lead (e.g. title alone, no service framing), the headline carries
+  // both the framing and the brand mark.
+  const headlineFontSize = Math.max(settings.font_size_px * 1.1, 22);
+  const supertitleFontSize = Math.max(headlineFontSize * 0.32, 10);
+  const sublineFontSize = Math.max(headlineFontSize * 0.42, 12);
+
   return (
     <div
       {...drag}
       style={{
+        // Full width within the lyrics column so the centered block
+        // doesn't collapse to its content width and stick to the left.
+        alignSelf: "stretch",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
         gap: 6,
         position: "relative",
-        maxWidth: "92vw",
+        width: "100%",
+        maxWidth: "100%",
       }}
     >
-      <div
-        style={{
-          fontSize: settings.font_size_px,
-          fontWeight: settings.font_weight,
-          color: settings.text_color,
-          textShadow,
-          letterSpacing: 0.2,
-          lineHeight: 1.2,
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          maxWidth: "100%",
-          textAlign: "center",
-        }}
-      >
-        {lead ? <span>{lead}{" "}</span> : null}
-        {highlight ? (
-          <span style={{ color, transition: "color 220ms ease" }}>
-            {highlight}
-          </span>
-        ) : null}
-      </div>
+      {lead ? (
+        <div
+          style={{
+            fontSize: supertitleFontSize,
+            fontWeight: 600,
+            color: settings.text_color_dim,
+            textShadow,
+            letterSpacing: 1.5,
+            textTransform: "uppercase",
+            opacity: 0.85,
+            lineHeight: 1.2,
+            textAlign: "center",
+          }}
+        >
+          {lead.replace(/[—\s]+$/, "")}
+        </div>
+      ) : null}
+      {highlight ? (
+        <div
+          style={{
+            fontSize: headlineFontSize,
+            fontWeight: 700,
+            color,
+            textShadow,
+            letterSpacing: 0.5,
+            lineHeight: 1.15,
+            transition: "color 220ms ease",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            maxWidth: "100%",
+            textAlign: "center",
+          }}
+        >
+          {highlight}
+        </div>
+      ) : null}
       {remaining ? (
         <div
           style={{
-            fontSize: Math.max(11, settings.font_size_px * 0.5),
+            fontSize: sublineFontSize,
             fontWeight: 400,
             color: settings.text_color_dim,
             textShadow,
             letterSpacing: 0.3,
-            opacity: 0.95,
+            opacity: 0.9,
+            marginTop: 2,
+            textAlign: "center",
           }}
         >
           {remaining}
