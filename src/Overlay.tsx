@@ -1022,7 +1022,7 @@ export default function Overlay() {
           ) : null}
         </div>
       </div>
-      {lyrics?.status === "unsupported" ? null : watermark}
+      {watermark}
     </div>
   );
 }

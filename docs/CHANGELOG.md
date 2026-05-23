@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.27] - 2026-05-22
+
+### Fixed
+- **Watermark now actually shows in the default 3-line layout's unsupported state.** v0.13.26's `replace_all` swap of `{lyrics?.status === "unsupported" ? null : watermark}` → `{watermark}` only matched two of the three insertion sites because the third (the default 3-line layout return) had different indentation. The two layouts that did pick up the swap were single_line and full_page — both rarely used. The default layout (the one most users see) silently kept hiding the watermark in unsupported state. Resolved by editing the remaining site directly.
+
 ## [0.13.26] - 2026-05-22
 
 ### Changed
