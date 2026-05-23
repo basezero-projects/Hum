@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.8] - 2026-05-22
+
+### Changed
+- **Watermark text is now "Hum by SYVR" instead of "hum.syvr.dev"**, and grew from 9.5px to 13px. v0.13.7 inherited the `hum.syvr.dev` string from the runway plan in the prior session — but that domain isn't owned/planned, and a URL no one can actually visit is a worse search target than the product name itself. New text is brand-forward and gives viewers something recognizable to look up. Bottom-right corner across all three desktop overlay layout modes and on the OBS browser source. Same gold color (`#d4af37`), same opacity (0.7), same letter-spacing (0.4px), same dual text-shadow for legibility, same `z-index: 5` (desktop) / `z-index: 3` (streamer).
+
 ## [0.13.7] - 2026-05-22
 
 ### Changed

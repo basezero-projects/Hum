@@ -692,7 +692,7 @@ export default function Overlay() {
         bottom: 4,
         right: 8,
         zIndex: 5,
-        fontSize: 9.5,
+        fontSize: 13,
         letterSpacing: "0.4px",
         color: "#d4af37",
         textShadow: "0 1px 2px rgba(0,0,0,0.9), 0 2px 6px rgba(0,0,0,0.55)",
@@ -702,7 +702,7 @@ export default function Overlay() {
         fontFamily: `"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`,
       }}
     >
-      hum.syvr.dev
+      Hum by SYVR
     </div>
   );
 
