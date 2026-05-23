@@ -1958,43 +1958,6 @@ function TranslationRow({
   );
 }
 
-// Fills the album-art slot with the Hum brand mark when the current
-// source can't expose lyric-able audio AND no album art is available.
-// Gives the unsupported-state row a visual anchor on the left so the
-// centered headline doesn't sit alone on a bland plate, AND keeps the
-// Hum brand mark visible (the centered watermark is hidden in this
-// state because the headline now occupies the middle).
-function HumLogoArt({ size, dragRegion }: { size: number; dragRegion: boolean }) {
-  const drag = dragRegion ? { "data-tauri-drag-region": true } : {};
-  return (
-    <div
-      {...drag}
-      style={{
-        width: size,
-        height: size,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        flexShrink: 0,
-      }}
-    >
-      <img
-        src="/hum-logo.png"
-        alt=""
-        draggable={false}
-        style={{
-          width: "100%",
-          height: "100%",
-          objectFit: "contain",
-          opacity: 0.85,
-          userSelect: "none",
-          pointerEvents: "none",
-        }}
-      />
-    </div>
-  );
-}
-
 // Replaces the prev/cur/next lyric stack when status === "unsupported".
 // The user is doing something we can't lyric (watching Netflix, on
 // Pandora-web, browsing). Instead of three empty ♪ placeholders we show:
@@ -2019,6 +1982,11 @@ function UnsupportedBlock({
   textShadow: string;
   dragRegion: boolean;
 }) {
+  // Surface track.artist as a secondary subtitle when present AND not a
+  // duplicate of the headline (YouTube exposes the channel name here,
+  // some music sources expose the artist; Netflix always leaves it
+  // empty, so this paints only when there's real metadata to show).
+  const artistText = (track?.artist ?? "").trim();
   const title = (track?.title ?? "").trim();
   const isPandoraTab = title.endsWith("Now Playing on Pandora");
   const isVideoService = !!title && KNOWN_VIDEO_SERVICES.test(title);
@@ -2136,6 +2104,26 @@ function UnsupportedBlock({
           }}
         >
           {highlight}
+        </div>
+      ) : null}
+      {artistText && artistText.toLowerCase() !== highlight.toLowerCase() ? (
+        <div
+          style={{
+            fontSize: sublineFontSize,
+            fontWeight: 500,
+            color: settings.text_color,
+            textShadow,
+            letterSpacing: 0.2,
+            opacity: 0.9,
+            marginTop: 2,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            maxWidth: "100%",
+            textAlign: "left",
+          }}
+        >
+          {artistText}
         </div>
       ) : null}
       {remaining ? (

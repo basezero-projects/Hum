@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.28] - 2026-05-23
+
+### Added
+- **Artist subtitle in the unsupported state.** When the source exposes an artist field (YouTube channel name, music apps streaming through a browser, Twitch streamer-bio strings, etc.) AND it isn't a duplicate of the headline, the unsupported view now paints a small bright subtitle under the headline before the "X min remaining" line — same visual weight as the remaining-time line but distinct vertical position so the two don't fight. Falls back to the previous layout when there's no artist data (Netflix's case, where the field is always empty). Applies to both the desktop overlay and the OBS browser source.
+
 ## [0.13.27] - 2026-05-22
 
 ### Fixed
