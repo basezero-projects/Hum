@@ -696,7 +696,7 @@ export default function Overlay() {
         zIndex: 5,
         fontSize: 28,
         letterSpacing: "0.5px",
-        color: "#d4af37",
+        color: "#ffffff",
         textShadow: "0 1px 2px rgba(0,0,0,0.9), 0 2px 6px rgba(0,0,0,0.55)",
         opacity: 0.55,
         pointerEvents: "none",

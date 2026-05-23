@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.10] - 2026-05-22
+
+### Changed
+- **Watermark is white now instead of gold.** Matches the lyric text color (`--text` on the streamer side, `#ffffff` on the desktop overlay). Over arbitrary blurred album-art backgrounds, gold ended up clashing with whatever color was bleeding through — white reads as a subtle behind-the-content mark without fighting the background. Streamer-side: switched from `var(--gold)` to `var(--text)`, which means `?accent=<hex>` no longer re-tints the watermark (accent now stays focused on actual brand accents, not the credit).
+
 ## [0.13.9] - 2026-05-22
 
 ### Changed
