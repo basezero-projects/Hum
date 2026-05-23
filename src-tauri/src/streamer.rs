@@ -305,6 +305,27 @@ async fn get_overlay() -> Response {
     resp
 }
 
+// Hum brand mark for the centered ghost watermark. Embedded so the streamer
+// endpoint stays self-contained — Vite serves the same file from `public/`
+// for the desktop overlay.
+async fn get_logo() -> Response {
+    let bytes: &[u8] = include_bytes!("../../public/hum-logo.png");
+    let mut resp = (StatusCode::OK, bytes.to_vec()).into_response();
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("image/png"),
+    );
+    resp.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=31536000, immutable"),
+    );
+    resp.headers_mut().insert(
+        header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        HeaderValue::from_static("*"),
+    );
+    resp
+}
+
 fn unix_ms_now() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -365,6 +386,7 @@ pub fn start(app: AppHandle, port: u16) -> Result<ServerHandle> {
         .route("/art", get(get_art))
         .route("/overlay", get(get_overlay))
         .route("/", get(get_overlay))
+        .route("/hum-logo.png", get(get_logo))
         .route("/healthz", get(get_healthz))
         .with_state(state);
 

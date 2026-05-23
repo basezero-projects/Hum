@@ -333,18 +333,14 @@
   #credit {
     position: absolute;
     top: 50%;
-    left: 0;
-    right: 0;
-    transform: translateY(-50%);
-    text-align: center;
+    left: 50%;
+    transform: translate(-50%, -50%);
     z-index: 1;
-    font-family: "Cascadia Code", "Cascadia Mono", Consolas, "Courier New", monospace;
-    font-size: 64px;
-    font-weight: 700;
-    letter-spacing: 1px;
-    color: var(--text);
+    height: 85%;
+    width: auto;
     opacity: 0.18;
     pointer-events: none;
+    user-select: none;
   }
 </style>
 </head>
@@ -378,7 +374,7 @@
       <div id="promo-cta"></div>
     </div>
   </div>
-  <div id="credit">Hum by SYVR</div>
+  <img id="credit" src="/hum-logo.png" alt="" draggable="false">
 </div>
 <script>
 (() => {

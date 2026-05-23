@@ -6,6 +6,14 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.15] - 2026-05-22
+
+### Changed
+- **Watermark is the actual Hum brand logo (HUM glyph in an ellipse) instead of text.** Replaces the "Hum by SYVR" text watermark with the real circle-letter logo — a white HUM glyph inside a vertical ellipse on a transparent background. Centered, sized to 85% of the overlay container height with auto width preserving aspect ratio (the ellipse is taller than wide so on a thin-and-wide overlay window the watermark reads as a centered vertical mark between the album art and the metadata column). Same opacity 0.18 (kept as a soft ghost mark). Asset lives at `public/hum-logo.png` (5.8 KB; original was a 6159×6159 JPG, downsized to 512×512 PNG with luminance-as-alpha so anti-aliased edges stay clean against any background).
+
+### Added
+- **`GET /hum-logo.png` route on the streamer endpoint** serves the logo as an embedded byte slice (`include_bytes!`) so the OBS browser source stays self-contained — no network calls, no separate file to deploy. Cache-Control: `public, max-age=31536000, immutable`.
+
 ## [0.13.14] - 2026-05-22
 
 ### Changed

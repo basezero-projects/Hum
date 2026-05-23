@@ -684,33 +684,30 @@ export default function Overlay() {
   // Outer frame for all layouts: full window, visual chrome, vertical centering
   // of the inner content. The inner row (3-line / single-line) OR the inner
   // scrolling column (full-page) controls horizontal layout.
-  // SYVR brand credit. Sits in the bottom-right corner of the overlay
-  // container so it gets captured no matter how the streamer pulls Hum
-  // onto stream — OBS browser source, window capture, display capture.
-  // Always visible for now; the eventual Pro tier will toggle this from
-  // Settings (free tier keeps the credit, Pro hides it).
+  // Hum brand mark. Centered ghost watermark — gets captured no matter how
+  // the streamer pulls Hum onto stream (OBS browser source, window capture,
+  // display capture). Always visible for now; the eventual Pro tier will
+  // toggle this from Settings (free tier keeps the mark, Pro hides it).
+  // PNG with luminance-as-alpha so the white logo paints cleanly over any
+  // background without a hard-edged box.
   const watermark = (
-    <div
+    <img
+      src="/hum-logo.png"
+      alt=""
+      draggable={false}
       style={{
         position: "absolute",
         top: "50%",
-        left: 0,
-        right: 0,
-        transform: "translateY(-50%)",
-        textAlign: "center",
+        left: "50%",
+        transform: "translate(-50%, -50%)",
+        height: "85%",
+        width: "auto",
         zIndex: 1,
-        fontSize: 64,
-        fontWeight: 700,
-        letterSpacing: "1px",
-        color: "#ffffff",
         opacity: 0.18,
         pointerEvents: "none",
         userSelect: "none",
-        fontFamily: `"Cascadia Code", "Cascadia Mono", Consolas, "Courier New", monospace`,
       }}
-    >
-      Hum by SYVR
-    </div>
+    />
   );
 
   const containerStyle: React.CSSProperties = {
