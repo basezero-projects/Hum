@@ -6,6 +6,15 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.18] - 2026-05-22
+
+### Changed
+- **System tray icons now use the Hum brand mark instead of the placeholder yellow/padlock/dashed-circle glyphs.** Tauri shows a different tray icon per overlay mode (Edit / Locked / Ghost) — these were previously generic mode-signaling glyphs that had nothing to do with Hum's branding. New icons are all the white HUM ellipse logo on a per-mode-colored background, preserving the at-a-glance mode signal while making the tray actually look like Hum:
+  - **Edit mode**: amber/gold background (`#d4af37`) — eye-catching, signals "interactive / action available."
+  - **Locked mode**: pure black background — matches the app icon, signals the normal usage state.
+  - **Ghost mode**: dim dark-gray background with the logo at 55% alpha — signals "soft / pushed back."
+  Generated at 64×64 (high-DPI standard for Windows tray) with the logo aspect-fit at ~82% of the canvas. Embedded via `include_bytes!` so the new bytes ship in the next binary build.
+
 ## [0.13.17] - 2026-05-22
 
 ### Changed
