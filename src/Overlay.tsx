@@ -2129,17 +2129,31 @@ function UnsupportedBlock({
     >
       {(() => {
         // Prefer the real service logo over brand-colored text when we
-        // have one. `bridgeServiceName` is the canonical service identity
-        // emitted by the web-bridge probes; `leadColor` and `lead` are
-        // already brand-derived in the parent. Logo height matches the
-        // headline so it reads as the visual "label" for the show below.
-        const logoSlug = serviceLogoSlug(bridgeServiceName);
-        if (logoSlug && leadColor) {
+        // can identify a service AND we have a logo for it. Two paths:
+        //   1. Bridge identified the service (Netflix probe scraped a
+        //      show name) → small logo here as the "label" above the
+        //      show-name headline.
+        //   2. Title IS the service name (Netflix's case — SMTC reports
+        //      "Netflix" because the show name isn't in document.title)
+        //      → the highlight word in the headline below would be the
+        //      bare service name. Don't paint that as a redundant text
+        //      string; we'll skip the headline entirely and let this
+        //      slot carry the visual identity instead.
+        const logoSlug =
+          serviceLogoSlug(bridgeServiceName) ?? serviceLogoSlug(highlight);
+        const logoColor = leadColor ?? serviceBrandColor(highlight);
+        if (logoSlug && logoColor) {
+          // Big when the logo IS the headline (no show name to display);
+          // smaller when it sits above a real show name as a label.
+          const highlightIsService = !!serviceLogoSlug(highlight);
+          const logoHeight = highlightIsService
+            ? Math.max(headlineFontSize, 40)
+            : Math.max(headlineFontSize * 0.6, 24);
           return (
             <ServiceLogo
               slug={logoSlug}
-              color={leadColor}
-              height={Math.max(headlineFontSize * 0.6, 24)}
+              color={logoColor}
+              height={logoHeight}
             />
           );
         }
@@ -2165,28 +2179,38 @@ function UnsupportedBlock({
           </div>
         );
       })()}
-      {highlight ? (
-        <div
-          style={{
-            fontSize: headlineFontSize,
-            fontWeight: 800,
-            color,
-            textShadow: halo
-              ? `0 2px 4px rgba(0,0,0,0.95), 0 0 28px ${haloColor}88, 0 0 60px ${haloColor}55`
-              : textShadow,
-            letterSpacing: -0.5,
-            lineHeight: 1.05,
-            transition: "color 220ms ease",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            maxWidth: "100%",
-            textAlign: "left",
-          }}
-        >
-          {highlight}
-        </div>
-      ) : null}
+      {(() => {
+        // Suppress the headline text when the highlight IS just the
+        // service name AND a logo for that service is rendered above —
+        // otherwise we'd paint "Netflix" twice (logo + redundant text).
+        // When the bridge gave us a real show name, the highlight is
+        // that show, not the service, and we render it normally.
+        if (!highlight) return null;
+        const highlightIsService = !!serviceLogoSlug(highlight);
+        if (highlightIsService) return null;
+        return (
+          <div
+            style={{
+              fontSize: headlineFontSize,
+              fontWeight: 800,
+              color,
+              textShadow: halo
+                ? `0 2px 4px rgba(0,0,0,0.95), 0 0 28px ${haloColor}88, 0 0 60px ${haloColor}55`
+                : textShadow,
+              letterSpacing: -0.5,
+              lineHeight: 1.05,
+              transition: "color 220ms ease",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              maxWidth: "100%",
+              textAlign: "left",
+            }}
+          >
+            {highlight}
+          </div>
+        );
+      })()}
       {artistText && artistText.toLowerCase() !== highlight.toLowerCase() ? (
         <div
           style={{

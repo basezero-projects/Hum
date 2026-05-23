@@ -6,6 +6,14 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.31] - 2026-05-23
+
+### Fixed
+- **Platform logos now actually show in the unsupported-source view** instead of brand-colored text. v0.13.30 only painted the logo when the web-bridge probe surfaced a real show name (e.g. `bridgeServiceName === "Netflix"`). But Netflix in Chrome doesn't put the show name in `document.title` — only the player HUD shows it — so the probe correctly returned None and the brand-colored text path won. New logic also paints the logo when the highlight word itself is a known service brand (Netflix's case: SMTC reports `title = "Netflix"` → matches the video-service list → logo shows in brand color). Two layout variants:
+  - **Logo + show name** (bridge fired with a real show name): small logo above + headline = show name. Logo height ~60% of the headline font, sits as the "label" for the show.
+  - **Logo alone** (no show name available, only the service identity): big logo (~headline-sized) replaces the headline. The would-be redundant headline text ("Netflix" again) is suppressed.
+- Streamer endpoint mirrors with the same two-variant logic in `renderUnsupportedCur`.
+
 ## [0.13.30] - 2026-05-23
 
 ### Added

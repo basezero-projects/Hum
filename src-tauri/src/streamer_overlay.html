@@ -597,17 +597,26 @@
     const cleanLead = (lead || "").replace(/[—\s]+$/, "").trim();
     const parts = [];
     // Prefer the real service logo over brand-colored text when one
-    // exists. Logo size scales off the headline so it reads as the
-    // visual "label" for the show name below.
-    const logoSlug = leadServiceName ? serviceLogoSlug(leadServiceName) : null;
-    if (logoSlug && leadColor) {
-      const logoHeight = 30;
+    // exists. Two paths:
+    //  1. Bridge gave us a service name AND a different show name as
+    //     highlight → small logo as the "label" above the headline.
+    //  2. Highlight IS just the service name (Netflix's case — SMTC
+    //     reports "Netflix" because the show name isn't in
+    //     document.title) → BIG logo replaces the headline; the
+    //     headline render below suppresses itself.
+    const logoSlugLead = leadServiceName ? serviceLogoSlug(leadServiceName) : null;
+    const logoSlugHighlight = serviceLogoSlug(highlight);
+    const logoSlug = logoSlugLead || logoSlugHighlight;
+    const logoColor = leadColor || serviceBrandColor(highlight);
+    const highlightIsService = !!logoSlugHighlight;
+    if (logoSlug && logoColor) {
+      const logoHeight = highlightIsService ? 56 : 30;
       const logoStyle = [
         "width:" + logoHeight + "px",
         "height:" + logoHeight + "px",
-        "--logo-color:" + leadColor,
+        "--logo-color:" + logoColor,
         "--logo-svg:url(/logos/" + logoSlug + ".svg)",
-        "filter:drop-shadow(0 0 14px " + leadColor + "88) drop-shadow(0 0 28px " + leadColor + "44)",
+        "filter:drop-shadow(0 0 14px " + logoColor + "88) drop-shadow(0 0 28px " + logoColor + "44)",
       ].join(";");
       parts.push(
         "<div class=\"unsupported-logo\" style=\"" + logoStyle + "\"></div>"
@@ -633,7 +642,10 @@
         + escape(cleanLead) + "</div>"
       );
     }
-    if (highlight) {
+    // Suppress the headline when it's just the service name AND we
+    // already painted the logo above — otherwise we'd render the logo
+    // and a redundant "Netflix" text right below it.
+    if (highlight && !(logoSlug && highlightIsService)) {
       const styleParts = [];
       if (headlineColor) {
         styleParts.push("color:" + headlineColor);
