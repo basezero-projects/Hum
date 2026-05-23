@@ -6,6 +6,12 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.34] - 2026-05-23
+
+### Changed
+- **Metadata column items now center on the progress-bar's axis** instead of right-aligning to the column edge. The artist/title/album metadata line on top, the time-progress bar in the middle, and the source badge on the bottom all sit visually centered with each other. The column itself still sits on the right side of the overlay (parent flex layout); this is internal cross-axis alignment for the column's contents.
+- **Source badge logo is bigger.** Width/height 12px → 18px, container padding 3×6px → 4×8px, container height 18px → 26px. Adds a subtle brand-colored drop-shadow so the logo reads better against the dark plate.
+
 ## [0.13.33] - 2026-05-23
 
 ### Added

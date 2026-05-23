@@ -1479,7 +1479,7 @@ function MetadataColumn({
   textColorDim,
   textShadow,
   source,
-  alignRight,
+  alignRight: _alignRight,
   dragRegion,
   adActive,
 }: {
@@ -1491,6 +1491,10 @@ function MetadataColumn({
   // (e.g. lyrics resolver knows the bridge surfaced "pandora-web" but
   // the OS still says "Chrome.exe"). Falsy → fall back to source_app_id.
   source: string | null;
+  // Deprecated — column now always centers items on the progress-bar's
+  // centerline regardless of which side of the overlay the column sits
+  // on. Kept on the type to avoid touching every caller; underscore
+  // prefix marks it as intentionally unused.
   alignRight: boolean;
   dragRegion: boolean;
   adActive: boolean;
@@ -1511,7 +1515,12 @@ function MetadataColumn({
       style={{
         display: "flex",
         flexDirection: "column",
-        alignItems: alignRight ? "flex-end" : "flex-start",
+        // Items centered horizontally within the column so the metadata
+        // text + source badge align to the progress-bar's centerline.
+        // The column itself sits on the right edge of the overlay
+        // (parent flex layout puts it there); this is internal layout
+        // for the column's contents.
+        alignItems: "center",
         justifyContent: "center",
         gap: 4,
         flexShrink: 0,
@@ -1545,7 +1554,7 @@ function MetadataColumn({
             overflow: "hidden",
             textOverflow: "ellipsis",
             maxWidth: "100%",
-            textAlign: alignRight ? "right" : "left",
+            textAlign: "center",
           }}
         >
           {metaText}
@@ -1677,19 +1686,19 @@ function SourceBadge({
           display: "inline-flex",
           alignItems: "center",
           justifyContent: "center",
-          padding: "3px 6px",
+          padding: "4px 8px",
           borderRadius: 8,
           background: "rgba(127,127,127,0.18)",
           border: "1px solid rgba(127,127,127,0.25)",
-          opacity: 0.85,
-          height: 18,
+          opacity: 0.9,
+          height: 26,
         }}
       >
         <div
           aria-hidden
           style={{
-            width: 12,
-            height: 12,
+            width: 18,
+            height: 18,
             backgroundColor: brand ?? textColorDim,
             WebkitMaskImage: `url(/logos/${logoSlug}.svg)`,
             maskImage: `url(/logos/${logoSlug}.svg)`,
@@ -1699,6 +1708,7 @@ function SourceBadge({
             maskPosition: "center",
             WebkitMaskSize: "contain",
             maskSize: "contain",
+            filter: `drop-shadow(0 0 4px ${brand ?? "rgba(255,255,255,0.4)"}88)`,
             transition: "background-color 220ms ease",
           }}
         />

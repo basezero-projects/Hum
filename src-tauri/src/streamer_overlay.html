@@ -209,7 +209,10 @@
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
-    align-items: flex-end;
+    /* Items centered on the progress-bar's centerline. The column
+       itself sits on the right edge of the overlay; this is internal
+       cross-axis alignment for the column's contents. */
+    align-items: center;
     gap: 4px;
     max-width: 40ch;
     min-width: 0;
@@ -222,7 +225,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 100%;
-    text-align: right;
+    text-align: center;
     text-shadow: 0 1px 2px rgba(0, 0, 0, 1), 0 0 6px rgba(0, 0, 0, 0.85), 0 3px 10px rgba(0, 0, 0, 0.55);
   }
   #meta-row {
@@ -269,8 +272,8 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding: 3px 6px;
-    height: 18px;
+    padding: 4px 8px;
+    height: 26px;
     letter-spacing: 0;
     text-transform: none;
   }
@@ -939,7 +942,7 @@
     const badgeSlug = serviceLogoSlug(label);
     const badgeColor = serviceBrandColor(label) || "rgba(255,255,255,0.7)";
     if (label && badgeSlug) {
-      $badge.innerHTML = '<div style="width:12px;height:12px;background-color:' + badgeColor + ';-webkit-mask:url(/logos/' + badgeSlug + '.svg) center/contain no-repeat;mask:url(/logos/' + badgeSlug + '.svg) center/contain no-repeat;transition:background-color 220ms ease;"></div>';
+      $badge.innerHTML = '<div style="width:18px;height:18px;background-color:' + badgeColor + ';-webkit-mask:url(/logos/' + badgeSlug + '.svg) center/contain no-repeat;mask:url(/logos/' + badgeSlug + '.svg) center/contain no-repeat;filter:drop-shadow(0 0 4px ' + badgeColor + '88);transition:background-color 220ms ease;"></div>';
       $badge.classList.add("with-logo");
       $badge.title = label;
       $badge.style.display = "inline-flex";
