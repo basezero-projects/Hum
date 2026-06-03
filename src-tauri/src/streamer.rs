@@ -31,8 +31,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::State,
+    extract::{Request, State},
     http::{header, HeaderValue, StatusCode},
+    middleware::{self, Next},
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
@@ -449,6 +450,28 @@ impl Drop for ServerHandle {
     }
 }
 
+/// DNS-rebinding guard. The server binds 127.0.0.1, but every response sets
+/// `Access-Control-Allow-Origin: *` for OBS browser-source compatibility —
+/// without this a malicious web page could rebind a hostname it controls to
+/// 127.0.0.1 and read the now-playing data cross-origin. Only accept loopback
+/// `Host` headers, which is exactly what OBS / the browser source
+/// (`http://localhost:<port>/…`) send.
+async fn host_guard(port: u16, req: Request, next: Next) -> Response {
+    let host_ok = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(|h| {
+            h == format!("127.0.0.1:{port}")
+                || h == format!("localhost:{port}")
+                || h == format!("[::1]:{port}")
+        });
+    if !host_ok {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    next.run(req).await
+}
+
 /// Boot a server on `127.0.0.1:port`. Returns immediately; the server
 /// runs in a background task. Call `.shutdown()` on the handle to stop it.
 pub fn start(app: AppHandle, port: u16) -> Result<ServerHandle> {
@@ -484,7 +507,10 @@ pub fn start(app: AppHandle, port: u16) -> Result<ServerHandle> {
         .route("/hum-logo.png", get(get_logo))
         .route("/logos/{slug}", get(get_service_logo))
         .route("/healthz", get(get_healthz))
-        .with_state(state);
+        .with_state(state)
+        .layer(middleware::from_fn(move |req: Request, next: Next| {
+            host_guard(port, req, next)
+        }));
 
     let (tx, rx) = oneshot::channel::<()>();
     let addr: SocketAddr = ([127, 0, 0, 1], port).into();

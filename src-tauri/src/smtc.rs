@@ -1113,7 +1113,7 @@ fn read_timeline(session: &GlobalSystemMediaTransportControlsSession) -> Result<
     // Convert to Unix epoch ms (seconds between 1601-01-01 and 1970-01-01 = 11644473600).
     let universal_ticks = t.LastUpdatedTime()?.UniversalTime;
     const TICKS_BETWEEN_EPOCHS: i64 = 11_644_473_600 * 10_000_000;
-    let last_update_unix_ms = (universal_ticks - TICKS_BETWEEN_EPOCHS) / 10_000;
+    let last_update_unix_ms = universal_ticks.saturating_sub(TICKS_BETWEEN_EPOCHS) / 10_000;
 
     Ok((position_ms, duration_ms, last_update_unix_ms))
 }

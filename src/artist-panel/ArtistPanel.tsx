@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { ArtistInfo, CurrentTrack, TourDate } from "../types";
@@ -10,6 +10,10 @@ const BORDER = "rgba(255,255,255,0.07)";
 
 export default function ArtistPanel() {
   const [artistName, setArtistName] = useState<string>("");
+  // Mirror of artistName for the track-changed listener below, which subscribes
+  // once and must read the CURRENT value — not the "" captured before init()
+  // resolves, which would make it ignore the first track change.
+  const artistNameRef = useRef<string>("");
   const [info, setInfo] = useState<ArtistInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -32,6 +36,7 @@ export default function ArtistPanel() {
         const track = await invoke<CurrentTrack>("get_current_track");
         const name = track.artist?.trim() ?? "";
         setArtistName(name);
+        artistNameRef.current = name;
         if (!name) {
           setLoading(false);
           return;
@@ -49,17 +54,20 @@ export default function ArtistPanel() {
   }, []);
 
   // Listen for track-changed: if the artist changes, close this window.
+  // Reads artistNameRef (not the state) so the single subscription always sees
+  // the latest value and never misses a change that arrives before init().
   useEffect(() => {
     const unlisten = listen<CurrentTrack>("track-changed", (event) => {
       const newArtist = event.payload.artist?.trim() ?? "";
-      if (artistName && newArtist.toLowerCase() !== artistName.toLowerCase()) {
+      const current = artistNameRef.current;
+      if (current && newArtist.toLowerCase() !== current.toLowerCase()) {
         invoke("close_artist_panel_cmd").catch(() => {});
       }
     });
     return () => {
       unlisten.then((fn) => fn()).catch(() => {});
     };
-  }, [artistName]);
+  }, []);
 
   // ESC key closes the panel.
   useEffect(() => {

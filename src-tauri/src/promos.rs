@@ -89,6 +89,61 @@ pub fn pick_next_promo<'a>(pool: &'a [Promo], last_shown_id: Option<&str>) -> Op
     candidates.first().copied()
 }
 
+/// Defensive validation of promo fields that flow into the overlay UI and the
+/// OS URL opener. The feed is remote (syvrstudios.com) + disk-cached, so a
+/// compromised / MITM'd feed or a tampered cache file could otherwise inject a
+/// `file:` / `javascript:` click URL, an arbitrary off-site image (user
+/// fingerprinting / CSP bypass), or an exotic CSS color value. Invalid values
+/// fall back to safe defaults rather than dropping the promo. Bundled defaults
+/// ship with the app and are trusted, so they skip this.
+fn sanitize_promos(promos: &mut [Promo]) {
+    for p in promos.iter_mut() {
+        if p.accent_color.as_deref().is_some_and(|c| !is_valid_hex_color(c)) {
+            p.accent_color = None;
+        }
+        // The click-through URL opens in the user's browser via the opener
+        // plugin — require https so a malicious feed can't hand the OS a
+        // file: / javascript: / custom-scheme URL. Fall back to SYVR home.
+        if !is_https_url(&p.url) {
+            p.url = "https://syvrstudios.com".to_string();
+        }
+        // Images auto-load (no user action) into <img src> — restrict to
+        // https on a SYVR host to block off-site fingerprinting / CSP bypass.
+        if p.image_url.as_deref().is_some_and(|u| !is_https_syvr_host(u)) {
+            p.image_url = None;
+        }
+        if p.icon_url.as_deref().is_some_and(|u| !is_https_syvr_host(u)) {
+            p.icon_url = None;
+        }
+    }
+}
+
+fn is_valid_hex_color(s: &str) -> bool {
+    match s.strip_prefix('#') {
+        Some(body) => {
+            matches!(body.len(), 3 | 6 | 8) && body.bytes().all(|b| b.is_ascii_hexdigit())
+        }
+        None => false,
+    }
+}
+
+fn is_https_url(s: &str) -> bool {
+    reqwest::Url::parse(s).map(|u| u.scheme() == "https").unwrap_or(false)
+}
+
+fn is_https_syvr_host(s: &str) -> bool {
+    match reqwest::Url::parse(s) {
+        Ok(u) => {
+            u.scheme() == "https"
+                && u.host_str().is_some_and(|h| {
+                    let h = h.to_ascii_lowercase();
+                    h == "syvrstudios.com" || h.ends_with(".syvrstudios.com")
+                })
+        }
+        Err(_) => false,
+    }
+}
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -136,7 +191,13 @@ impl SyvrRemoteSource {
             .ok()
             .and_then(|s| serde_json::from_str::<PromosFile>(&s).ok());
         let pool = match from_disk {
-            Some(f) if f.version == 1 && !f.promos.is_empty() => f.promos,
+            // Disk cache is the raw last-fetched network JSON — sanitize it.
+            Some(f) if f.version == 1 && !f.promos.is_empty() => {
+                let mut p = f.promos;
+                sanitize_promos(&mut p);
+                p
+            }
+            // Bundled defaults ship with the app and are trusted as-is.
             _ => bundled_defaults(),
         };
         let pool_arc = self.pool.clone();
@@ -211,9 +272,11 @@ impl SyvrRemoteSource {
         if let Err(e) = std::fs::write(&self.cache_path, &body) {
             eprintln!("[promos] cache write failed: {e}");
         }
+        let mut promos = parsed.promos;
+        sanitize_promos(&mut promos);
         {
             let mut w = self.pool.write().await;
-            *w = parsed.promos;
+            *w = promos;
         }
         eprintln!("[promos] refreshed pool from {REMOTE_URL}");
     }

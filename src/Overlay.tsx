@@ -844,7 +844,8 @@ export default function Overlay() {
         {!albumArt ? (
           <ServiceBg serviceName={ambientServiceName} />
         ) : null}
-        <div {...dragProps} style={innerRowStyle}>
+        <NudgeBanner banner={nudgeBanner} />
+        <div {...dragProps} ref={setInnerRowEl} style={innerRowStyle}>
           {showArt && albumArt ? (
             <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} dragRegion={isEdit} onClick={openArtistPanel} />
           ) : null}
@@ -897,7 +898,7 @@ export default function Overlay() {
               source={null}
               alignRight
               dragRegion={isEdit}
-              adActive={track.ad_active}
+              adActive={adActive}
             />
           ) : null}
         </div>
@@ -921,6 +922,7 @@ export default function Overlay() {
         {!albumArt ? (
           <ServiceBg serviceName={ambientServiceName} />
         ) : null}
+        <NudgeBanner banner={nudgeBanner} />
         {showArt && albumArt ? <AlbumArtBadge dataUrl={albumArt.data_url} onClick={openArtistPanel} /> : null}
         {openArtistPanel && (!showArt || !albumArt) && lyrics?.status !== "unsupported" ? (
           <ArtistInfoDot onClick={openArtistPanel} />
@@ -1048,7 +1050,7 @@ export default function Overlay() {
               source={null}
               alignRight
               dragRegion={isEdit}
-              adActive={track.ad_active}
+              adActive={adActive}
             />
           ) : null}
         </div>
@@ -2679,7 +2681,7 @@ function computeSurfaceColor(args: {
   // Layer 2: user bg_color painted on top at bg_opacity. Alpha-blends
   // toward the user color and away from whatever was behind.
   if (bgOpacityPct > 0) {
-    const userColor = hexToRgb(bgColor);
+    const userColor = anyColorToRgb(bgColor);
     if (userColor !== null) {
       const alpha = Math.min(1, Math.max(0, bgOpacityPct / 100));
       bg = bg !== null
@@ -2730,6 +2732,20 @@ function hexToRgb(
     g: (n >> 8) & 0xff,
     b: n & 0xff,
   };
+}
+
+// Parse either #rrggbb hex OR rgb(r, g, b) into RGB. tint_bg_from_album_art
+// produces an rgb(...) string (via mixHexWithRgb), so computeSurfaceColor must
+// accept both — otherwise the user's background is dropped from the
+// auto-contrast luminance decision whenever tinting is on.
+function anyColorToRgb(
+  color: string,
+): { r: number; g: number; b: number } | null {
+  const hex = hexToRgb(color);
+  if (hex) return hex;
+  const m = /^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/.exec(color);
+  if (!m) return null;
+  return { r: Number(m[1]), g: Number(m[2]), b: Number(m[3]) };
 }
 
 function mixHexWithRgb(

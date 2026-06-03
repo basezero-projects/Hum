@@ -54,7 +54,10 @@ pub async fn open_artist_panel(app: AppHandle) -> Result<()> {
     #[cfg(windows)]
     {
         let settings_state = app.state::<crate::settings::SharedSettings>();
-        let kind = settings_state.inner().blocking_read().window_backdrop;
+        // open_artist_panel is async + driven by the tokio runtime, so use the
+        // async read — blocking_read() here can stall a runtime worker under
+        // lock contention.
+        let kind = settings_state.inner().read().await.window_backdrop;
         if let Ok(raw_hwnd) = window.hwnd() {
             let hwnd = HWND(raw_hwnd.0);
             if let Err(e) = crate::backdrop::apply_backdrop(hwnd, kind) {
@@ -184,6 +187,11 @@ const TICKET_URL_WHITELIST: &[&str] = &[
     "www.theaudiodb.com",
     "musicbrainz.org",
     "www.musicbrainz.org",
+    // Wikipedia: the bio "Read more" link uses the REST API's
+    // en.wikipedia.org page URL; the footer attribution uses wikipedia.org.
+    "wikipedia.org",
+    "www.wikipedia.org",
+    "en.wikipedia.org",
 ];
 
 #[tauri::command]

@@ -6,6 +6,21 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.41] - 2026-06-03
+
+### Fixed
+- **Wikipedia links in the artist panel work now.** In the artist-info panel (opened by clicking album art), the "Read more on Wikipedia →" link under the bio and the "Wikipedia" link in the footer attribution row both did nothing — they flashed a "Couldn't open browser" toast. Their host wasn't on the allowed-links list, so the open was rejected. `wikipedia.org` / `en.wikipedia.org` are now allowed and the links open in your browser. (Ticketmaster, SeatGeek, AXS, LiveNation, last.fm, TheAudioDB, MusicBrainz already worked.)
+- **The lyric-offset nudge indicator now shows in every layout.** Pressing Ctrl+Alt+[ or Ctrl+Alt+] nudges the lyric timing and is supposed to flash a small gold "lyric offset +N ms" pill in the top-right of the overlay. That pill only appeared in the default 3-line layout — in Single-line and Full-page layouts the nudge still worked but gave no on-screen confirmation. It now appears in all three layouts.
+- **"Ad Break" indicator in the metadata column no longer flickers.** The small ad-break state shown in the right-hand metadata column was driven by a different signal than the rest of the ad-break UI (the promo card, hidden album art), so during the transition into/out of a Spotify ad they could briefly disagree. Both are now driven by the same source.
+- **Auto-contrast picks the right text color when "Tint background from album art" is on.** With auto-contrast plus album-art tinting both enabled, the readability calculation ignored your background tint (it couldn't read the tinted color format), so it could choose dark text over a dark tinted background or vice-versa. It now factors the tint in.
+- **Single-line layout window sizes to its content.** The Single-line layout's window didn't shrink to fit one line the way the 3-line layout does, leaving extra empty height. It now auto-sizes like the others.
+- **Hardened a few internals against rare hangs/edge cases.** The artist panel no longer uses a blocking lock read on the async path (could stall under contention); the artist panel reliably closes when the track's artist changes even right after opening; SMTC timestamp math is guarded against a misconfigured system clock.
+
+### Security
+- **Promo feed fields are now validated.** Hum pulls ad-break promo cards from a remote feed (`syvrstudios.com/hum/promos.json`, disk-cached). Each promo's accent color, click-through URL, and image/icon URLs are now validated before use: colors must be hex, the click URL must be `https`, and promo images must be `https` on a `syvrstudios.com` host. A tampered or MITM'd feed can no longer inject a `file:`/`javascript:` link, an arbitrary off-site tracking image, or a malformed CSS color. Invalid values fall back to safe defaults; bundled defaults are trusted and unaffected.
+- **Artist photo fetch is constrained to TheAudioDB.** The artist-photo URL returned by TheAudioDB's API is now required to be `https` on a `theaudiodb.com` host before Hum fetches it, closing a server-side-request-forgery path where a malicious/MITM'd API response could point the fetch at an internal/LAN address.
+- **OBS/streamer server rejects non-loopback requests.** The local browser-source HTTP server (when OBS streaming is enabled) now checks the `Host` header and only answers `localhost`/`127.0.0.1` requests. This blocks a DNS-rebinding path where a malicious web page could otherwise read your now-playing data from the localhost server. OBS browser sources (which connect to `http://localhost:<port>/overlay`) are unaffected.
+
 ## [0.13.40] - 2026-06-03
 
 ### Fixed

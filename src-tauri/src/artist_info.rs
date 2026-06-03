@@ -491,6 +491,25 @@ pub(crate) async fn fetch_theaudiodb_photo(
         return None;
     }
 
+    // SSRF guard: strArtistThumb is an arbitrary string from the TheAudioDB
+    // JSON. Only follow it if it's an https URL on theaudiodb.com — a
+    // malicious or MITM'd response could otherwise point this fetch at an
+    // internal/LAN address (router admin pages, link-local metadata, etc.).
+    match reqwest::Url::parse(thumb_url) {
+        Ok(u) => {
+            let ok = u.scheme() == "https"
+                && u.host_str().is_some_and(|h| {
+                    let h = h.to_ascii_lowercase();
+                    h == "theaudiodb.com" || h.ends_with(".theaudiodb.com")
+                });
+            if !ok {
+                eprintln!("[artist_info] theaudiodb thumb URL rejected: {thumb_url}");
+                return None;
+            }
+        }
+        Err(_) => return None,
+    }
+
     let bytes = match client.get(thumb_url).send().await {
         Ok(r) => match r.bytes().await {
             Ok(b) => b,
