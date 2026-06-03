@@ -12,12 +12,14 @@
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
+use tokio::time::sleep;
 
 use crate::smtc::{AlbumArtPayload, CurrentTrack, PlaybackState, SharedAlbumArt, SharedSnapshot};
 
@@ -56,8 +58,18 @@ pub fn start(
     smtc_playing: Arc<AtomicBool>,
 ) {
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = run(app, snapshot, art, smtc_playing).await {
-            eprintln!("[itunes] worker exited: {e:#}");
+        // Supervise the PowerShell poller. itunes_poll.ps1 is a `while($true)`
+        // loop that self-heals iTunes opening/closing, so `run()` returning at
+        // all means the child genuinely died (crash, killed, or a stdout read
+        // error). Respawn after a short backoff instead of leaving iTunes
+        // tracking silently dead for the rest of the session. The backoff also
+        // bounds the retry rate if PowerShell can't start at all.
+        loop {
+            match run(app.clone(), snapshot.clone(), art.clone(), smtc_playing.clone()).await {
+                Ok(()) => eprintln!("[itunes] poller exited; respawning in 5s"),
+                Err(e) => eprintln!("[itunes] worker exited: {e:#}; respawning in 5s"),
+            }
+            sleep(Duration::from_secs(5)).await;
         }
     });
 }

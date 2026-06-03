@@ -198,7 +198,12 @@ pub fn start(
             if snap.ad_active {
                 let source: tauri::State<'_, std::sync::Arc<crate::promos::SyvrRemoteSource>> = app.state();
                 let last: tauri::State<'_, std::sync::Arc<tokio::sync::RwLock<Option<String>>>> = app.state();
-                let outcome = ad_break_outcome(&snap, source.inner(), last.inner()).await;
+                let promos_enabled = {
+                    let settings: tauri::State<'_, crate::settings::SharedSettings> = app.state();
+                    let enabled = settings.read().await.ad_break_promos_enabled;
+                    enabled
+                };
+                let outcome = ad_break_outcome(&snap, source.inner(), last.inner(), promos_enabled).await;
                 let key = outcome.track_key.clone();
                 if key != last_key {
                     last_key = key;
@@ -611,14 +616,24 @@ async fn ad_break_outcome(
     snap: &crate::smtc::CurrentTrack,
     promo_source: &std::sync::Arc<crate::promos::SyvrRemoteSource>,
     last_shown: &std::sync::Arc<tokio::sync::RwLock<Option<String>>>,
+    promos_enabled: bool,
 ) -> CurrentLyrics {
-    let pool = promo_source.promos_async().await;
-    let cooldown_id = { last_shown.read().await.clone() };
-    let picked = crate::promos::pick_next_promo(&pool, cooldown_id.as_deref()).cloned();
-    if let Some(ref p) = picked {
-        let mut w = last_shown.write().await;
-        *w = Some(p.id.clone());
-    }
+    // Only pick a promo (and advance the rotation's cooldown cursor) when the
+    // user has promos enabled. When they're off the overlay shows a plain
+    // "Ad break" label instead, so picking here would silently churn through
+    // the rotation and desync the cooldown for no visible benefit.
+    let picked = if promos_enabled {
+        let pool = promo_source.promos_async().await;
+        let cooldown_id = { last_shown.read().await.clone() };
+        let p = crate::promos::pick_next_promo(&pool, cooldown_id.as_deref()).cloned();
+        if let Some(ref p) = p {
+            let mut w = last_shown.write().await;
+            *w = Some(p.id.clone());
+        }
+        p
+    } else {
+        None
+    };
     CurrentLyrics {
         track_key: format!("ad|{}|{}", snap.source_app_id.clone().unwrap_or_default(), snap.duration_ms),
         status: Status::Ad,
@@ -2200,7 +2215,7 @@ mod ad_short_circuit_tests {
         source.seed_with_defaults().await;
         let last = std::sync::Arc::new(tokio::sync::RwLock::new(None));
 
-        let outcome = ad_break_outcome(&snap, &source, &last).await;
+        let outcome = ad_break_outcome(&snap, &source, &last, true).await;
         assert_eq!(outcome.status, Status::Ad);
         assert!(outcome.lines.is_empty());
         assert_eq!(outcome.line_count, 0);

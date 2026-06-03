@@ -117,19 +117,26 @@ fn compute_panel_position(app: &AppHandle) -> Result<(i32, i32)> {
         .get_webview_window("overlay")
         .ok_or_else(|| anyhow!("overlay window not found"))?;
 
-    let pos = overlay.outer_position()?;
-    let size = overlay.outer_size()?;
+    // outer_position / outer_size / monitor.size() are PHYSICAL pixels, but the
+    // panel is built with LOGICAL inner_size(360, 480) and the builder's
+    // .position() also takes LOGICAL pixels. On a display scaled >100% (common
+    // on Windows 11 laptops / 4K) the two unit systems diverge, so the
+    // above/below decision and horizontal centering were wrong and the panel
+    // clipped off-screen. Convert everything to logical before the layout math.
+    let sf = overlay.scale_factor()?;
+    let pos = overlay.outer_position()?.to_logical::<i32>(sf);
+    let size = overlay.outer_size()?.to_logical::<i32>(sf);
 
-    // Panel is 360px wide. Center it on the overlay.
-    let center_x = pos.x + (size.width as i32) / 2 - 180;
+    // Panel is 360px wide (logical). Center it on the overlay.
+    let center_x = pos.x + size.width / 2 - 180;
 
-    // 480px tall panel. Check if it fits below.
-    let below_y = pos.y + size.height as i32 + 8;
+    // 480px tall panel (logical). Check if it fits below.
+    let below_y = pos.y + size.height + 8;
 
-    // Get monitor height to decide above/below.
+    // Monitor height in LOGICAL pixels (use the monitor's own scale factor).
     let monitor_height = overlay
         .current_monitor()?
-        .map(|m| m.size().height as i32)
+        .map(|m| m.size().to_logical::<i32>(m.scale_factor()).height)
         .unwrap_or(1080);
 
     let y = if below_y + 480 <= monitor_height {

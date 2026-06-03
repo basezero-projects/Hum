@@ -87,7 +87,7 @@ export default function SettingsView() {
           label="Lyric offset"
           suffix="ms"
           min={-2000}
-          max={2000}
+          max={5000}
           step={25}
           value={s.anticipate_ms}
           onChange={(v) => update("anticipate_ms", v)}
@@ -97,7 +97,7 @@ export default function SettingsView() {
           label="Seek-jitter tolerance"
           suffix="ms"
           min={500}
-          max={5000}
+          max={10000}
           step={100}
           value={s.jitter_tolerance_ms}
           onChange={(v) => update("jitter_tolerance_ms", v)}

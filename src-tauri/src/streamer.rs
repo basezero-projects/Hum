@@ -517,7 +517,10 @@ pub fn start(app: AppHandle, port: u16) -> Result<ServerHandle> {
 /// in Tauri state so update_settings can start / stop the server when the
 /// `streamer_enabled` setting flips.
 pub struct StreamerSupervisor {
-    pub handle: std::sync::Mutex<Option<ServerHandle>>,
+    /// The running server handle paired with the port it's bound to. The port
+    /// is tracked so a runtime port change (Settings → Port while the server
+    /// is already running) can be detected and trigger a rebind.
+    pub handle: std::sync::Mutex<Option<(ServerHandle, u16)>>,
 }
 
 impl StreamerSupervisor {
@@ -528,25 +531,41 @@ impl StreamerSupervisor {
     }
 }
 
-/// Start or stop the server based on the desired enabled state. Idempotent:
-/// no-op if already in the requested state.
+/// Start or stop the server based on the desired enabled state + port.
+/// Idempotent: no-op when already in the requested state on the requested
+/// port. If the server is running on a different port than requested, it is
+/// stopped and restarted on the new port.
 pub fn apply_settings(app: &AppHandle, enabled: bool, port: u16) {
     let supervisor = match app.try_state::<Arc<StreamerSupervisor>>() {
         Some(s) => s.inner().clone(),
         None => return,
     };
     let mut guard = supervisor.handle.lock().unwrap();
-    let currently_running = guard.is_some();
-    if enabled && !currently_running {
-        match start(app.clone(), port) {
-            Ok(h) => *guard = Some(h),
+    let running_port = guard.as_ref().map(|(_, p)| *p);
+    match (enabled, running_port) {
+        // Want it on, nothing running → start.
+        (true, None) => match start(app.clone(), port) {
+            Ok(h) => *guard = Some((h, port)),
             Err(e) => eprintln!("[streamer] failed to start: {e:#}"),
+        },
+        // Want it on, running on a stale port → stop, then restart on the new
+        // port. Different port, so no bind conflict with the draining old one.
+        (true, Some(running)) if running != port => {
+            if let Some((mut h, _)) = guard.take() {
+                h.shutdown();
+            }
+            match start(app.clone(), port) {
+                Ok(h) => *guard = Some((h, port)),
+                Err(e) => eprintln!("[streamer] failed to restart on port {port}: {e:#}"),
+            }
         }
-    } else if !enabled && currently_running {
-        if let Some(mut h) = guard.take() {
-            h.shutdown();
+        // Want it off, something running → stop.
+        (false, Some(_)) => {
+            if let Some((mut h, _)) = guard.take() {
+                h.shutdown();
+            }
         }
+        // Already in the desired state (on + same port, or off + stopped).
+        _ => {}
     }
-    // (enabled && currently_running with a different port would need a
-    // restart — handle in v2 if anyone changes ports at runtime.)
 }

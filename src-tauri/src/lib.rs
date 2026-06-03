@@ -148,21 +148,6 @@ fn set_update_banner_visible(
     Ok(())
 }
 
-#[tauri::command]
-fn toggle_overlay_visibility(app: tauri::AppHandle) -> Result<bool, String> {
-    let window = app
-        .get_webview_window("overlay")
-        .ok_or_else(|| "overlay window missing".to_string())?;
-    let visible = window.is_visible().map_err(|e| e.to_string())?;
-    if visible {
-        window.hide().map_err(|e| e.to_string())?;
-        Ok(false)
-    } else {
-        window.show().map_err(|e| e.to_string())?;
-        Ok(true)
-    }
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let snapshot: SharedSnapshot = Arc::new(RwLock::new(CurrentTrack::default()));
@@ -454,7 +439,6 @@ pub fn run() {
             get_overlay_mode,
             set_overlay_mode,
             cycle_overlay_mode,
-            toggle_overlay_visibility,
             get_settings,
             update_settings,
             reset_settings,

@@ -26,7 +26,7 @@ const DEFAULT_SETTINGS: Settings = {
   font_size_px: 26,
   font_weight: 600,
   text_color: "#ffffff",
-  text_color_dim: "rgba(255,255,255,0.45)",
+  text_color_dim: "#c8c8c8",
   bg_color: "#000000",
   bg_opacity: 0,
   text_align: "left",

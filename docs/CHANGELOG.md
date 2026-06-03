@@ -6,6 +6,19 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.40] - 2026-06-03
+
+### Fixed
+- **Auto-contrast now actually stops sampling your screen when it's off.** The auto-contrast feature (Settings → Extras, "Auto-contrast text") works by grabbing a small strip of your desktop every 2 seconds to decide whether lyric text should flip light or dark. Previously that desktop capture ran the entire session no matter what — turning the setting off only stopped Hum from *acting* on the sample, not from taking it. Now the capture loop checks the setting each tick and skips the screen grab entirely when auto-contrast is off, so there's no background screen sampling (and no CPU cost) unless you've enabled the feature. Technical: `contrast.rs` reads `SharedSettings.auto_contrast` at the top of its poll loop and `continue`s when off; also swapped a `static mut` flag for an `AtomicBool` to remove an unsynchronized access.
+- **Artist info panel no longer lands in the wrong spot on scaled displays.** On any monitor running above 100% display scaling (most 4K and laptop screens), clicking album art to open the artist panel could place it off-center or clipped off the bottom of the screen, because the placement math mixed physical and logical pixels. The panel now positions correctly under (or above) the overlay regardless of display scaling. Technical: `artist_window.rs::compute_panel_position` converts window/monitor geometry to logical pixels via the scale factor before laying out.
+- **iTunes lyrics recover on their own if the background reader stops.** Hum reads iTunes via a small PowerShell helper. If that helper ever died (a crash or pipe error), iTunes track detection went silently dead until you restarted Hum. It now restarts the helper automatically after a few seconds, so iTunes playback keeps showing lyrics. (Spotify/Chrome/etc. via SMTC were unaffected — they already reconnect.)
+- **Changing the OBS/streamer port takes effect immediately.** With the browser source enabled, editing the Port in Settings → OBS / Streamer used to do nothing until you restarted Hum — the server kept serving on the old port. Now changing the port while the server is running stops it and rebinds on the new port right away.
+
+### Changed
+- **Lyric offset slider now reaches +5000 ms; seek-jitter tolerance reaches 10000 ms.** The sliders (Settings → Lyrics timing) were capped tighter than the values the app actually accepts, so the full range wasn't reachable from the UI and a higher value set by hand in settings.json got stomped back down on the next drag. Slider ranges now match the engine's limits (offset -2000..+5000 ms, jitter 500..10000 ms).
+- **Promo rotation no longer churns when promos are turned off.** With "Show SYVR promo cards during ad breaks" off, the backend still silently advanced the promo rotation each ad break. It now skips promo selection entirely when the setting is off (no user-visible change — the plain "Ad break" label already showed instead).
+- **Removed an unused internal command** (`toggle_overlay_visibility`) that nothing called — overlay show/hide is handled by the tray.
+
 ## [0.13.39] - 2026-06-03
 
 ### Fixed
