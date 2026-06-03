@@ -337,6 +337,32 @@ pub fn run() {
                 let _ = main.hide();
             }
 
+            // Settings + dev-console are HIDE-on-close, not destroy-on-close.
+            // Both are pre-declared in tauri.conf.json with visible:false and
+            // re-shown via the tray ("Settings…" / "Show / Hide dev console")
+            // + open_settings_window — all of which rely on get_webview_window()
+            // still resolving. The native title-bar X fires Tauri's default
+            // CloseRequested, which DESTROYS the window unless we intercept it.
+            // Destroying breaks two things: (1) reopening fails because
+            // get_webview_window() now returns None, and (2) any in-flight
+            // debounced settings write (Settings.tsx coalesces slider drags on a
+            // 200ms timer) is lost when the webview's JS context is torn down
+            // before the write lands. Prevent the close and hide instead so the
+            // window survives and the pending write fires. The overlay has no
+            // decorations (no X) and artist-info is created-on-demand + meant to
+            // be destroyed, so neither needs this.
+            for label in ["main", "settings"] {
+                if let Some(win) = app.get_webview_window(label) {
+                    let win_for_event = win.clone();
+                    win.on_window_event(move |event| {
+                        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                            api.prevent_close();
+                            let _ = win_for_event.hide();
+                        }
+                    });
+                }
+            }
+
             // Window height auto-follows content via the frontend's
             // ResizeObserver in Overlay.tsx — no empty vertical space
             // possible. Width is user-controllable (drag the right edge);

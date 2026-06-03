@@ -6,6 +6,12 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.39] - 2026-06-03
+
+### Fixed
+- **Settings window reopens after you close it.** Previously, opening Settings (the "Settings…" tray item, or the panel titled "Hum — Settings"), changing anything, and closing it with the title-bar **X** left you unable to reopen Settings at all — clicking "Settings…" in the tray did nothing until you fully quit and relaunched Hum. The window was being destroyed on close instead of hidden, so the app could no longer find it to show again. It now hides on close and reopens every time. The dev console ("Show / Hide dev console") had the same latent issue and is fixed the same way.
+- **Lyric offset (and other settings) no longer get lost when you close Settings right after changing them.** Settings saves are debounced ~200ms to coalesce slider drags, so adjusting the "Lyric offset" slider (Settings → Lyrics timing) and immediately closing the window could discard that last change before it was written — the offset would appear to do nothing. Because the window was being destroyed, the pending save was thrown away with it. Now that the window only hides, the save always completes and the overlay picks up the new offset live. Technical: `src-tauri/src/lib.rs` setup now intercepts `WindowEvent::CloseRequested` for the `settings` and `main` windows, calls `api.prevent_close()`, and hides the window — matching the pre-declared `visible:false` + show/hide lifecycle that `open_settings_window` and the tray toggles already assumed. The `overlay` (no decorations/X) and `artist-info` (created-on-demand, meant to be destroyed) windows are intentionally left alone.
+
 ## [0.13.38] - 2026-05-23
 
 ### Fixed
