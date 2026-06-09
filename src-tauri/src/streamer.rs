@@ -80,6 +80,9 @@ struct StateResponse {
     /// User-facing source label derived from `source_app_id`. Mirrors the
     /// labelling in `src/Overlay.tsx::sourceLabel`. Empty when unknown.
     source_label: String,
+    /// Global lyric offset so the browser-source client can compute its
+    /// own cursor with the same anticipation as the desktop overlay.
+    anticipate_ms: i32,
 }
 
 async fn build_state(s: &AppState) -> StateResponse {
@@ -133,6 +136,7 @@ async fn build_state(s: &AppState) -> StateResponse {
         server_now_ms: now_ms,
         art_key,
         source_label,
+        anticipate_ms,
     }
 }
 
@@ -221,6 +225,70 @@ fn change_fingerprint(s: &StateResponse) -> String {
         s.cursor,
         s.art_key,
         s.lyrics.source.as_deref().unwrap_or(""),
+    )
+}
+
+/// Subset of Settings exposed to the OBS browser source so it can mirror the
+/// desktop overlay's appearance without needing the full Settings struct.
+#[derive(Serialize)]
+struct OverlaySettings {
+    font_family: String,
+    font_size_px: f32,
+    font_weight: i32,
+    text_color: String,
+    text_color_dim: String,
+    bg_color: String,
+    bg_opacity: f32,
+    text_align: String,
+    line_padding_px: i32,
+    layout_mode: String,
+    show_album_art: bool,
+    tint_bg_from_album_art: bool,
+    blur_album_art_background: bool,
+    bg_hidden: bool,
+    show_media: bool,
+    window_backdrop: String,
+    anticipate_ms: i32,
+}
+
+async fn get_settings_overlay(State(s): State<AppState>) -> impl IntoResponse {
+    let cfg = s.settings.read().await;
+    let body = OverlaySettings {
+        font_family: cfg.font_family.clone(),
+        font_size_px: cfg.font_size_px,
+        font_weight: cfg.font_weight,
+        text_color: cfg.text_color.clone(),
+        text_color_dim: cfg.text_color_dim.clone(),
+        bg_color: cfg.bg_color.clone(),
+        bg_opacity: cfg.bg_opacity,
+        text_align: cfg.text_align.clone(),
+        line_padding_px: cfg.line_padding_px,
+        layout_mode: cfg.layout_mode.clone(),
+        show_album_art: cfg.show_album_art,
+        tint_bg_from_album_art: cfg.tint_bg_from_album_art,
+        blur_album_art_background: cfg.blur_album_art_background,
+        bg_hidden: cfg.bg_hidden,
+        show_media: cfg.show_media,
+        window_backdrop: {
+            #[cfg(windows)]
+            {
+                serde_json::to_value(&cfg.window_backdrop)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| "acrylic".to_owned())
+            }
+            #[cfg(not(windows))]
+            { cfg.window_backdrop.clone() }
+        },
+        anticipate_ms: cfg.anticipate_ms,
+    };
+    (
+        StatusCode::OK,
+        [
+            (header::CACHE_CONTROL, "no-store"),
+            (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
+        ],
+        Json(body),
     )
 }
 
@@ -500,6 +568,7 @@ pub fn start(app: AppHandle, port: u16) -> Result<ServerHandle> {
 
     let app_router: Router = Router::new()
         .route("/state", get(get_state))
+        .route("/settings", get(get_settings_overlay))
         .route("/events", get(get_events))
         .route("/art", get(get_art))
         .route("/overlay", get(get_overlay))

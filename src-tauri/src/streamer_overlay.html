@@ -495,6 +495,107 @@
   }
   const onlySource = (params.get("only") || "").toLowerCase().trim();
 
+  // ── Settings sync ────────────────────────────────────────────────────
+  // Fetch /settings and apply user's desktop appearance to the overlay.
+  // URL params (?theme, ?accent, ?nochrome) take precedence — only apply
+  // from settings when the param was NOT explicitly set.
+  const hasThemeParam  = params.has("theme") && params.get("theme") !== "default";
+  const hasAccentParam = params.has("accent") && /^[0-9a-fA-F]{3,8}$/.test(params.get("accent") || "");
+  const hasNochrome    = params.get("nochrome") === "1";
+
+  // Track last-applied values so we only write DOM when something changed.
+  let lastCfgJson = "";
+
+  function hexToRgba(hex, opacityPct) {
+    const h = hex.replace(/^#/, "");
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    const a = Math.round(Math.min(100, Math.max(0, opacityPct)) * 255 / 100) / 255;
+    return `rgba(${r},${g},${b},${a.toFixed(3)})`;
+  }
+
+  function applySettings(cfg) {
+    if (!cfg) return;
+    const cfgJson = JSON.stringify(cfg);
+    if (cfgJson === lastCfgJson) return;
+    lastCfgJson = cfgJson;
+
+    const root = document.documentElement;
+    const $colEl   = document.getElementById("col");
+    const $curEl   = document.getElementById("cur");
+    const $prevEl  = document.getElementById("prev");
+    const $nextEl  = document.getElementById("next");
+    const $artEl   = document.getElementById("art");
+    const $metaEl  = document.getElementById("meta");
+    const $bgEl    = document.getElementById("bg");
+    const $plateEl = document.getElementById("plate");
+
+    // Font — always apply (not overrideable by URL params).
+    if ($colEl) $colEl.style.fontFamily = `"${cfg.font_family}", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+    if ($curEl) { $curEl.style.fontSize = cfg.font_size_px + "px"; $curEl.style.fontWeight = cfg.font_weight; }
+    const dimSize = (cfg.font_size_px * 0.6).toFixed(1);
+    if ($prevEl) { $prevEl.style.fontSize = dimSize + "px"; }
+    if ($nextEl) { $nextEl.style.fontSize = dimSize + "px"; }
+
+    // Text colors — only when no theme override is active.
+    if (!hasThemeParam) {
+      root.style.setProperty("--text", cfg.text_color);
+      root.style.setProperty("--text-dim", cfg.text_color_dim);
+    }
+
+    // Text align.
+    if ($colEl) $colEl.style.textAlign = cfg.text_align;
+
+    // Background plate — only when no theme override.
+    if (!hasThemeParam) {
+      if (cfg.bg_hidden) {
+        root.style.setProperty("--plate", "transparent");
+        if ($bgEl) $bgEl.style.display = "none";
+      } else {
+        const plateColor = hexToRgba(cfg.bg_color, cfg.bg_opacity);
+        root.style.setProperty("--plate", plateColor);
+        // bg_hidden off — let the blur/tint logic below control #bg visibility.
+        if ($bgEl) $bgEl.style.display = "";
+      }
+    }
+
+    // Album art visibility — only when nochrome is not active.
+    if (!hasNochrome && $artEl) {
+      $artEl.style.display = cfg.show_album_art ? "" : "none";
+    }
+
+    // Media/meta column.
+    if (!hasNochrome && $metaEl) {
+      $metaEl.style.display = cfg.show_media ? "" : "none";
+    }
+
+    // Tint/blur background — only when no theme override and not nochrome.
+    if (!hasThemeParam && !hasNochrome && $bgEl && !cfg.bg_hidden) {
+      if (!cfg.tint_bg_from_album_art && !cfg.blur_album_art_background) {
+        $bgEl.style.display = "none";
+      } else {
+        $bgEl.style.display = "";
+      }
+    }
+
+    // Line gap.
+    if ($colEl) $colEl.style.gap = cfg.line_padding_px + "px";
+  }
+
+  async function fetchAndApplySettings() {
+    try {
+      const res = await fetch("/settings", { cache: "no-store" });
+      if (!res.ok) return;
+      applySettings(await res.json());
+    } catch (_) {}
+  }
+
+  // Initial fetch before first render so settings are applied immediately.
+  fetchAndApplySettings();
+  // Periodic re-fetch — picks up live setting changes without a page reload.
+  setInterval(fetchAndApplySettings, 5000);
+
   // ── DOM refs ─────────────────────────────────────────────────────────
   const $bg    = document.getElementById("bg");
   const $art   = document.getElementById("art");
@@ -817,12 +918,35 @@
     return l.includes(filter);
   }
 
+  // ── Client-side cursor ────────────────────────────────────────────────
+  // Compute the active line index locally from the interpolated position
+  // rather than relying on the server-supplied cursor. The server polls
+  // at 100ms and can lag the desktop overlay's rAF-based cursor by a
+  // full line at boundaries. Client-side keeps them in sync.
+  let anticipateMs = 0;
+  function computeCursor(lines, t) {
+    if (!lines || lines.length === 0) return -1;
+    let pos = interpolatedPosMs(t);
+    if (anticipateMs >= 0) pos += anticipateMs;
+    else pos = Math.max(0, pos + anticipateMs);
+    let found = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].time_ms <= pos) found = i;
+      else break;
+    }
+    return found;
+  }
+
   // ── Render ───────────────────────────────────────────────────────────
   function render(s) {
     lastState = s;
     const t = s.track || {};
     const lyr = s.lyrics || {};
-    const cursor = typeof s.cursor === "number" ? s.cursor : -1;
+    if (typeof s.anticipate_ms === "number") anticipateMs = s.anticipate_ms;
+    const cursor = computeCursor(
+      Array.isArray(lyr.lines) ? lyr.lines : [],
+      t
+    );
 
     // Source filter — when ?only= is set and the current source doesn't
     // match, blank the layout instead of showing the wrong stream's
@@ -1073,6 +1197,19 @@
     const s = lastState;
     if (!s) return;
     const t = s.track || {};
+
+    // Client-side cursor advancement between SSE pushes. If the
+    // interpolated position has crossed a line boundary since the last
+    // render, re-render so the lyric display stays in sync with the
+    // desktop overlay's rAF-driven cursor.
+    const lyr = s.lyrics || {};
+    const lines = Array.isArray(lyr.lines) ? lyr.lines : [];
+    if (lyr.status === "synced" && lines.length > 0) {
+      const clientCursor = computeCursor(lines, t);
+      if (clientCursor !== lastCursor) {
+        render(s);
+      }
+    }
 
     // Progress bar.
     const dur = Number(t.duration_ms) || 0;

@@ -6,6 +6,12 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.47] - 2026-06-09
+
+### Added
+- **OBS browser source now mirrors your desktop settings automatically.** The OBS overlay (`/overlay`) used to have hardcoded font, colors, and layout. It now fetches your current desktop settings from a new `/settings` endpoint on the streamer server and applies them on load, then re-checks every 5 seconds so live changes (font size, text color, background opacity, show/hide album art, show/hide media column, etc.) are reflected without reloading the browser source in OBS. URL params (`?theme=`, `?accent=`, `?nochrome=`) still take precedence when explicitly set, so custom OBS presets are not overwritten. Controlled by the same Settings panel fields that drive the desktop overlay: font family/size/weight, text color, dim color, bg color + opacity, text alignment, line padding, show album art, show media column, transparent background, tint/blur from album art.
+- **New `/settings` endpoint on the streamer server.** Returns a JSON object with the overlay-relevant subset of settings (`font_family`, `font_size_px`, `font_weight`, `text_color`, `text_color_dim`, `bg_color`, `bg_opacity`, `text_align`, `line_padding_px`, `layout_mode`, `show_album_art`, `tint_bg_from_album_art`, `blur_album_art_background`, `bg_hidden`, `show_media`, `window_backdrop`, `anticipate_ms`). Same CORS and no-cache headers as `/state`. Available to any third-party browser-source client that wants to read the user's preferences.
+
 ## [0.13.46] - 2026-06-09
 
 ### Fixed
