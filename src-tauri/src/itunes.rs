@@ -123,6 +123,14 @@ async fn run(
         .spawn()
         .context("spawn powershell for iTunes poll")?;
     eprintln!("[itunes] poller spawned (pid={:?})", child.id());
+
+    // Assign the child to a JobObject so the OS kills it when our process
+    // exits, even under external SIGTERM where Tokio can't run Drop.
+    #[cfg(windows)]
+    if let Some(pid) = child.id() {
+        assign_to_job_object(pid);
+    }
+
     // _tmp_guard keeps the path entry alive (and auto-deletes the file on
     // drop) while the child reads it. When run() returns, the guard drops,
     // Tokio kills the child (kill_on_drop), and the script is removed from
@@ -272,4 +280,35 @@ fn unix_ms_now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(windows)]
+fn assign_to_job_object(pid: u32) {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_ALL_ACCESS};
+
+    unsafe {
+        let job = CreateJobObjectW(None, None);
+        let Ok(job) = job else { return };
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let _ = SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const _,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        );
+        if let Ok(proc) = OpenProcess(PROCESS_ALL_ACCESS, false, pid) {
+            let _ = AssignProcessToJobObject(job, proc);
+            let _ = CloseHandle(proc);
+        }
+        // Job handle must outlive the child. HANDLE is Copy (no Drop),
+        // so it stays open until our process exits, triggering the kill.
+        let _ = job;
+    }
 }

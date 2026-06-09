@@ -6,6 +6,15 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.46] - 2026-06-09
+
+### Fixed
+- **SMTC session-change churn during YouTube track transitions.** Each YouTube track change used to fire 6-8 rapid `SessionChanged` events, causing a burst of "attach_session failed / no active session / snapshot cleared" cycles in the background. Now debounced: the worker waits 200ms on the first SessionChanged, drains any duplicates that arrived during the pause, then processes once. No visible change (lyrics/art/metadata already worked), but removes unnecessary CPU churn and log noise during track switches.
+- **Update banner now appears in all overlay layouts.** The "update available / installing / restart" banner previously only rendered in the default three-line scroll layout. Users on single-line or full-page layouts never saw the in-overlay update prompt (the tray menu still worked). Now renders in all three layouts.
+- **PowerShell iTunes poller no longer orphans on forced exit.** During dev iteration (`pnpm tauri dev` hot-reload), the PowerShell COM-poller child process could survive the parent's SIGTERM because Tokio's `kill_on_drop` doesn't run under forced termination. Now the child is assigned to a Windows JobObject with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so the OS guarantees the child dies when the parent exits, regardless of how the parent is killed. No impact on end users (single cold start, OS reaps on shutdown).
+- **Lyric cache key collision on pipe character.** The in-memory lyric cache keyed entries as `"artist|title|duration"`, so an artist name containing `|` could collide with a different artist/title pair. Delimiter changed to ASCII unit separator (`\x1f`) which never appears in music metadata.
+- **Pandora desktop UIA tree walk cut in half.** The Pandora desktop adapter was doing two complete UIA tree walks per poll cycle (one for URL classification + ad detection, a second for track/artist/album extraction). Consolidated into a single DFS pass that collects all data at once.
+
 ## [0.13.45] - 2026-06-09
 
 ### Fixed

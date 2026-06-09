@@ -180,11 +180,10 @@ impl WebPlayerProbe for PandoraDesktopProbe {
                 Err(_) => continue,
             };
 
-            // Collect all Pandora URLs + countdown text in one DFS pass.
-            let (urls, countdown) = collect_pandora_uia_data(&automation, &root);
+            let uia = collect_pandora_uia_data(&automation, &root);
 
             // Classify: ad or normal track?
-            let state_result = classify_pandora_state(&urls, countdown.as_deref());
+            let state_result = classify_pandora_state(&uia.urls, uia.countdown.as_deref());
 
             // Read play/pause: WASAPI peak meter first (canonical, works
             // independent of Pandora's UIA hygiene), then fall back to
@@ -224,10 +223,9 @@ impl WebPlayerProbe for PandoraDesktopProbe {
                 }));
             }
 
-            // Normal track path — use the URL-extracted title/artist/album.
-            let Some((title, artist, album)) =
-                extract_track_from_uia_subtree(&automation, &root)
-            else {
+            // Normal track path — title/artist/album already extracted in
+            // the single UIA walk above.
+            let Some((title, artist, album)) = uia.track_info else {
                 continue;
             };
 
@@ -435,10 +433,16 @@ fn detect_playback_state_via_uia(
 ///
 /// Returns `(urls, countdown_text)`. The caller passes these to
 /// `classify_pandora_state` to decide ad vs. normal-track.
+struct UiaData {
+    urls: Vec<String>,
+    countdown: Option<String>,
+    track_info: Option<(String, String, String)>,
+}
+
 fn collect_pandora_uia_data(
     automation: &uiautomation::UIAutomation,
     root: &uiautomation::UIElement,
-) -> (Vec<String>, Option<String>) {
+) -> UiaData {
     static COUNTDOWN_RE: OnceLock<Regex> = OnceLock::new();
     let countdown_re = COUNTDOWN_RE.get_or_init(|| {
         Regex::new(r"^\d+:\d{2}$").expect("countdown regex is valid")
@@ -447,11 +451,14 @@ fn collect_pandora_uia_data(
     const MAX_NODES: usize = 10_000;
     let walker = match automation.get_control_view_walker() {
         Ok(w) => w,
-        Err(_) => return (Vec::new(), None),
+        Err(_) => return UiaData { urls: Vec::new(), countdown: None, track_info: None },
     };
 
     let mut urls: Vec<String> = Vec::new();
     let mut countdown: Option<String> = None;
+    let mut track: Option<String> = None;
+    let mut artist: Option<String> = None;
+    let mut album: Option<String> = None;
 
     let mut stack: Vec<uiautomation::UIElement> = vec![root.clone()];
     let mut visited = 0_usize;
@@ -465,15 +472,30 @@ fn collect_pandora_uia_data(
             break;
         }
 
-        // Collect Hyperlink URLs (track/artist/album classification).
         if let Some(value) = read_value_pattern(&node) {
-            if classify_pandora_url(&value).is_some() {
+            if let Some(kind) = classify_pandora_url(&value) {
                 urls.push(value);
+                // Extract track/artist/album names from the same node.
+                if let Ok(name) = node.get_name() {
+                    let trimmed = name.trim();
+                    if !trimmed.is_empty() {
+                        match kind {
+                            PandoraUrlKind::Track if track.is_none() => {
+                                track = Some(trimmed.to_string());
+                            }
+                            PandoraUrlKind::Artist if artist.is_none() => {
+                                artist = Some(trimmed.to_string());
+                            }
+                            PandoraUrlKind::Album if album.is_none() => {
+                                album = Some(trimmed.to_string());
+                            }
+                            _ => {}
+                        }
+                    }
+                }
             }
         }
 
-        // Collect countdown text (ad timer: "0:23", "1:05", etc.).
-        // Only capture the first match.
         if countdown.is_none() {
             if let Ok(name) = node.get_name() {
                 if countdown_re.is_match(name.trim()) {
@@ -482,7 +504,6 @@ fn collect_pandora_uia_data(
             }
         }
 
-        // Enqueue children in reverse (left-to-right DFS).
         if let Ok(first) = walker.get_first_child(&node) {
             let mut cur = Some(first);
             let mut kids: Vec<uiautomation::UIElement> = Vec::new();
@@ -496,84 +517,12 @@ fn collect_pandora_uia_data(
         }
     }
 
-    (urls, countdown)
-}
+    let track_info = match (track, artist) {
+        (Some(t), Some(a)) => Some((t, a, album.unwrap_or_default())),
+        _ => None,
+    };
 
-/// Pulled out as a free function so the URL-classification logic (the
-/// stable part) can be unit-tested without UIA.
-fn extract_track_from_uia_subtree(
-    automation: &uiautomation::UIAutomation,
-    root: &uiautomation::UIElement,
-) -> Option<(String, String, String)> {
-    const MAX_NODES: usize = 10_000;
-    let walker = automation.get_control_view_walker().ok()?;
-
-    let mut track: Option<String> = None;
-    let mut artist: Option<String> = None;
-    let mut album: Option<String> = None;
-
-    // DFS preorder. Push children in reverse so we pop them in document
-    // order — guarantees the FIRST Hyperlink of each kind in document
-    // order wins, which is the now-playing block.
-    let mut stack: Vec<uiautomation::UIElement> = vec![root.clone()];
-    let mut visited = 0_usize;
-
-    while let Some(node) = stack.pop() {
-        visited += 1;
-        if visited > MAX_NODES {
-            eprintln!(
-                "[pandora_desktop] tree walk hit MAX_NODES={MAX_NODES} before finding track"
-            );
-            break;
-        }
-
-        if let (Ok(name), Some(value)) = (node.get_name(), read_value_pattern(&node)) {
-            if let Some(kind) = classify_pandora_url(&value) {
-                let trimmed = name.trim();
-                if !trimmed.is_empty() {
-                    match kind {
-                        PandoraUrlKind::Track => {
-                            if track.is_none() {
-                                track = Some(trimmed.to_string());
-                            }
-                        }
-                        PandoraUrlKind::Artist => {
-                            if artist.is_none() {
-                                artist = Some(trimmed.to_string());
-                            }
-                        }
-                        PandoraUrlKind::Album => {
-                            if album.is_none() {
-                                album = Some(trimmed.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Early-out the moment we have track + artist. Album is optional;
-        // we won't make extra walk passes for it.
-        if track.is_some() && artist.is_some() {
-            break;
-        }
-
-        if let Ok(first) = walker.get_first_child(&node) {
-            let mut cur = Some(first);
-            let mut kids: Vec<uiautomation::UIElement> = Vec::new();
-            while let Some(c) = cur {
-                kids.push(c.clone());
-                cur = walker.get_next_sibling(&c).ok();
-            }
-            for c in kids.into_iter().rev() {
-                stack.push(c);
-            }
-        }
-    }
-
-    let track = track?;
-    let artist = artist?;
-    Some((track, artist, album.unwrap_or_default()))
+    UiaData { urls, countdown, track_info }
 }
 
 pub(crate) struct PandoraStateResult {

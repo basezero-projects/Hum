@@ -382,7 +382,13 @@ async fn run(
     while let Some(msg) = rx.recv().await {
         match msg {
             Msg::SessionChanged => {
-                eprintln!("[smtc] Msg::SessionChanged");
+                // Debounce: YouTube track transitions fire 6-8 SessionChanged
+                // in rapid succession. Wait briefly then drain the queue; stale
+                // events from the dying session are harmless to drop since
+                // attach_session + emit_full re-reads all state from scratch.
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                while rx.try_recv().is_ok() {}
+                eprintln!("[smtc] Msg::SessionChanged (debounced)");
                 hooks = match attach_session(&manager, &tx) {
                     Ok(h) => Some(h),
                     Err(e) => {

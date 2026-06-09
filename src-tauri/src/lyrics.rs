@@ -2018,7 +2018,7 @@ fn frac_to_ms(s: &str) -> u32 {
 
 fn cache_key(artist: &str, title: &str, duration_ms: u64) -> String {
     let dur_secs = duration_ms / 1000;
-    format!("{}|{}|{}", normalize(artist), normalize(title), dur_secs)
+    format!("{}\x1f{}\x1f{}", normalize(artist), normalize(title), dur_secs)
 }
 
 fn normalize(s: &str) -> String {

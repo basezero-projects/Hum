@@ -1,6 +1,6 @@
 [package]
 name = "hum"
-version = "0.13.45"
+version = "0.13.46"
 description = "Real-time synced lyrics overlay for any Windows media source"
 authors = ["SYVR Studios"]
 edition = "2021"
@@ -56,6 +56,8 @@ windows = { version = "0.58", features = [
   "Win32_Media_Audio",
   "Win32_Media_Audio_Endpoints",
   "Win32_System_Com",
+  "Win32_System_JobObjects",
+  "Win32_Security",
 ] }
 
 [profile.release]

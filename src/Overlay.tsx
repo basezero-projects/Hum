@@ -830,6 +830,7 @@ export default function Overlay() {
           <ServiceBg serviceName={ambientServiceName} />
         ) : null}
         <NudgeBanner banner={nudgeBanner} />
+        <UpdateBanner state={updateState} onInstall={installUpdate} />
         <div {...dragProps} style={innerRowStyle}>
           {showArt && albumArt ? (
             <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} dragRegion={isEdit} onClick={openArtistPanel} />
@@ -908,6 +909,7 @@ export default function Overlay() {
           <ServiceBg serviceName={ambientServiceName} />
         ) : null}
         <NudgeBanner banner={nudgeBanner} />
+        <UpdateBanner state={updateState} onInstall={installUpdate} />
         {showArt && albumArt ? <AlbumArtBadge dataUrl={albumArt.data_url} onClick={openArtistPanel} /> : null}
         {openArtistPanel && (!showArt || !albumArt) && lyrics?.status !== "unsupported" ? (
           <ArtistInfoDot onClick={openArtistPanel} />
