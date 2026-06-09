@@ -600,27 +600,45 @@ fn spawn_art_fetch(
     artist: String,
 ) {
     tauri::async_runtime::spawn(async move {
-        // If a web-bridge probe matches the current SMTC snapshot,
-        // skip art entirely on the SMTC side — the bridge has the
-        // real artist+title and will fetch art keyed to those values.
-        // Without this, smtc.rs would emit an art-loaded event keyed
-        // to Pandora's garbage tab title, racing the bridge's correct
-        // emission and potentially overwriting the SharedAlbumArt
-        // cache with the wrong value.
+        // Defer art to the web bridge ONLY when the bridge will actually
+        // supply it keyed to the title the overlay matches against:
+        //   - unreliable sources (Pandora): SMTC's title is a useless tab
+        //     title; only the bridge has the real song.
+        //   - foreground YouTube: the bridge normalizes the snapshot, so the
+        //     overlay shows (and matches art against) the normalized title
+        //     and the bridge fetches art keyed to that.
+        // Otherwise — background-tab / Topic-channel YouTube where the bridge
+        // read() returns None, or a normal SMTC source — fetch art here,
+        // keyed to the raw SMTC title the overlay is actually showing.
+        // Without the YouTube-window check, a backgrounded YouTube track got
+        // NO album art from anyone (smtc skipped, bridge never read).
         let source_app_id = session.SourceAppUserModelId()
             .ok()
             .map(|s| s.to_string())
             .unwrap_or_default();
-        if crate::web_bridge::any_probe_detects(&title, &source_app_id) {
+        let bridge_handles_art =
+            crate::web_bridge::any_unreliable_probe_detects(&title, &source_app_id)
+                || crate::web_bridge::youtube_window_shows_track(&title);
+        if bridge_handles_art {
             return;
         }
 
+        // Clean uploader noise the way the lyrics resolver does so YouTube
+        // (and any decorated) titles resolve a real cover: clean_artist
+        // strips "- Topic"/VEVO, clean_title strips "(Lyrics)"/"(Official
+        // Video)", and fetch_art_via_itunes's title-split variant recovers
+        // "Artist - Song" shapes. The cached payload below stays keyed to
+        // the RAW title/artist so it matches the title the overlay shows.
+        let query_artist = crate::lyrics::clean_artist(&artist);
+        let query_title = crate::lyrics::clean_title(&title);
         // First try iTunes Search if we have something to query with.
         // Empty artist + title means SMTC didn't give us a real song
         // (idle session, etc.) — skip the external call.
-        let itunes_data_url = if !title.trim().is_empty() {
+        let itunes_data_url = if !query_title.trim().is_empty() {
             match build_itunes_http_client() {
-                Ok(client) => fetch_art_via_itunes(&client, &artist, &title).await,
+                Ok(client) => {
+                    fetch_art_via_itunes(&client, &query_artist, &query_title).await
+                }
                 Err(_) => None,
             }
         } else {

@@ -184,6 +184,15 @@ pub fn start(
             LruCache::new(NonZeroUsize::new(LYRICS_CACHE_CAP).expect("cap > 0")),
         ));
         let mut last_key = String::new();
+        // Wait-for-bridge state. When a foreground YouTube track is detected
+        // but the bridge hasn't yet published normalized metadata, hold off
+        // resolving the raw channel/decorated title for a short grace window
+        // so the FIRST resolution uses clean metadata (one /api/get hit)
+        // instead of grinding the full fallback chain on a wrong-artist miss.
+        #[cfg(windows)]
+        let mut bridge_wait_key = String::new();
+        #[cfg(windows)]
+        let mut bridge_wait_since: Option<std::time::Instant> = None;
 
         // Wake on startup in case a track was already playing when we started.
         let _ = tx.send(());
@@ -248,8 +257,15 @@ pub fn start(
                 // Pandora web with the UIA probe broken / not-yet-read is the
                 // motivating case — we'd otherwise look up the browser tab
                 // title as if it were a song and get noise back.
+                //
+                // Uses `any_unreliable_probe_detects` (NOT `any_probe_detects`)
+                // so YouTube is excluded: its SMTC title IS the song (just
+                // decorated), so a stale/empty bridge must still flow to the
+                // resolver — `clean_title` + `strip_youtube_noise` can resolve
+                // it. Without this, every YouTube song hit the Pandora-style
+                // short-circuit and emitted `unsupported-source`.
                 let unreliable = !fresh
-                    && crate::web_bridge::any_probe_detects(
+                    && crate::web_bridge::any_unreliable_probe_detects(
                         &snap.title,
                         snap.source_app_id.as_deref().unwrap_or(""),
                     );
@@ -293,6 +309,73 @@ pub fn start(
             if key == last_key {
                 continue;
             }
+
+            // Wait-for-bridge gate. A foreground YouTube track arrives via
+            // SMTC (track-changed) ~2s before the bridge publishes the
+            // normalized "Artist - Song" split. Resolving the raw title now
+            // (channel-as-artist, decorated title) misses /api/get and burns
+            // the whole /api/search + strip-retry + SimpMusic + NetEase chain
+            // (~20-30s) right before the bridge's clean data lands and
+            // re-resolves. Instead, show Fetching and wait up to the grace
+            // window for the bridge — the same `youtube_window_shows_track`
+            // condition that gates the bridge's own normalization, so when it
+            // returns true the bridge WILL deliver. Non-YouTube Chromium
+            // sources (Spotify Web) and background-tab YouTube return false
+            // here, so they resolve immediately with no added latency.
+            #[cfg(windows)]
+            {
+                const BRIDGE_GRACE: std::time::Duration =
+                    std::time::Duration::from_millis(2500);
+                let is_chromium_source = {
+                    let a = snap.source_app_id.as_deref().unwrap_or("").to_lowercase();
+                    a.contains("chrome")
+                        || a.contains("msedge")
+                        || a.contains("edge")
+                        || a.contains("brave")
+                        || a.contains("opera")
+                        || a.contains("vivaldi")
+                };
+                if !bridge_fresh
+                    && !unreliable_no_bridge
+                    && !is_video_bridge
+                    && is_chromium_source
+                    && crate::web_bridge::youtube_window_shows_track(&snap.title)
+                {
+                    if key != bridge_wait_key {
+                        bridge_wait_key = key.clone();
+                        bridge_wait_since = Some(std::time::Instant::now());
+                    }
+                    let waited = bridge_wait_since.map(|t| t.elapsed()).unwrap_or_default();
+                    if waited < BRIDGE_GRACE {
+                        // Show Fetching (clear the previous track's lyrics) and
+                        // wait — DON'T claim last_key, so the bridge's
+                        // web-bridge-updated wake re-enters and resolves clean.
+                        let mut s = shared.write().await;
+                        *s = CurrentLyrics {
+                            track_key: key.clone(),
+                            status: Status::Fetching,
+                            source: None,
+                            line_count: 0,
+                            lines: vec![],
+                            plain: None,
+                            translation: None,
+                            errors: vec![],
+                            track: TrackEcho {
+                                title: effective_title.clone(),
+                                artist: effective_artist.clone(),
+                                album: effective_album.clone(),
+                                duration_ms: snap.duration_ms,
+                            },
+                            promo: None,
+                        };
+                        emit_state(&app, &s);
+                        continue;
+                    }
+                    // Grace expired (bridge never delivered) — fall through and
+                    // resolve the raw title as a last resort.
+                }
+            }
+
             last_key = key.clone();
 
             let track = TrackEcho {

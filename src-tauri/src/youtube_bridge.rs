@@ -82,6 +82,14 @@ impl WebPlayerProbe for YouTubeProbe {
         "youtube-web"
     }
 
+    // YouTube's SMTC title is the real (decorated) song, not a placeholder,
+    // so a missing/stale bridge read must NOT short-circuit the lyrics
+    // resolver to Unsupported — `clean_title` + `strip_youtube_noise` can
+    // still resolve it from the raw title. See the trait default's docs.
+    fn smtc_unreliable_without_bridge(&self) -> bool {
+        false
+    }
+
     fn detects(&self, smtc_title: &str, smtc_app_id: &str) -> bool {
         // YouTube comes through SMTC via Chrome. Cheap gate: the SMTC
         // source is a Chromium browser AND the title is non-empty.
@@ -373,6 +381,15 @@ mod tests {
         // Single-char prefix must not be treated as an artist.
         let (_artist, title) = parse_youtube_metadata("A - B", "Chan");
         assert_eq!(title, "A - B");
+    }
+
+    #[test]
+    fn youtube_does_not_short_circuit_lyrics() {
+        // YouTube's SMTC title is a real song — a stale bridge must NOT
+        // mark it unreliable (which would emit `unsupported-source` and
+        // skip the resolver). This guards the v0.13.43 fix.
+        use crate::web_bridge::WebPlayerProbe;
+        assert!(!YouTubeProbe.smtc_unreliable_without_bridge());
     }
 
     #[test]

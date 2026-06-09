@@ -232,13 +232,41 @@ pub trait WebPlayerProbe: Send + Sync {
     /// the SMTC track matches the window it's about to scrape. Probes that
     /// scrape everything from the UIA tree ignore these.
     fn read(&self, smtc_title: &str, smtc_artist: &str) -> anyhow::Result<Option<WebBridgeTrack>>;
+
+    /// When this probe's `detects()` matches but the bridge has no fresh
+    /// read, should the lyrics resolver treat the SMTC snapshot as
+    /// unreliable and short-circuit to `Status::Unsupported`?
+    ///
+    /// `true` (default) for sources whose SMTC title is a non-song
+    /// placeholder the resolver can't use — Pandora web ("{station} - Now
+    /// Playing on Pandora"), Pandora desktop, video services. For those,
+    /// running the resolver on the raw title is worse than honestly saying
+    /// "unavailable".
+    ///
+    /// `false` for sources whose SMTC title IS the song, merely decorated
+    /// by the uploader — YouTube. There the resolver's `clean_title` +
+    /// `strip_youtube_noise` retry can still find lyrics from the raw
+    /// title, so it must NOT be blocked. (Without this, every YouTube
+    /// track short-circuited to `unsupported-source` because `detects()`
+    /// matches any Chromium tab but a normal song never produced a fresh
+    /// bridge read.)
+    fn smtc_unreliable_without_bridge(&self) -> bool {
+        true
+    }
 }
 
-/// Quick check: does ANY registered probe think the current SMTC snapshot
-/// is unreliable? The lyrics resolver uses this to decide whether to
-/// surface `Status::Unsupported` when the bridge cache is empty/stale.
-pub fn any_probe_detects(smtc_title: &str, smtc_app_id: &str) -> bool {
-    PROBES.iter().any(|p| p.detects(smtc_title, smtc_app_id))
+/// Does any registered probe that renders the SMTC snapshot UNUSABLE without
+/// a fresh bridge read (Pandora, video services) match the current snapshot?
+/// The lyrics resolver uses this to decide whether a stale/empty bridge means
+/// "surface `Status::Unsupported`", and `smtc::spawn_art_fetch` uses it to
+/// decide whether to defer art to the bridge. YouTube is excluded (its SMTC
+/// title is the real, if decorated, song), so a YouTube track with no fresh
+/// bridge read still flows to the normal LRCLib resolver / SMTC art lookup
+/// instead of being short-circuited.
+pub fn any_unreliable_probe_detects(smtc_title: &str, smtc_app_id: &str) -> bool {
+    PROBES
+        .iter()
+        .any(|p| p.smtc_unreliable_without_bridge() && p.detects(smtc_title, smtc_app_id))
 }
 
 /// Concrete probe registry. Build-time static — new probes ship as new
