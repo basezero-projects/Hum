@@ -25,6 +25,9 @@ mod youtube_bridge;
 #[cfg(windows)]
 mod backdrop;
 
+#[cfg(windows)]
+mod aspect_lock;
+
 mod contrast;
 mod lyrics;
 mod mode;
@@ -125,6 +128,18 @@ fn set_update_indicator(
     };
     item.set_text(new_text).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Frontend pushes the overlay's content-derived width:height ratio here
+/// whenever the layout changes (font size, layout mode, media column
+/// toggle). The WM_SIZING subclass (aspect_lock.rs) enforces it during
+/// user drags so the window always resizes uniformly.
+#[tauri::command]
+fn set_overlay_aspect(ratio: f64) {
+    #[cfg(windows)]
+    aspect_lock::set_aspect(ratio);
+    #[cfg(not(windows))]
+    let _ = ratio;
 }
 
 /// Managed state — handle to the dynamic-label "Check for updates" /
@@ -302,6 +317,9 @@ pub fn run() {
                             if let Err(e) = backdrop::apply_backdrop(hwnd, kind) {
                                 eprintln!("backdrop: apply_backdrop on startup failed: {e:?}");
                             }
+                            // Aspect-ratio lock: corrects WM_SIZING drag
+                            // rects so the overlay always resizes uniformly.
+                            aspect_lock::install(hwnd);
                         }
                         Err(e) => {
                             eprintln!("backdrop: overlay.hwnd() failed: {e:?}");
@@ -454,6 +472,7 @@ pub fn run() {
             open_artist_panel_cmd,
             close_artist_panel_cmd,
             open_ticket_url,
+            set_overlay_aspect,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

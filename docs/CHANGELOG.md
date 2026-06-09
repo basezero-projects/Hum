@@ -6,6 +6,14 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.45] - 2026-06-09
+
+### Fixed
+- **Aspect-ratio locked resize now works from any edge or corner.** Dragging any edge of the overlay (left, right, top, bottom, or any corner) now scales the entire window proportionally, preserving its current shape. Previously the resize was broken: horizontal drags stretched the window into a thin ribbon, vertical drags caused runaway visual glitching, and the window could end up at wildly wrong proportions. The root cause was twofold: (1) the JS frontend was pushing a content-derived aspect ratio to Rust, but that ratio shifted as the window scaled (content reflowed at different widths), creating a feedback loop between JS `setSize` calls and the OS-level lock; (2) the earlier implementation depended on `WM_ENTERSIZEMOVE` to capture the initial ratio, but that message never fired for Tauri's borderless window. Fix: the WM_SIZING subclass now reads the window's actual dimensions via `GetWindowRect` on every sizing message and enforces that exact ratio, with no JS involvement. The JS resize observer and `setSize` cycle were removed entirely. Technical: `aspect_lock.rs` uses a Win32 WndProc subclass (`SetWindowSubclass`) that intercepts `WM_SIZING` messages inside Windows' modal resize loop, correcting the proposed drag rectangle before the OS applies it. This is synchronous (no post-hoc snapping), so the window never exists at a wrong ratio even for a single frame.
+
+### Added
+- **New Hum logo (glyph-only waveform + music notes).** The overlay watermark and all app icons now use the new hm-waveform design. The watermark renders glyph-only (no box frame) and auto-switches between white and black variants depending on whether the overlay is in light or dark text mode (controlled by the auto-contrast system that samples the screen behind the window). App icons (Windows, macOS, iOS, Android) all regenerated from the new mark.
+
 ## [0.13.44] - 2026-06-09
 
 ### Added

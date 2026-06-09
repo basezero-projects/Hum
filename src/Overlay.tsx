@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { check as checkForUpdate, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
   CurrentLyrics,
@@ -69,9 +68,6 @@ export default function Overlay() {
   // practice — the row height was driven by the image's intrinsic size).
   const [lyricsColEl, setLyricsColEl] = useState<HTMLDivElement | null>(null);
   const [artSize, setArtSize] = useState<number>(80);
-  // Inner row element ref — drives the auto-resize of the window's
-  // height to match content. No empty space inside the window.
-  const [innerRowEl, setInnerRowEl] = useState<HTMLDivElement | null>(null);
   // Raw screen-behind-the-window color sample from contrast.rs's screen-
   // capture worker. Null until the first sample arrives. Carries RGB so
   // we can compute both luminance AND saturation downstream — a tan/gold
@@ -330,54 +326,8 @@ export default function Overlay() {
     };
   }, []);
 
-  // Track the overlay window's inner dimensions for the scale-with-window text
-  // feature, AND make the window resize "as one": the overlay scales from its
-  // WIDTH (wider → bigger text → taller, via the content ResizeObserver). A
-  // raw vertical drag would otherwise change height independently and then get
-  // corrected, which is the visual glitch. So when the user drags a top/bottom
-  // edge, convert that height change into the equivalent WIDTH change — the
-  // font scales and the content-height observer settles the height to match,
-  // giving the exact same effect as dragging a side edge.
-  useEffect(() => {
-    let lastW = window.innerWidth;
-    let lastH = window.innerHeight;
-    let raf = 0;
-    const handler = () => {
-      const w = window.innerWidth;
-      const h = window.innerHeight;
-      const dw = Math.abs(w - lastW);
-      const dh = Math.abs(h - lastH);
-      if (dh > dw + 1 && lastH > 4) {
-        // Vertical drag → proportional width change (resize as one).
-        const targetW = Math.max(520, Math.round(lastW * (h / lastH)));
-        setWinSize({ w: targetW, h }); // width drives the font scale immediately
-        lastW = targetW;
-        lastH = h;
-        cancelAnimationFrame(raf);
-        raf = requestAnimationFrame(async () => {
-          try {
-            const win = getCurrentWindow();
-            const sf = await win.scaleFactor();
-            const curH = (await win.outerSize()).height / sf;
-            await win.setSize(new LogicalSize(targetW, curH));
-          } catch {
-            // Window API unavailable — non-fatal.
-          }
-        });
-      } else {
-        // Horizontal drag (or programmatic): width drives scale; the content
-        // ResizeObserver settles the height.
-        setWinSize({ w, h });
-        lastW = w;
-        lastH = h;
-      }
-    };
-    window.addEventListener("resize", handler);
-    return () => {
-      window.removeEventListener("resize", handler);
-      cancelAnimationFrame(raf);
-    };
-  }, []);
+  // (Window sizing — both the width→font tracking and the height-fit — is
+  // handled by the single content-keyed effect below.)
 
   // 500ms progress-bar repaint. Cheap because the bar reads
   // `track.position_ms + Date.now()-last_update` inline at render and only
@@ -487,48 +437,15 @@ export default function Overlay() {
     return () => ro.disconnect();
   }, [lyricsColEl]);
 
-  // Auto-resize the OS window's height to match the inner row's content
-  // height + a small padding buffer. Result: no empty vertical space
-  // inside the window. User can still drag the right edge to make it
-  // wider (which scales text larger, which auto-grows the window
-  // height to match). Dragging the bottom edge effectively snaps back
-  // to content height on the next observe tick.
+  // Aspect lock is enforced at the OS level (aspect_lock.rs captures the
+  // window's current ratio on WM_ENTERSIZEMOVE and corrects WM_SIZING). JS
+  // only tracks window width for font scaling — no setSize from resize events.
   useEffect(() => {
-    if (!innerRowEl) return;
-    let inFlight = false;
-    const apply = async (rowH: number) => {
-      if (inFlight) return;
-      inFlight = true;
-      try {
-        const win = getCurrentWindow();
-        const padding = 24; // top + bottom container padding (12 + 12)
-        const targetH = Math.max(60, Math.round(rowH + padding));
-        const cur = await win.outerSize();
-        const sf = await win.scaleFactor();
-        const curW = cur.width / sf;
-        const curH = cur.height / sf;
-        if (Math.abs(curH - targetH) > 2) {
-          await win.setSize(new LogicalSize(curW, targetH));
-        }
-      } catch {
-        // Window APIs not available — no-op (shouldn't happen in Tauri).
-      } finally {
-        inFlight = false;
-      }
-    };
-    const ro = new ResizeObserver((entries) => {
-      const h = entries[0]?.contentRect.height;
-      if (h && h > 0) apply(h);
-    });
-    ro.observe(innerRowEl);
-    // Initial measure for the very first render.
-    apply(innerRowEl.getBoundingClientRect().height);
-    // NOTE: vertical (top/bottom-edge) drags are handled by the winSize
-    // listener below, which converts them into a proportional WIDTH change so
-    // the whole overlay scales as one. The RO here only re-clamps height to
-    // content after a font/width change.
-    return () => ro.disconnect();
-  }, [innerRowEl]);
+    const onResize = () =>
+      setWinSize({ w: window.innerWidth, h: window.innerHeight });
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   let prev: LyricLine | undefined;
   let cur: LyricLine | undefined;
@@ -787,7 +704,10 @@ export default function Overlay() {
   // background without a hard-edged box.
   const watermark = (
     <img
-      src="/hum-logo.png"
+      // Match the lyric color: when auto-contrast flips the text dark over a
+      // light background (most visible in transparent mode), use the black
+      // mark so the watermark stays legible too.
+      src={autoColorActive && surfaceIsLight ? "/hum-logo-dark.png" : "/hum-logo.png"}
       alt=""
       draggable={false}
       style={{
@@ -820,7 +740,10 @@ export default function Overlay() {
     justifyContent: "center",
     alignItems: layoutMode === "full_page" ? alignToFlex(settings.text_align) : "stretch",
     gap: layoutMode === "full_page" ? settings.line_padding_px : 0,
-    padding: "12px 16px",
+    // Padding scales with the window so the content fills the aspect-locked
+    // height exactly (no dead space / clipping as it zooms). 12px is half the
+    // PADDING constant in the sizing effect above — keep them in sync.
+    padding: `${12 * scale}px ${16 * scale}px`,
     boxSizing: "border-box",
     background: containerBg,
     fontFamily: `"${settings.font_family}", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`,
@@ -907,7 +830,7 @@ export default function Overlay() {
           <ServiceBg serviceName={ambientServiceName} />
         ) : null}
         <NudgeBanner banner={nudgeBanner} />
-        <div {...dragProps} ref={setInnerRowEl} style={innerRowStyle}>
+        <div {...dragProps} style={innerRowStyle}>
           {showArt && albumArt ? (
             <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} dragRegion={isEdit} onClick={openArtistPanel} />
           ) : null}
@@ -1051,7 +974,7 @@ export default function Overlay() {
         <BlurredAlbumBg dataUrl={albumArt!.data_url} tintColor={bgRgba} />
       ) : null}
       <NudgeBanner banner={nudgeBanner} />
-      <div {...dragProps} ref={setInnerRowEl} style={outerStackStyle}>
+      <div {...dragProps} style={outerStackStyle}>
         <UpdateBanner state={updateState} onInstall={installUpdate} />
         {openArtistPanel && (!showArt || !albumArt) && lyrics?.status !== "unsupported" ? (
           <ArtistInfoDot onClick={openArtistPanel} />
