@@ -210,6 +210,17 @@ export default function SettingsView() {
             ]}
           />
         </Row>
+        <Toggle
+          label="Transparent background (lyrics only)"
+          checked={s.bg_hidden}
+          onChange={(v) => update("bg_hidden", v)}
+        />
+        <Hint>
+          Hides every background layer — blurred album art, color tint,
+          background paint, and the window backdrop — so only the lyrics, art,
+          and media info float over the desktop. Toggle on the fly with{" "}
+          <code>Ctrl+Alt+T</code>.
+        </Hint>
       </Section>
 
       <Section title="Layout">
@@ -241,6 +252,16 @@ export default function SettingsView() {
           checked={s.show_album_art}
           onChange={(v) => update("show_album_art", v)}
         />
+        <Toggle
+          label="Show media info column"
+          checked={s.show_media}
+          onChange={(v) => update("show_media", v)}
+        />
+        <Hint>
+          The right-hand column with the track title, progress bar, and source
+          badge. Turn it off to show just the lyrics. Toggle on the fly with{" "}
+          <code>Ctrl+Alt+H</code>.
+        </Hint>
         <Toggle
           label="Show translated lyrics (when available)"
           checked={s.show_translation}

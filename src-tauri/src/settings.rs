@@ -82,10 +82,35 @@ pub struct Settings {
     /// syncs the plugin state on every save.
     #[serde(default)]
     pub launch_on_startup: bool,
+    /// Transparent mode (Ctrl+Alt+T): suppress every background layer in the
+    /// overlay AND drop the DWM window backdrop to None, so only the lyrics /
+    /// art / metadata float over the desktop. Default off.
+    #[serde(default)]
+    pub bg_hidden: bool,
+    /// Show the right-hand metadata column ("media player"). Toggle: Ctrl+Alt+M.
+    /// Default on.
+    #[serde(default = "default_true")]
+    pub show_media: bool,
 }
 
 fn default_ad_break_promos_enabled() -> bool {
     true
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// The DWM backdrop that should actually be applied to the overlay window for
+/// a given settings state: None while transparent mode is on (so the window is
+/// truly see-through), otherwise the user's configured backdrop.
+#[cfg(windows)]
+pub fn effective_backdrop(s: &Settings) -> BackdropKind {
+    if s.bg_hidden {
+        BackdropKind::None
+    } else {
+        s.window_backdrop
+    }
 }
 
 impl Default for Settings {
@@ -125,6 +150,8 @@ impl Default for Settings {
             window_backdrop: String::from("acrylic"),
             ad_break_promos_enabled: true,
             launch_on_startup: false,
+            bg_hidden: false,
+            show_media: true,
         }
     }
 }
@@ -231,7 +258,10 @@ pub async fn update_settings(
     patch: Value,
 ) -> Result<Settings, String> {
     #[cfg(windows)]
-    let backdrop_changed = patch.get("window_backdrop").is_some();
+    // bg_hidden also drives the effective backdrop (None vs configured), so a
+    // change to either must re-apply it.
+    let backdrop_changed =
+        patch.get("window_backdrop").is_some() || patch.get("bg_hidden").is_some();
     // Hold the write lock for the full read-merge-write so two windows
     // (Overlay + Settings) calling `update_settings` concurrently can't
     // clobber each other. Previously the read-clone happened under a
@@ -268,7 +298,7 @@ pub async fn update_settings(
             match overlay.hwnd() {
                 Ok(raw_hwnd) => {
                     let hwnd = windows::Win32::Foundation::HWND(raw_hwnd.0);
-                    if let Err(e) = crate::backdrop::apply_backdrop(hwnd, merged.window_backdrop) {
+                    if let Err(e) = crate::backdrop::apply_backdrop(hwnd, effective_backdrop(&merged)) {
                         eprintln!("backdrop: re-apply on settings change failed: {e:?}");
                     }
                 }

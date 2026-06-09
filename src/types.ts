@@ -47,6 +47,12 @@ export type Settings = {
   show_artist_info_panel: boolean;
   ad_break_promos_enabled: boolean;
   launch_on_startup: boolean;
+  // Transparent mode (Ctrl+Alt+T): suppress every background layer — blurred
+  // album art, service-color background, album tint, bg paint, AND the DWM
+  // window backdrop — so only the lyrics/art/metadata float over the desktop.
+  bg_hidden: boolean;
+  // Show the right-hand metadata column ("media player"). Toggle: Ctrl+Alt+H.
+  show_media: boolean;
 };
 
 export type TicketStatus = "available" | "sold_out";

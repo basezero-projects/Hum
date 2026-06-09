@@ -825,6 +825,27 @@ async fn fetch_lrclib(
         }
     }
 
+    // Reversed "Song - Artist" uploads. Some lyric channels (e.g. "Pillow")
+    // title videos "Song - Artist (Lyrics)" instead of "Artist - Song", so the
+    // YouTube parser put the real SONG in the artist field and the real ARTIST
+    // in the title field — every search above looked up the wrong half and
+    // missed (real failure: "Hanging By A Moment - Lifehouse"). When all else
+    // misses, retry searching the ARTIST field as the track name with the
+    // roles swapped. pick_best's duration gate keeps this from false-matching a
+    // normal "Artist - Song" (a real artist name rarely doubles as a song
+    // title of the same length).
+    if !artist.trim().is_empty() && !artist.eq_ignore_ascii_case(title) {
+        let artist_as_title = strip_youtube_noise(artist);
+        if let Ok(records) = try_search_lrclib_once(client, &artist_as_title).await {
+            if let Some(rec) = pick_best(records, &artist_as_title, title, duration_ms) {
+                let cached = to_cached(rec);
+                if !matches!(cached, CachedLyrics::NotFound) {
+                    return Ok((cached, "lrclib-search".into()));
+                }
+            }
+        }
+    }
+
     // Both completed but had no content → authoritative NotFound.
     if get_res.is_ok() && search_res.is_ok() {
         return Ok((CachedLyrics::NotFound, "lrclib".into()));
@@ -1698,7 +1719,32 @@ pub fn clean_title(title: &str) -> String {
     //    (`strip_youtube_noise`) see a clean title before stripping the
     //    leading `"Shaggy - "` channel prefix.
     let cleaned = bare_trailing_tag_cleaner().replace(&cleaned, "$1").to_string();
-    cleaned.trim().to_string()
+    // 6. Strip leading/trailing decorative symbols + emoji that lyric channels
+    //    sprinkle on titles (e.g. "Hanging By A Moment - Lifehouse 🎵", "♪",
+    //    "►", "⭐"). Left on, the trailing 🎵 rode through every cleaner and
+    //    poisoned both the LRCLib query and the iTunes art lookup. Only the
+    //    ends are trimmed, so a symbol legitimately inside a title is untouched.
+    strip_decorative_symbols(cleaned.trim())
+}
+
+/// Trim leading/trailing emoji, music notes, dingbats, arrows, and geometric
+/// decoration (plus surrounding whitespace) that YouTube uploaders add to
+/// titles. Interior characters are never touched.
+fn strip_decorative_symbols(s: &str) -> String {
+    let is_decoration = |c: char| {
+        let u = c as u32;
+        (0x1F000..=0x1FAFF).contains(&u)   // emoji / pictographs / supplemental symbols
+            || (0x2600..=0x27BF).contains(&u) // misc symbols + dingbats (☀ ✨ ➤)
+            || (0x2190..=0x21FF).contains(&u) // arrows
+            || (0x25A0..=0x25FF).contains(&u) // geometric shapes (► ■ ●)
+            || (0x2B00..=0x2BFF).contains(&u) // misc symbols & arrows (⭐ ⬆)
+            || (0x2660..=0x2667).contains(&u) // card suits
+            || (0x2669..=0x266F).contains(&u) // music notes ♩ ♪ ♫ ♬
+            || (0xFE00..=0xFE0F).contains(&u) // variation selectors
+            || u == 0x200D                    // zero-width joiner
+    };
+    s.trim_matches(|c: char| is_decoration(c) || c.is_whitespace())
+        .to_string()
 }
 
 // Trailing media file extension — `.wmv`, `.mp4`, etc. Triggered by real
@@ -2028,6 +2074,14 @@ mod tests {
         assert_eq!(clean_title("Test Song [HD] (4K)"), "Test Song");
         assert_eq!(clean_title("Track Name (Live at Wembley)"), "Track Name");
         assert_eq!(clean_title("Plain Title"), "Plain Title");
+
+        // ── decorative emoji / symbol stripping (lyric-channel chrome) ────
+        assert_eq!(clean_title("Hanging By A Moment - Lifehouse (Lyrics) 🎵"), "Hanging By A Moment - Lifehouse");
+        assert_eq!(clean_title("Stay 🎶"), "Stay");
+        assert_eq!(clean_title("♪ Dreams ♪"), "Dreams");
+        assert_eq!(clean_title("► Let Her Go"), "Let Her Go");
+        // Interior punctuation is preserved.
+        assert_eq!(clean_title("P!nk"), "P!nk");
 
         // ── v0.10.11 — Official Audio variants ───────────────────────────
         assert_eq!(clean_title("Dreams (Official Audio)"), "Dreams");

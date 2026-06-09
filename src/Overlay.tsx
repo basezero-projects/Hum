@@ -43,6 +43,8 @@ const DEFAULT_SETTINGS: Settings = {
   show_artist_info_panel: true,
   ad_break_promos_enabled: true,
   launch_on_startup: false,
+  bg_hidden: false,
+  show_media: true,
 };
 
 export default function Overlay() {
@@ -328,12 +330,53 @@ export default function Overlay() {
     };
   }, []);
 
-  // Track the overlay window's inner dimensions for the scale-with-window
-  // text feature. Throttled implicitly by the browser's resize coalescing.
+  // Track the overlay window's inner dimensions for the scale-with-window text
+  // feature, AND make the window resize "as one": the overlay scales from its
+  // WIDTH (wider → bigger text → taller, via the content ResizeObserver). A
+  // raw vertical drag would otherwise change height independently and then get
+  // corrected, which is the visual glitch. So when the user drags a top/bottom
+  // edge, convert that height change into the equivalent WIDTH change — the
+  // font scales and the content-height observer settles the height to match,
+  // giving the exact same effect as dragging a side edge.
   useEffect(() => {
-    const handler = () => setWinSize({ w: window.innerWidth, h: window.innerHeight });
+    let lastW = window.innerWidth;
+    let lastH = window.innerHeight;
+    let raf = 0;
+    const handler = () => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const dw = Math.abs(w - lastW);
+      const dh = Math.abs(h - lastH);
+      if (dh > dw + 1 && lastH > 4) {
+        // Vertical drag → proportional width change (resize as one).
+        const targetW = Math.max(520, Math.round(lastW * (h / lastH)));
+        setWinSize({ w: targetW, h }); // width drives the font scale immediately
+        lastW = targetW;
+        lastH = h;
+        cancelAnimationFrame(raf);
+        raf = requestAnimationFrame(async () => {
+          try {
+            const win = getCurrentWindow();
+            const sf = await win.scaleFactor();
+            const curH = (await win.outerSize()).height / sf;
+            await win.setSize(new LogicalSize(targetW, curH));
+          } catch {
+            // Window API unavailable — non-fatal.
+          }
+        });
+      } else {
+        // Horizontal drag (or programmatic): width drives scale; the content
+        // ResizeObserver settles the height.
+        setWinSize({ w, h });
+        lastW = w;
+        lastH = h;
+      }
+    };
     window.addEventListener("resize", handler);
-    return () => window.removeEventListener("resize", handler);
+    return () => {
+      window.removeEventListener("resize", handler);
+      cancelAnimationFrame(raf);
+    };
   }, []);
 
   // 500ms progress-bar repaint. Cheap because the bar reads
@@ -480,6 +523,10 @@ export default function Overlay() {
     ro.observe(innerRowEl);
     // Initial measure for the very first render.
     apply(innerRowEl.getBoundingClientRect().height);
+    // NOTE: vertical (top/bottom-edge) drags are handled by the winSize
+    // listener below, which converts them into a proportional WIDTH change so
+    // the whole overlay scales as one. The RO here only re-clamps height to
+    // content after a font/width change.
     return () => ro.disconnect();
   }, [innerRowEl]);
 
@@ -656,6 +703,7 @@ export default function Overlay() {
   // bg_opacity=0 (the default — fully transparent background). Otherwise the
   // toggle would be a no-op for most users.
   const tintActive =
+    !settings.bg_hidden &&
     settings.tint_bg_from_album_art &&
     !!tintColor &&
     !!artMatchTrack &&
@@ -674,6 +722,7 @@ export default function Overlay() {
   // hasn't turned the setting off. The user's bg_color paints on top so
   // the opacity slider still works as a darkening tint.
   const showBlurBg =
+    !settings.bg_hidden &&
     !adActive &&
     settings.blur_album_art_background &&
     !!albumArt &&
@@ -685,7 +734,10 @@ export default function Overlay() {
   // Otherwise it'd cover the blur entirely (bg paints under flex
   // content but ABOVE absolute children with z-auto in the same
   // stacking context).
-  const containerBg = showBlurBg ? "transparent" : bgRgba;
+  // Transparent mode forces the whole window see-through (the DWM backdrop is
+  // also dropped to None on the Rust side); otherwise the blur layer paints
+  // bgRgba above it, or the container paints bgRgba directly.
+  const containerBg = settings.bg_hidden ? "transparent" : showBlurBg ? "transparent" : bgRgba;
 
   // Composite luminance of what the user actually sees through the lyric
   // text. Back-to-front: screen-behind → blurred album art (if active) →
@@ -741,7 +793,12 @@ export default function Overlay() {
       style={{
         position: "absolute",
         top: "50%",
-        left: "50%",
+        // When the metadata column is hidden (Ctrl+Alt+H) in the row layouts,
+        // slide the ghost mark right into the space the column vacated so the
+        // composition stays balanced; slide it back when the column returns.
+        // full_page has no metadata column, so it always stays centered.
+        left:
+          settings.show_media || layoutMode === "full_page" ? "50%" : "85%",
         transform: "translate(-50%, -50%)",
         height: "85%",
         width: "auto",
@@ -749,6 +806,7 @@ export default function Overlay() {
         opacity: 0.18,
         pointerEvents: "none",
         userSelect: "none",
+        transition: "left 280ms ease",
       }}
     />
   );
@@ -814,7 +872,11 @@ export default function Overlay() {
     flexDirection: "column",
     flex: 1,
     minWidth: 0, // allows ellipsis on overflowing lines inside the flex child
-    alignItems: alignToFlex(settings.text_align),
+    // Stretch each line to the full column width (text alignment is handled
+    // by LineRow's own `textAlign`). This gives LineRow a stable available
+    // width to measure against for its shrink-to-fit, instead of the line
+    // box collapsing to content width.
+    alignItems: "stretch",
     gap: settingsForRender.line_padding_px,
   };
 
@@ -841,7 +903,7 @@ export default function Overlay() {
         {showBlurBg ? (
           <BlurredAlbumBg dataUrl={albumArt!.data_url} tintColor={bgRgba} />
         ) : null}
-        {!albumArt ? (
+        {!albumArt && !settings.bg_hidden ? (
           <ServiceBg serviceName={ambientServiceName} />
         ) : null}
         <NudgeBanner banner={nudgeBanner} />
@@ -889,7 +951,7 @@ export default function Overlay() {
               </>
             )}
           </div>
-          {track ? (
+          {track && settings.show_media ? (
             <MetadataColumn
               track={track}
               textColor={effectiveTextColor}
@@ -919,7 +981,7 @@ export default function Overlay() {
         {showBlurBg ? (
           <BlurredAlbumBg dataUrl={albumArt!.data_url} tintColor={bgRgba} />
         ) : null}
-        {!albumArt ? (
+        {!albumArt && !settings.bg_hidden ? (
           <ServiceBg serviceName={ambientServiceName} />
         ) : null}
         <NudgeBanner banner={nudgeBanner} />
@@ -1041,7 +1103,7 @@ export default function Overlay() {
             </>
           )}
           </div>
-          {track ? (
+          {track && settings.show_media ? (
             <MetadataColumn
               track={track}
               textColor={effectiveTextColor}
@@ -1526,10 +1588,11 @@ function MetadataColumn({
         justifyContent: "center",
         gap: 4,
         flexShrink: 0,
-        // Cap width so a really long Artist · Song · Album doesn't push
-        // the lyrics column to nothing. ~38ch is enough for "Artist Name
-        // · Song Title · Album Name" without being a wall.
-        maxWidth: "38ch",
+        // Cap width so a long Artist · Song · Album doesn't steal width from
+        // the lyrics (the primary content). The metadata line ellipsis-
+        // truncates within this cap; the progress bar + source badge below
+        // are the real point of this column.
+        maxWidth: "20ch",
         minWidth: 0,
         // Self-applied gap so the column always has breathing room from
         // the lyrics column regardless of whether the row's flex `gap`
@@ -2348,12 +2411,51 @@ function LineRow({
   // factor in Overlay (settingsForRender). Just apply the prev/next dim
   // shrink ratio on top.
   const sizePx = isCur ? settings.font_size_px : Math.max(8, settings.font_size_px * 0.6);
+  // Shrink-to-fit: instead of truncating a long line, scale its font down
+  // just enough to fit on one line. The row stretches each LineRow to the
+  // full lyrics-column width, so `clientWidth` is the true available width;
+  // we measure the text's natural width at base size and apply the ratio
+  // (floored at 0.5× so it never gets unreadably small — the nowrap/ellipsis
+  // below still catches pathological lines at the floor). Keeps the column
+  // height stable (always one line) so the album art doesn't jitter.
+  const measureRef = useRef<HTMLSpanElement | null>(null);
+  const [availW, setAvailW] = useState(0);
+  const [fittedSize, setFittedSize] = useState(sizePx);
+  // Track the available width (the row stretches each LineRow to the full
+  // lyrics-column width, so the div's clientWidth IS the column width and is
+  // independent of the applied font size — no feedback loop).
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setAvailW(el.clientWidth));
+    ro.observe(el);
+    setAvailW(el.clientWidth);
+    return () => ro.disconnect();
+  }, []);
+  // Measure the line's true rendered width via a hidden sibling rendered at
+  // BASE size with the same font/weight/letter-spacing (so the measurement
+  // includes letter-spacing and the actual loaded font — canvas measureText
+  // missed both and under-reported, so long lines never shrank). The hidden
+  // span stays at base size regardless of the fitted result, so this can't
+  // oscillate.
+  useLayoutEffect(() => {
+    const natural = measureRef.current?.offsetWidth ?? 0;
+    if (!text || !natural || !availW) {
+      setFittedSize(sizePx);
+      return;
+    }
+    setFittedSize(
+      natural > availW
+        ? Math.max(sizePx * 0.5, (availW * 0.97) / natural * sizePx)
+        : sizePx,
+    );
+  }, [text, availW, sizePx, isCur, settings.font_weight, settings.font_family]);
   return (
     <div
       ref={ref}
       {...drag}
       style={{
-        fontSize: sizePx,
+        fontSize: fittedSize,
         fontWeight: isCur ? settings.font_weight : 400,
         // When karaoke is on, the per-word spans own their color. The container
         // color still matters for any leftover non-span text (none in practice).
@@ -2367,7 +2469,10 @@ function LineRow({
           ? "opacity 220ms ease"
           : "opacity 220ms ease, color 220ms ease",
         lineHeight: 1.2,
-        maxWidth: "92vw",
+        // 100% of the lyrics column (single/three-line) or the padded
+        // container (full-page) — NOT 92vw, which let a long line spill out
+        // of its flex column and paint over the metadata column on the right.
+        maxWidth: "100%",
         letterSpacing: isCur ? 0.2 : 0,
         // Positioned so this row paints above the absolutely-positioned
         // blurred album-art background (full-page layout renders each
@@ -2376,6 +2481,26 @@ function LineRow({
         ...wrapStyle,
       }}
     >
+      {/* Hidden measurer: same text at BASE size + matching weight/letter-
+          spacing, out of flow so it doesn't affect layout. Its offsetWidth is
+          the line's true natural width, used for shrink-to-fit above. */}
+      <span
+        ref={measureRef}
+        aria-hidden
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          visibility: "hidden",
+          pointerEvents: "none",
+          whiteSpace: "nowrap",
+          fontSize: sizePx,
+          fontWeight: isCur ? settings.font_weight : 400,
+          letterSpacing: isCur ? 0.2 : 0,
+        }}
+      >
+        {text}
+      </span>
       {/* Wrapper span is keyed by the rendered line text so that whenever a
           line advances (prev/cur/next all update), the wrapper remounts
           and the `hum-line-in` CSS animation fires — a brief lift-from-

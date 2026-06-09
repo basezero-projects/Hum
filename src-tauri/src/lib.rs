@@ -294,7 +294,11 @@ pub fn run() {
                             // Tauri may bundle a different windows-crate version internally;
                             // bridge via raw isize. Mirrors web_bridge.rs::PandoraProbe::read().
                             let hwnd = windows::Win32::Foundation::HWND(raw_hwnd.0);
-                            let kind = app.state::<SharedSettings>().inner().blocking_read().window_backdrop;
+                            // Effective backdrop: None if transparent mode was
+                            // persisted on, otherwise the configured backdrop.
+                            let kind = settings::effective_backdrop(
+                                &app.state::<SharedSettings>().inner().blocking_read(),
+                            );
                             if let Err(e) = backdrop::apply_backdrop(hwnd, kind) {
                                 eprintln!("backdrop: apply_backdrop on startup failed: {e:?}");
                             }
@@ -572,6 +576,8 @@ fn build_global_shortcut_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
     let nudge_back = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::BracketLeft);
     let nudge_fwd = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::BracketRight);
     let toggle_blur = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyB);
+    let toggle_transparent = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyT);
+    let toggle_media = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyH);
 
     Builder::new()
         .with_handler(move |app, shortcut, event| {
@@ -606,9 +612,55 @@ fn build_global_shortcut_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
                         let _ = app2.emit("settings-changed", &snapshot);
                     });
                 }
+            } else if shortcut == &toggle_transparent {
+                // Transparent mode: flip bg_hidden, persist, drop/restore the
+                // DWM backdrop, and notify the overlay to suppress every
+                // background layer.
+                if let Some(state) = app.try_state::<SharedSettings>() {
+                    let state = state.inner().clone();
+                    let app2 = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let mut s = state.write().await;
+                        s.bg_hidden = !s.bg_hidden;
+                        let snapshot = s.clone();
+                        drop(s);
+                        settings::save_to_store(&app2, &snapshot);
+                        #[cfg(windows)]
+                        reapply_effective_backdrop(&app2, &snapshot);
+                        let _ = app2.emit("settings-changed", &snapshot);
+                    });
+                }
+            } else if shortcut == &toggle_media {
+                // Show/hide the metadata column ("media player").
+                if let Some(state) = app.try_state::<SharedSettings>() {
+                    let state = state.inner().clone();
+                    let app2 = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let mut s = state.write().await;
+                        s.show_media = !s.show_media;
+                        let snapshot = s.clone();
+                        drop(s);
+                        settings::save_to_store(&app2, &snapshot);
+                        let _ = app2.emit("settings-changed", &snapshot);
+                    });
+                }
             }
         })
         .build()
+}
+
+/// Apply the backdrop that matches the current settings (None in transparent
+/// mode, otherwise the configured backdrop) to the overlay window.
+#[cfg(windows)]
+fn reapply_effective_backdrop(app: &tauri::AppHandle, s: &settings::Settings) {
+    if let Some(overlay) = app.get_webview_window("overlay") {
+        if let Ok(raw) = overlay.hwnd() {
+            let hwnd = windows::Win32::Foundation::HWND(raw.0);
+            if let Err(e) = backdrop::apply_backdrop(hwnd, settings::effective_backdrop(s)) {
+                eprintln!("backdrop: re-apply on transparent toggle failed: {e:?}");
+            }
+        }
+    }
 }
 
 fn register_hotkey(app: &tauri::AppHandle) -> tauri::Result<()> {
@@ -617,11 +669,15 @@ fn register_hotkey(app: &tauri::AppHandle) -> tauri::Result<()> {
     let nudge_back = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::BracketLeft);
     let nudge_fwd = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::BracketRight);
     let toggle_blur = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyB);
+    let toggle_transparent = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyT);
+    let toggle_media = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyH);
     for (name, sc) in [
         ("Ctrl+Alt+L", cycle_shortcut),
         ("Ctrl+Alt+[", nudge_back),
         ("Ctrl+Alt+]", nudge_fwd),
         ("Ctrl+Alt+B", toggle_blur),
+        ("Ctrl+Alt+T", toggle_transparent),
+        ("Ctrl+Alt+H", toggle_media),
     ] {
         if let Err(e) = app.global_shortcut().register(sc) {
             eprintln!("[hotkey] failed to register {name}: {e}");

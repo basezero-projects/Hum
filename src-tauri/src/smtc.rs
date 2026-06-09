@@ -765,6 +765,20 @@ pub async fn fetch_art_via_itunes(
         return Some(url);
     }
 
+    // Variant d — reversed "Song - Artist" uploads (e.g. "Hanging By A Moment
+    // - Lifehouse"), where the YouTube parser swapped artist↔title. Search with
+    // the roles flipped: the title field as the artist, the artist field as the
+    // song, validated against the title field. Validation makes this a no-op
+    // for normal "Artist - Song" tracks (the title field isn't a real artist).
+    if !title.trim().is_empty()
+        && !artist.trim().is_empty()
+        && !title.eq_ignore_ascii_case(artist)
+    {
+        if let Some(url) = try_one_variant(client, title, artist, title, "reversed").await {
+            return Some(url);
+        }
+    }
+
     eprintln!("[smtc] art: all variants and sources missed for {artist:?} - {title:?}");
     None
 }
