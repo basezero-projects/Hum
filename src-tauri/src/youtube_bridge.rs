@@ -103,12 +103,14 @@ impl WebPlayerProbe for YouTubeProbe {
         !smtc_title.trim().is_empty()
     }
 
-    fn read(&self) -> anyhow::Result<Option<WebBridgeTrack>> {
+    fn read(&self, smtc_title: &str, smtc_artist: &str) -> anyhow::Result<Option<WebBridgeTrack>> {
         // 1. Find a Chrome window whose title contains "YouTube".
         // 2. Re-anchor through element_from_handle to wake the accessibility tree.
         // 3. DFS for Text nodes that contain ad markers; also capture timer-shaped text.
         // 4. Classify via classify_youtube_state; if is_ad, return ad WebBridgeTrack.
-        // 5. Return Ok(None) for non-ad state — normal YouTube SMTC metadata stays.
+        // 5. Otherwise normalize SMTC's channel-as-artist + decorated video
+        //    title into a real (artist, title) so the overlay, lyrics
+        //    resolver, and album-art lookup all get clean metadata.
 
         let hwnd = match crate::web_bridge::find_chromium_window_with_title_substring("YouTube") {
             Some(h) => h,
@@ -137,10 +139,105 @@ impl WebPlayerProbe for YouTubeProbe {
             }));
         }
 
-        // Not an ad — return None so we don't override SMTC's normal
-        // YouTube metadata with empty strings.
-        Ok(None)
+        // Not an ad — normalize the SMTC metadata. YouTube (non-Music)
+        // publishes the channel name as the artist ("7clouds") and the full
+        // decorated video title as the title ("Fleetwood Mac - Dreams
+        // (Lyrics)"). Recover the real artist + song so lyrics resolve via
+        // LRCLib /api/get and art via iTunes/Deezer instead of failing on
+        // the channel name.
+        //
+        // Gate on the active YouTube window actually showing this track:
+        // the cheap `detects()` matches ANY Chromium tab, so without this a
+        // Spotify-Web session playing alongside an open YouTube tab would
+        // get its metadata rewritten as if it were a YouTube video.
+        if smtc_title.trim().is_empty()
+            || !crate::web_bridge::youtube_window_shows_track(smtc_title)
+        {
+            return Ok(None);
+        }
+
+        let (artist, title) = parse_youtube_metadata(smtc_title, smtc_artist);
+        if title.trim().is_empty() {
+            return Ok(None);
+        }
+
+        let now_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+
+        // position_ms / duration_ms / state left None: SMTC owns the
+        // timeline for YouTube. blend_bridge_into_snapshot only overwrites
+        // those fields when they're Some, so SMTC's real position survives
+        // while this supplies just the cleaned title/artist.
+        Ok(Some(WebBridgeTrack {
+            title,
+            artist,
+            album: String::new(),
+            source: "youtube-web".into(),
+            last_seen_unix_ms: now_unix_ms,
+            position_ms: None,
+            state: None,
+            is_ad: false,
+            duration_ms: None,
+        }))
     }
+}
+
+/// Normalize YouTube's SMTC metadata into a real (artist, title).
+///
+/// YouTube (the video site, not YouTube Music) publishes via the
+/// MediaSession API with `artist` = the uploading channel and `title` =
+/// the full video title, which by uploader convention is usually
+/// `"Real Artist - Real Song (Lyrics)"` / `"... (Official Video)"` etc.
+///
+/// Strategy:
+/// 1. Run the title through `lyrics::clean_title` to drop the uploader
+///    chrome — `(Lyrics)`, `[Official Music Video]`, ` | Lyric Video`,
+///    trailing bare `Lyrics`, `.mp4` extensions, quote-bait excerpts.
+/// 2. Strip a trailing ` ft./feat./featuring X` credit (clean_title leaves
+///    bare feat tags alone; an exact LRCLib /api/get match can't have it).
+/// 3. If the cleaned title splits on the FIRST ` - ` into two non-trivial
+///    halves, treat them as `Real Artist - Real Song` and discard the
+///    channel name. Otherwise keep the channel as the artist (stripping a
+///    trailing ` - Topic`, YouTube's auto-generated art-track convention
+///    where the channel IS the real artist) and the cleaned title as-is.
+pub(crate) fn parse_youtube_metadata(smtc_title: &str, smtc_artist: &str) -> (String, String) {
+    let cleaned = strip_trailing_feat(&crate::lyrics::clean_title(smtc_title));
+
+    // Channel fallback artist — drop YouTube's " - Topic" auto-channel
+    // suffix so "Fleetwood Mac - Topic" surfaces as "Fleetwood Mac".
+    let channel = smtc_artist.trim();
+    let channel = channel.strip_suffix(" - Topic").unwrap_or(channel).trim();
+
+    if let Some((prefix, suffix)) = cleaned.split_once(" - ") {
+        let real_artist = prefix.trim();
+        let real_title = suffix.trim();
+        // Guard against degenerate splits ("A - B", empty halves) eating a
+        // title that merely happens to contain " - ".
+        if real_artist.chars().filter(|c| !c.is_whitespace()).count() >= 2
+            && !real_title.is_empty()
+        {
+            return (real_artist.to_string(), real_title.to_string());
+        }
+    }
+
+    let title = if cleaned.trim().is_empty() {
+        smtc_title.trim().to_string()
+    } else {
+        cleaned
+    };
+    (channel.to_string(), title)
+}
+
+/// Strip a trailing ` ft.` / ` feat.` / ` featuring X` credit. Mirrors the
+/// feat handling in `lyrics::strip_youtube_noise` but kept local so the
+/// normalizer doesn't depend on a private lyrics helper.
+fn strip_trailing_feat(title: &str) -> String {
+    static FEAT_RE: OnceLock<Regex> = OnceLock::new();
+    let feat_re = FEAT_RE
+        .get_or_init(|| Regex::new(r"(?i)\s+(?:feat\.?|ft\.?|featuring)\s+.+$").unwrap());
+    feat_re.replace(title, "").trim().to_string()
 }
 
 /// Walk the Chrome UIA tree anchored at `hwnd` collecting:
@@ -229,6 +326,53 @@ mod tests {
         let texts = vec!["Some other text".to_string(), "Music video".to_string()];
         let r = classify_youtube_state(&texts, None);
         assert!(!r.is_ad);
+    }
+
+    #[test]
+    fn parse_artist_dash_song_with_lyrics_tag() {
+        // The motivating case: 7clouds lyric video.
+        let (artist, title) =
+            parse_youtube_metadata("Fleetwood Mac - Dreams (Lyrics)", "7clouds");
+        assert_eq!(artist, "Fleetwood Mac");
+        assert_eq!(title, "Dreams");
+    }
+
+    #[test]
+    fn parse_channel_artist_discarded() {
+        let (artist, title) =
+            parse_youtube_metadata("Kelly Clarkson - Since U Been Gone", "RockHype");
+        assert_eq!(artist, "Kelly Clarkson");
+        assert_eq!(title, "Since U Been Gone");
+    }
+
+    #[test]
+    fn parse_strips_official_video_and_feat() {
+        let (artist, title) =
+            parse_youtube_metadata("T-Pain - Bartender (Official HD Video) ft. Akon", "T Pain");
+        assert_eq!(artist, "T-Pain");
+        assert_eq!(title, "Bartender");
+    }
+
+    #[test]
+    fn parse_no_dash_keeps_channel_and_strips_topic() {
+        // YouTube auto-generated "Topic" channel: the channel IS the artist.
+        let (artist, title) = parse_youtube_metadata("Dreams", "Fleetwood Mac - Topic");
+        assert_eq!(artist, "Fleetwood Mac");
+        assert_eq!(title, "Dreams");
+    }
+
+    #[test]
+    fn parse_no_dash_plain_song_keeps_channel() {
+        let (artist, title) = parse_youtube_metadata("Some Song", "SomeChannel");
+        assert_eq!(artist, "SomeChannel");
+        assert_eq!(title, "Some Song");
+    }
+
+    #[test]
+    fn parse_degenerate_split_not_taken() {
+        // Single-char prefix must not be treated as an artist.
+        let (_artist, title) = parse_youtube_metadata("A - B", "Chan");
+        assert_eq!(title, "A - B");
     }
 
     #[test]

@@ -225,7 +225,13 @@ pub trait WebPlayerProbe: Send + Sync {
     /// content. Returns `Ok(Some(...))` when a complete-enough read
     /// succeeds, `Ok(None)` when the probe ran but couldn't find the
     /// widget, `Err` for unexpected failures.
-    fn read(&self) -> anyhow::Result<Option<WebBridgeTrack>>;
+    ///
+    /// `smtc_title` / `smtc_artist` carry the current SMTC snapshot's raw
+    /// metadata so a probe can normalize it (YouTube publishes the channel
+    /// as the artist and the decorated video title as the title) or confirm
+    /// the SMTC track matches the window it's about to scrape. Probes that
+    /// scrape everything from the UIA tree ignore these.
+    fn read(&self, smtc_title: &str, smtc_artist: &str) -> anyhow::Result<Option<WebBridgeTrack>>;
 }
 
 /// Quick check: does ANY registered probe think the current SMTC snapshot
@@ -325,6 +331,24 @@ fn find_chrome_windows<F: Fn(&str) -> bool>(predicate: F) -> Vec<HWND> {
 /// title match is a fast heuristic; the UIA walk in the probe confirms.
 pub(crate) fn find_chromium_window_with_title_substring(needle: &str) -> Option<HWND> {
     find_chrome_windows(|title| title.contains(needle)).into_iter().next()
+}
+
+/// True when a visible Chromium window's title contains "YouTube" AND the
+/// SMTC-reported track title (case-insensitive). Browsers set the window
+/// title to the active tab's `document.title`, so this confirms the
+/// front-most YouTube tab is actually showing the track SMTC says is
+/// playing. Gates YouTube metadata normalization so we never rewrite a
+/// different web player's metadata (e.g. Spotify Web in another window,
+/// with a YouTube tab merely open) as if it were a YouTube video.
+pub(crate) fn youtube_window_shows_track(track_title: &str) -> bool {
+    let needle = track_title.trim().to_lowercase();
+    if needle.is_empty() {
+        return false;
+    }
+    !find_chrome_windows(|title| {
+        title.contains("YouTube") && title.to_lowercase().contains(&needle)
+    })
+    .is_empty()
 }
 
 pub(crate) fn read_window_title(hwnd: HWND) -> String {
@@ -592,7 +616,7 @@ impl WebPlayerProbe for PandoraProbe {
         smtc_title.ends_with("Now Playing on Pandora")
     }
 
-    fn read(&self) -> anyhow::Result<Option<WebBridgeTrack>> {
+    fn read(&self, _smtc_title: &str, _smtc_artist: &str) -> anyhow::Result<Option<WebBridgeTrack>> {
         use uiautomation::UIAutomation;
 
         let automation = UIAutomation::new()
@@ -710,10 +734,10 @@ pub fn start(app: AppHandle, snapshot: SharedSnapshot, shared: SharedWebBridge) 
         let mut last_emitted_title = String::new();
 
         loop {
-            let (title, app_id) = {
+            let (title, artist, app_id) = {
                 let snap = snapshot.read().await;
                 let id = snap.source_app_id.clone().unwrap_or_default();
-                (snap.title.clone(), id)
+                (snap.title.clone(), snap.artist.clone(), id)
             };
 
             let active_probe: Option<&'static dyn WebPlayerProbe> = PROBES
@@ -724,8 +748,11 @@ pub fn start(app: AppHandle, snapshot: SharedSnapshot, shared: SharedWebBridge) 
             match active_probe {
                 Some(probe) => {
                     let name = probe.name();
-                    let read_result = tokio::task::spawn_blocking(move || probe.read())
-                        .await;
+                    let smtc_title = title.clone();
+                    let smtc_artist = artist.clone();
+                    let read_result =
+                        tokio::task::spawn_blocking(move || probe.read(&smtc_title, &smtc_artist))
+                            .await;
                     match read_result {
                         Ok(Ok(Some(track))) => {
                             let new_title = track.title.clone();
@@ -1149,7 +1176,7 @@ impl WebPlayerProbe for VideoServiceProbe {
         lookup_video_service(smtc_title).is_some()
     }
 
-    fn read(&self) -> anyhow::Result<Option<WebBridgeTrack>> {
+    fn read(&self, _smtc_title: &str, _smtc_artist: &str) -> anyhow::Result<Option<WebBridgeTrack>> {
         // The probe is only invoked when detects() said yes, but we don't
         // get the SMTC title here — re-walk all Chromium windows looking
         // for ANY video service marker in the title. First hit wins.

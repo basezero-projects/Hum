@@ -159,7 +159,7 @@ impl WebPlayerProbe for PandoraDesktopProbe {
         !find_pandora_desktop_windows().is_empty()
     }
 
-    fn read(&self) -> anyhow::Result<Option<WebBridgeTrack>> {
+    fn read(&self, _smtc_title: &str, _smtc_artist: &str) -> anyhow::Result<Option<WebBridgeTrack>> {
         use uiautomation::UIAutomation;
 
         let hwnds = find_pandora_desktop_windows();

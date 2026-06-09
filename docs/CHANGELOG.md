@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.42] - 2026-06-09
+
+### Fixed
+- **YouTube songs now show the real artist and song name, find lyrics, and load album art.** Playing a music/lyric video in Chrome (Edge, Brave, etc.) used to show the wrong thing in the overlay: the **uploading channel** as the artist (e.g. "7clouds", "RockHype", "Aura Hype") and the **full raw video title** as the song, decorations and all (e.g. "Fleetwood Mac - Dreams (Lyrics)"). Because the artist was a channel name and the title still carried "(Lyrics)" / "(Official Video)" tags, lyrics usually failed to resolve and the album-art backdrop fell back to nothing. Hum now parses YouTube's metadata: it splits "Artist - Song" out of the video title, strips uploader chrome ("(Lyrics)", "[Official Music Video]", "| Lyric Video", trailing bare "Lyrics", "ft./feat." credits), and drops the "- Topic" suffix on auto-generated artist channels. The cleaned artist + song then drive the overlay metadata text, the LRCLib lyric lookup (now hits the exact-match endpoint instead of a fuzzy title-only fallback), and the iTunes/Deezer album-art search. The metadata column, the synced lyrics, and the album-art backdrop/tint all benefit. Known limitation: this only kicks in when the YouTube tab is the foreground tab of its browser window — playback from a background tab still falls back to the raw channel/title, the same as before (Hum reads the browser window title to confirm which track is playing, and browsers only expose the active tab's title). YouTube Music (which already publishes a clean artist/song) is unaffected, and other web players in Chrome (Spotify Web, etc.) are never rewritten — a window-title match guards against cross-source contamination. Technical: `youtube_bridge::parse_youtube_metadata` reuses `lyrics::clean_title`; `YouTubeProbe::read` now returns a normalized non-ad `WebBridgeTrack` (source `youtube-web`, with position/duration/state left to SMTC) instead of `None`; the `WebPlayerProbe::read` trait now receives the SMTC title/artist.
+
 ## [0.13.41] - 2026-06-03
 
 ### Fixed
