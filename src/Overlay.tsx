@@ -1208,17 +1208,7 @@ function SquareLyricsView({
   onHoverChange: (hovered: boolean) => void;
 }) {
   const reducedMotion = usePrefersReducedMotion();
-  const lyricStageRef = useRef<HTMLElement | null>(null);
-  const lyricStackRef = useRef<HTMLDivElement | null>(null);
-  const [lyricStageHeight, setLyricStageHeight] = useState(0);
-  const desiredFutureLineCount = scale < 0.9 ? 1 : 2;
-  const [futureLineCount, setFutureLineCount] = useState(desiredFutureLineCount);
-  const [showPreviousLine, setShowPreviousLine] = useState(true);
-  const [stackTypographyScale, setStackTypographyScale] = useState(1);
-  const [stackMeasurement, setStackMeasurement] = useState({
-    height: 0,
-    configuration: "",
-  });
+  const futureLineCount = scale < 0.9 ? 1 : 2;
   const drag = isEdit ? { "data-tauri-drag-region": true } : {};
   const resolvedTrack = lyrics?.track?.title?.trim() ? lyrics.track : track;
   const title = resolvedTrack?.title?.trim() || "Nothing playing";
@@ -1226,98 +1216,24 @@ function SquareLyricsView({
   const radius = Math.max(10, Math.round(18 * scale));
   const hasSyncedLyrics =
     lyrics?.status === "synced" && lyrics.lines.length > 0;
-  const stackConfiguration = `${futureLineCount}:${showPreviousLine}:${stackTypographyScale}`;
+  const fixedLyricGap = Math.max(
+    14 * scale,
+    settings.line_padding_px + 14 * scale,
+  );
 
-  useLayoutEffect(() => {
-    setFutureLineCount(desiredFutureLineCount);
-    setShowPreviousLine(true);
-    setStackTypographyScale(1);
-  }, [
-    desiredFutureLineCount,
-    displayIdx,
-    lyricStageHeight,
-    lyrics?.track_key,
-    settings.font_family,
-    settings.font_size_px,
-    settings.font_weight,
-    settings.line_padding_px,
-    translationText,
-  ]);
-
-  useLayoutEffect(() => {
-    const stage = lyricStageRef.current;
-    if (!stage) return;
-
-    const measure = () => {
-      const styles = window.getComputedStyle(stage);
-      const blockPadding =
-        Number.parseFloat(styles.paddingTop) + Number.parseFloat(styles.paddingBottom);
-      setLyricStageHeight(Math.max(0, stage.clientHeight - blockPadding));
-    };
-
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(stage);
-    return () => observer.disconnect();
-  }, []);
-
-  useLayoutEffect(() => {
-    const stack = lyricStackRef.current;
-    if (!stack) return;
-
-    const measure = () => {
-      setStackMeasurement({
-        height: stack.getBoundingClientRect().height,
-        configuration: stackConfiguration,
-      });
-    };
-
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(stack);
-    return () => observer.disconnect();
-  }, [stackConfiguration]);
-
-  useLayoutEffect(() => {
-    if (
-      !hasSyncedLyrics ||
-      lyricStageHeight <= 0 ||
-      stackMeasurement.configuration !== stackConfiguration ||
-      stackMeasurement.height <= lyricStageHeight + 1
-    ) {
-      return;
+  const collectNonEmptyLines = (startIndex: number, count: number) => {
+    const collected: Array<{ line: LyricLine; index: number }> = [];
+    if (!lyrics || lyrics.status !== "synced" || count <= 0) return collected;
+    for (let index = startIndex; index < lyrics.lines.length; index += 1) {
+      const line = lyrics.lines[index];
+      if (!line?.text.trim()) continue;
+      collected.push({ line, index });
+      if (collected.length === count) break;
     }
+    return collected;
+  };
 
-    if (futureLineCount > 0) {
-      setFutureLineCount((count) => count - 1);
-      return;
-    }
-    if (showPreviousLine && displayIdx >= 0) {
-      setShowPreviousLine(false);
-      return;
-    }
-
-    const minimumTypographyScale = 0.76;
-    if (stackTypographyScale > minimumTypographyScale) {
-      const fitRatio = lyricStageHeight / stackMeasurement.height;
-      const nextScale = Math.max(
-        minimumTypographyScale,
-        Math.min(stackTypographyScale - 0.04, stackTypographyScale * fitRatio * 0.98),
-      );
-      setStackTypographyScale(Math.round(nextScale * 1000) / 1000);
-    }
-  }, [
-    displayIdx,
-    futureLineCount,
-    hasSyncedLyrics,
-    lyricStageHeight,
-    showPreviousLine,
-    stackConfiguration,
-    stackMeasurement,
-    stackTypographyScale,
-  ]);
-
-  const renderSyncedLyrics = () => {
+  const renderIntroOrStatus = () => {
     if (!lyrics || lyrics.status !== "synced" || lyrics.lines.length === 0) {
       const fallbackText = lyrics
         ? middleText
@@ -1333,7 +1249,6 @@ function SquareLyricsView({
           contentKey={`status:${lyrics?.track_key ?? "idle"}:${fallbackText}`}
           settings={settings}
           scale={scale}
-          typographyScale={1}
           textShadow={textShadow}
           reducedMotion={reducedMotion}
           karaoke={karaoke}
@@ -1341,105 +1256,130 @@ function SquareLyricsView({
       );
     }
 
-    const collectNonEmptyLines = (startIndex: number, count: number) => {
-      const collected: Array<{ line: LyricLine; index: number }> = [];
-      if (count <= 0) return collected;
-      for (let index = startIndex; index < lyrics.lines.length; index += 1) {
-        const line = lyrics.lines[index];
-        if (!line?.text.trim()) continue;
-        collected.push({ line, index });
-        if (collected.length === count) break;
-      }
-      return collected;
-    };
+    return collectNonEmptyLines(0, futureLineCount + 1).map(
+      ({ line, index }, slotIndex) => (
+        <SquareLyricLine
+          key={slotIndex === 0 ? "lead" : `future-${slotIndex - 1}`}
+          text={line.text}
+          active={false}
+          distance={slotIndex + 1}
+          relativePosition={slotIndex + 1}
+          leadUpcoming={slotIndex === 0}
+          contentKey={`${lyrics.track_key}:${index}:${line.time_ms}`}
+          settings={settings}
+          scale={scale}
+          textShadow={textShadow}
+          reducedMotion={reducedMotion}
+        />
+      ),
+    );
+  };
 
-    if (displayIdx < 0) {
-      return collectNonEmptyLines(0, futureLineCount + 1).map(
-        ({ line, index }, slotIndex) => (
-          <SquareLyricLine
-            key={slotIndex === 0 ? "lead" : `future-${slotIndex - 1}`}
-            text={line.text}
-            active={false}
-            distance={slotIndex + 1}
-            relativePosition={slotIndex + 1}
-            leadUpcoming={slotIndex === 0}
-            contentKey={`${lyrics.track_key}:${index}:${line.time_ms}`}
-            settings={settings}
-            scale={scale}
-            typographyScale={stackTypographyScale}
-            textShadow={textShadow}
-            reducedMotion={reducedMotion}
-          />
-        ),
-      );
+  const renderFocusedLyrics = () => {
+    if (!lyrics || lyrics.status !== "synced" || displayIdx < 0) return null;
+    let previousLine: { line: LyricLine; index: number } | null = null;
+    for (let index = displayIdx - 1; index >= 0; index -= 1) {
+      const line = lyrics.lines[index];
+      if (!line?.text.trim()) continue;
+      previousLine = { line, index };
+      break;
     }
-
-    const slots: React.ReactNode[] = [];
-    if (showPreviousLine) {
-      for (let index = displayIdx - 1; index >= 0; index -= 1) {
-        const line = lyrics.lines[index];
-        if (!line?.text.trim()) continue;
-        slots.push(
-          <SquareLyricLine
-            key="previous"
-            text={line.text}
-            active={false}
-            distance={1}
-            relativePosition={-1}
-            contentKey={`${lyrics.track_key}:${index}:${line.time_ms}`}
-            settings={settings}
-            scale={scale}
-            typographyScale={stackTypographyScale}
-            textShadow={textShadow}
-            reducedMotion={reducedMotion}
-          />,
-        );
-        break;
-      }
-    }
-
     const activeLine = lyrics.lines[displayIdx];
     const activeIsBlank = !activeLine?.text.trim();
-    slots.push(
-      <SquareLyricLine
-        key="active"
-        text={activeIsBlank ? "♪" : activeLine?.text}
-        active
-        placeholder={activeIsBlank}
-        distance={0}
-        relativePosition={0}
-        contentKey={`${lyrics.track_key}:${displayIdx}:${activeLine?.time_ms ?? 0}`}
-        settings={settings}
-        scale={scale}
-        typographyScale={stackTypographyScale}
-        textShadow={textShadow}
-        reducedMotion={reducedMotion}
-        karaoke={activeIsBlank ? undefined : karaoke}
-        translation={activeIsBlank ? undefined : translationText}
-      />,
-    );
+    const futureLines = collectNonEmptyLines(displayIdx + 1, futureLineCount);
 
-    collectNonEmptyLines(displayIdx + 1, futureLineCount).forEach(
-      ({ line, index }, slotIndex) => {
-        slots.push(
+    return (
+      <>
+        <div
+          style={{
+            position: "absolute",
+            inset: `0 0 auto 0`,
+            height: `calc(30% - ${fixedLyricGap}px)`,
+            display: "flex",
+            alignItems: "flex-end",
+            overflow: "hidden",
+            maskImage: "linear-gradient(to bottom, transparent 0%, black 22%)",
+            WebkitMaskImage: "linear-gradient(to bottom, transparent 0%, black 22%)",
+          }}
+        >
+          {previousLine ? (
+            <SquareLyricLine
+              key="previous"
+              text={previousLine.line.text}
+              active={false}
+              distance={1}
+              relativePosition={-1}
+              contentKey={`${lyrics.track_key}:${previousLine.index}:${previousLine.line.time_ms}`}
+              settings={settings}
+              scale={scale}
+              textShadow={textShadow}
+              reducedMotion={reducedMotion}
+            />
+          ) : null}
+        </div>
+
+        <div
+          style={{
+            position: "absolute",
+            inset: "30% 0 0 0",
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+          }}
+        >
           <SquareLyricLine
-            key={`future-${slotIndex}`}
-            text={line.text}
-            active={false}
-            distance={slotIndex + 1}
-            relativePosition={slotIndex + 1}
-            contentKey={`${lyrics.track_key}:${index}:${line.time_ms}`}
+            key="active"
+            text={activeIsBlank ? "♪" : activeLine?.text}
+            active
+            placeholder={activeIsBlank}
+            distance={0}
+            relativePosition={0}
+            contentKey={`${lyrics.track_key}:${displayIdx}:${activeLine?.time_ms ?? 0}`}
             settings={settings}
             scale={scale}
-            typographyScale={stackTypographyScale}
             textShadow={textShadow}
             reducedMotion={reducedMotion}
-          />,
-        );
-      },
-    );
+            karaoke={activeIsBlank ? undefined : karaoke}
+            translation={activeIsBlank ? undefined : translationText}
+          />
 
-    return slots;
+          <div
+            style={{
+              flex: "1 1 auto",
+              minHeight: 0,
+              marginTop: fixedLyricGap,
+              overflow: "hidden",
+              maskImage: "linear-gradient(to bottom, black 0%, black 78%, transparent 100%)",
+              WebkitMaskImage:
+                "linear-gradient(to bottom, black 0%, black 78%, transparent 100%)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: fixedLyricGap,
+              }}
+            >
+              {futureLines.map(({ line, index }, slotIndex) => (
+                <SquareLyricLine
+                  key={`future-${slotIndex}`}
+                  text={line.text}
+                  active={false}
+                  distance={slotIndex + 1}
+                  relativePosition={slotIndex + 1}
+                  contentKey={`${lyrics.track_key}:${index}:${line.time_ms}`}
+                  settings={settings}
+                  scale={scale}
+                  textShadow={textShadow}
+                  reducedMotion={reducedMotion}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      </>
+    );
   };
 
   return (
@@ -1590,7 +1530,6 @@ function SquareLyricsView({
       ) : null}
 
       <main
-        ref={lyricStageRef}
         {...drag}
         style={{
           position: "relative",
@@ -1600,25 +1539,17 @@ function SquareLyricsView({
           display: "flex",
           flexDirection: "column",
           justifyContent: "flex-start",
-          overflowY: "hidden",
-          overflowX: "hidden",
+          overflow: "hidden",
           padding: `${Math.max(20, 30 * scale)}px 1px ${Math.max(12, 18 * scale)}px`,
-          maskImage: futureLineCount > 0
-            ? "linear-gradient(to bottom, black 0%, black 88%, transparent 100%)"
-            : "none",
-          WebkitMaskImage: futureLineCount > 0
-            ? "linear-gradient(to bottom, black 0%, black 88%, transparent 100%)"
-            : "none",
         }}
       >
         <div
-          ref={lyricStackRef}
           style={{
-            display: "flex",
-            flexDirection: "column",
-            gap:
-              Math.max(14 * scale, settings.line_padding_px + 14 * scale) *
-              stackTypographyScale,
+            height: "100%",
+            minHeight: 0,
+            flex: "1 1 auto",
+            position: "relative",
+            overflow: "hidden",
           }}
         >
           {adActive && settings.ad_break_promos_enabled ? (
@@ -1641,7 +1572,6 @@ function SquareLyricsView({
               contentKey="ad-break"
               settings={settings}
               scale={scale}
-              typographyScale={1}
               textShadow={textShadow}
               reducedMotion={reducedMotion}
             />
@@ -1654,8 +1584,24 @@ function SquareLyricsView({
               textShadow={textShadow}
               dragRegion={isEdit}
             />
+          ) : hasSyncedLyrics && displayIdx >= 0 ? (
+            renderFocusedLyrics()
           ) : (
-            renderSyncedLyrics()
+            <div
+              style={{
+                height: "100%",
+                display: "flex",
+                flexDirection: "column",
+                gap: fixedLyricGap,
+                overflow: "hidden",
+                maskImage:
+                  "linear-gradient(to bottom, black 0%, black 82%, transparent 100%)",
+                WebkitMaskImage:
+                  "linear-gradient(to bottom, black 0%, black 82%, transparent 100%)",
+              }}
+            >
+              {renderIntroOrStatus()}
+            </div>
           )}
         </div>
       </main>
@@ -1703,7 +1649,6 @@ function SquareLyricLine({
   contentKey,
   settings,
   scale,
-  typographyScale,
   textShadow,
   reducedMotion,
   karaoke,
@@ -1718,7 +1663,6 @@ function SquareLyricLine({
   contentKey: string;
   settings: Settings;
   scale: number;
-  typographyScale: number;
   textShadow: string;
   reducedMotion: boolean;
   karaoke?: { words: WordSpan[]; currentWordIdx: number; nextTimeMs: number };
@@ -1729,10 +1673,12 @@ function SquareLyricLine({
     const content = contentRef.current;
     if (!content || reducedMotion || typeof content.animate !== "function") return;
     const animation = content.animate(
-      [
-        { opacity: 0, transform: "translate3d(0, 7px, 0)" },
-        { opacity: 1, transform: "translate3d(0, 0, 0)" },
-      ],
+      active
+        ? [{ opacity: 0 }, { opacity: 1 }]
+        : [
+            { opacity: 0, transform: "translate3d(0, 7px, 0)" },
+            { opacity: 1, transform: "translate3d(0, 0, 0)" },
+          ],
       {
         duration: 260,
         easing: "cubic-bezier(0.22, 1, 0.36, 1)",
@@ -1740,14 +1686,14 @@ function SquareLyricLine({
       },
     );
     return () => animation.cancel();
-  }, [contentKey, reducedMotion]);
+  }, [active, contentKey, reducedMotion]);
 
   if (!text) return null;
   const useKaraoke = active && !!karaoke?.words.length;
   const baseFontSize = active
     ? Math.max(28 * scale, settings.font_size_px * 1.5)
     : Math.max(17 * scale, settings.font_size_px * 0.84);
-  const fontSize = (placeholder ? baseFontSize * 0.68 : baseFontSize) * typographyScale;
+  const fontSize = placeholder ? baseFontSize * 0.68 : baseFontSize;
   const opacity = active
     ? placeholder ? 0.62 : 1
     : leadUpcoming
@@ -1760,11 +1706,6 @@ function SquareLyricLine({
             ? 0.22
             : 0.12;
   const blur = active ? 0 : leadUpcoming ? 0.25 : distance <= 1 ? 0.45 : 0.8;
-  const translateY = active || leadUpcoming
-    ? 0
-    : relativePosition < 0
-      ? -3 * scale
-      : Math.min(9 * scale, distance * 3 * scale);
 
   return (
     <div
@@ -1785,9 +1726,8 @@ function SquareLyricLine({
         overflowWrap: "anywhere",
         transition: reducedMotion
           ? "none"
-          : "color 220ms ease, opacity 240ms ease, filter 240ms ease, transform 280ms cubic-bezier(0.22, 1, 0.36, 1), font-size 220ms ease, line-height 220ms ease",
+          : "color 220ms ease, opacity 240ms ease, filter 240ms ease, font-size 220ms ease, line-height 220ms ease",
         filter: blur > 0 ? `blur(${blur}px)` : "none",
-        transform: `translate3d(0, ${translateY}px, 0)`,
       }}
     >
       <div key={contentKey} ref={contentRef}>
@@ -1821,7 +1761,7 @@ function SquareLyricLine({
         {translation ? (
           <div
             style={{
-              marginTop: Math.max(5, 7 * scale) * typographyScale,
+              marginTop: Math.max(5, 7 * scale),
               color: settings.text_color_dim,
               fontSize: Math.max(10 * scale, fontSize * 0.46),
               fontWeight: 500,

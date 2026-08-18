@@ -6,6 +6,12 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.50] - 2026-08-18
+
+### Fixed
+- **The active lyric no longer jumps up and down in Square view.** Its top edge now stays at the same reading position while the previous lyric sits above it and upcoming lyrics flow below it. Short lines, wrapped lines, blank timing breaks, and missing lines at the start or end of a song no longer recalculate the active lyric's position.
+- **Square lyrics keep a consistent font size during playback.** Hum no longer shrinks the lyric stack when a long line or translation needs more room. The active lyric keeps its configured size, while previous and upcoming lines are clipped at the lyric stage boundary before they can cover the progress footer. Active lyrics use a stationary fade, so the entrance animation does not move the reading position.
+
 ## [0.13.49] - 2026-08-18
 
 ### Fixed
