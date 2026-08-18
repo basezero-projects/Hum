@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.51] - 2026-08-18
+
+### Changed
+- **Square view now uses the open space around the active lyric.** At a normal square size, three earlier lyrics fade above the fixed reading position and six upcoming lyrics fade toward the progress footer. Compact squares show two earlier and four upcoming lyrics. Tighter spacing and stronger distance fade keep the extra context quiet, while the active lyric stays in the same position and keeps the same font size.
+
 ## [0.13.50] - 2026-08-18
 
 ### Fixed

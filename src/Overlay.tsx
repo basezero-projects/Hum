@@ -1208,7 +1208,10 @@ function SquareLyricsView({
   onHoverChange: (hovered: boolean) => void;
 }) {
   const reducedMotion = usePrefersReducedMotion();
-  const futureLineCount = scale < 0.9 ? 1 : 2;
+  const compactSquare = scale < 0.9;
+  const previousLineCount = compactSquare ? 2 : 3;
+  const futureLineCount = compactSquare ? 4 : 6;
+  const introLineCount = compactSquare ? 2 : 3;
   const drag = isEdit ? { "data-tauri-drag-region": true } : {};
   const resolvedTrack = lyrics?.track?.title?.trim() ? lyrics.track : track;
   const title = resolvedTrack?.title?.trim() || "Nothing playing";
@@ -1216,9 +1219,13 @@ function SquareLyricsView({
   const radius = Math.max(10, Math.round(18 * scale));
   const hasSyncedLyrics =
     lyrics?.status === "synced" && lyrics.lines.length > 0;
-  const fixedLyricGap = Math.max(
+  const introLyricGap = Math.max(
     14 * scale,
     settings.line_padding_px + 14 * scale,
+  );
+  const peripheralLyricGap = Math.max(
+    8 * scale,
+    settings.line_padding_px + 6 * scale,
   );
 
   const collectNonEmptyLines = (startIndex: number, count: number) => {
@@ -1256,7 +1263,7 @@ function SquareLyricsView({
       );
     }
 
-    return collectNonEmptyLines(0, futureLineCount + 1).map(
+    return collectNonEmptyLines(0, introLineCount).map(
       ({ line, index }, slotIndex) => (
         <SquareLyricLine
           key={slotIndex === 0 ? "lead" : `future-${slotIndex - 1}`}
@@ -1277,13 +1284,14 @@ function SquareLyricsView({
 
   const renderFocusedLyrics = () => {
     if (!lyrics || lyrics.status !== "synced" || displayIdx < 0) return null;
-    let previousLine: { line: LyricLine; index: number } | null = null;
+    const previousLines: Array<{ line: LyricLine; index: number }> = [];
     for (let index = displayIdx - 1; index >= 0; index -= 1) {
       const line = lyrics.lines[index];
       if (!line?.text.trim()) continue;
-      previousLine = { line, index };
-      break;
+      previousLines.push({ line, index });
+      if (previousLines.length === previousLineCount) break;
     }
+    previousLines.reverse();
     const activeLine = lyrics.lines[displayIdx];
     const activeIsBlank = !activeLine?.text.trim();
     const futureLines = collectNonEmptyLines(displayIdx + 1, futureLineCount);
@@ -1294,7 +1302,7 @@ function SquareLyricsView({
           style={{
             position: "absolute",
             inset: `0 0 auto 0`,
-            height: `calc(30% - ${fixedLyricGap}px)`,
+            height: `calc(30% - ${peripheralLyricGap}px)`,
             display: "flex",
             alignItems: "flex-end",
             overflow: "hidden",
@@ -1302,20 +1310,32 @@ function SquareLyricsView({
             WebkitMaskImage: "linear-gradient(to bottom, transparent 0%, black 22%)",
           }}
         >
-          {previousLine ? (
-            <SquareLyricLine
-              key="previous"
-              text={previousLine.line.text}
-              active={false}
-              distance={1}
-              relativePosition={-1}
-              contentKey={`${lyrics.track_key}:${previousLine.index}:${previousLine.line.time_ms}`}
-              settings={settings}
-              scale={scale}
-              textShadow={textShadow}
-              reducedMotion={reducedMotion}
-            />
-          ) : null}
+          <div
+            style={{
+              width: "100%",
+              display: "flex",
+              flexDirection: "column",
+              gap: peripheralLyricGap,
+            }}
+          >
+            {previousLines.map(({ line, index }, slotIndex) => {
+              const distance = previousLines.length - slotIndex;
+              return (
+                <SquareLyricLine
+                  key={`previous-${slotIndex}`}
+                  text={line.text}
+                  active={false}
+                  distance={distance}
+                  relativePosition={-distance}
+                  contentKey={`${lyrics.track_key}:${index}:${line.time_ms}`}
+                  settings={settings}
+                  scale={scale}
+                  textShadow={textShadow}
+                  reducedMotion={reducedMotion}
+                />
+              );
+            })}
+          </div>
         </div>
 
         <div
@@ -1347,7 +1367,7 @@ function SquareLyricsView({
             style={{
               flex: "1 1 auto",
               minHeight: 0,
-              marginTop: fixedLyricGap,
+              marginTop: peripheralLyricGap,
               overflow: "hidden",
               maskImage: "linear-gradient(to bottom, black 0%, black 78%, transparent 100%)",
               WebkitMaskImage:
@@ -1358,7 +1378,7 @@ function SquareLyricsView({
               style={{
                 display: "flex",
                 flexDirection: "column",
-                gap: fixedLyricGap,
+                gap: peripheralLyricGap,
               }}
             >
               {futureLines.map(({ line, index }, slotIndex) => (
@@ -1592,7 +1612,7 @@ function SquareLyricsView({
                 height: "100%",
                 display: "flex",
                 flexDirection: "column",
-                gap: fixedLyricGap,
+                gap: introLyricGap,
                 overflow: "hidden",
                 maskImage:
                   "linear-gradient(to bottom, black 0%, black 82%, transparent 100%)",
@@ -1699,13 +1719,29 @@ function SquareLyricLine({
     : leadUpcoming
       ? 0.56
       : relativePosition < 0
-        ? 0.3
+        ? distance === 1
+          ? 0.3
+          : 0.16
         : distance === 1
           ? 0.38
           : distance === 2
             ? 0.22
-            : 0.12;
-  const blur = active ? 0 : leadUpcoming ? 0.25 : distance <= 1 ? 0.45 : 0.8;
+            : distance === 3
+              ? 0.13
+              : distance === 4
+                ? 0.085
+                : 0.055;
+  const blur = active
+    ? 0
+    : leadUpcoming
+      ? 0.25
+      : distance === 1
+        ? 0.45
+        : distance === 2
+          ? 0.75
+          : distance === 3
+            ? 1
+            : 1.25;
 
   return (
     <div
