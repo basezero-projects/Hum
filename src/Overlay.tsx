@@ -1,6 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { LogicalSize, PhysicalPosition } from "@tauri-apps/api/dpi";
 import { listen } from "@tauri-apps/api/event";
+import {
+  currentMonitor,
+  getCurrentWindow,
+  primaryMonitor,
+} from "@tauri-apps/api/window";
 import { check as checkForUpdate, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -31,6 +37,7 @@ const DEFAULT_SETTINGS: Settings = {
   text_align: "left",
   line_padding_px: 6,
   layout_mode: "three_line",
+  overlay_shape: "ribbon",
   show_album_art: true,
   show_translation: false,
   tint_bg_from_album_art: false,
@@ -55,6 +62,7 @@ export default function Overlay() {
   const [mode, setMode] = useState<OverlayMode>("edit");
   const [hovered, setHovered] = useState(false);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  const [settingsHydrated, setSettingsHydrated] = useState(false);
   const [albumArt, setAlbumArt] = useState<{ title: string; artist: string; data_url: string } | null>(null);
   // Per-word karaoke cursor — only relevant when the active line has
   // .words populated (SimpMusic-sourced tracks). -1 = before-first.
@@ -89,6 +97,15 @@ export default function Overlay() {
     w: typeof window !== "undefined" ? window.innerWidth : BASELINE_WINDOW_W_PX,
     h: typeof window !== "undefined" ? window.innerHeight : BASELINE_WINDOW_H_PX,
   });
+  const overlayShapeRef = useRef<Settings["overlay_shape"] | null>(null);
+  const shapeGeometryRequestRef = useRef(0);
+  const [storedRibbonSizeAtStartup] = useState(readStoredRibbonSize);
+  const ribbonSizeRef = useRef<{ w: number; h: number }>(
+    storedRibbonSizeAtStartup ?? {
+      w: DEFAULT_RIBBON_WINDOW_W_PX,
+      h: DEFAULT_RIBBON_WINDOW_H_PX,
+    },
+  );
   // Live lyric-offset nudge (Ctrl+Alt+[ / Ctrl+Alt+]). Session-only;
   // resets on track change so a nudge for one bad LRC doesn't bleed
   // into the next song. Stored in a ref because the rAF closure reads
@@ -255,6 +272,7 @@ export default function Overlay() {
     function applySettings(s: Settings) {
       settingsRef.current = s;
       setSettings(s);
+      setSettingsHydrated(true);
     }
 
     const unlisteners: Array<Promise<() => void>> = [
@@ -439,13 +457,62 @@ export default function Overlay() {
 
   // Aspect lock is enforced at the OS level (aspect_lock.rs captures the
   // window's current ratio on WM_ENTERSIZEMOVE and corrects WM_SIZING). JS
-  // only tracks window width for font scaling — no setSize from resize events.
+  // tracks dimensions for font scaling but never calls setSize from a resize
+  // event. Shape changes own the one-time native resize below.
   useEffect(() => {
-    const onResize = () =>
-      setWinSize({ w: window.innerWidth, h: window.innerHeight });
+    const onResize = () => {
+      const next = { w: window.innerWidth, h: window.innerHeight };
+      setWinSize(next);
+      if (overlayShapeRef.current === "ribbon") {
+        ribbonSizeRef.current = next;
+        writeStoredRibbonSize(next);
+      }
+    };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+
+  // Shape changes are the only time JavaScript resizes the native window.
+  // User-driven resize events update local scale state but never call setSize,
+  // which keeps the OS aspect-lock path free of feedback loops.
+  useEffect(() => {
+    if (!settingsHydrated) return;
+    const nextShape = settings.overlay_shape;
+    const previousShape = overlayShapeRef.current;
+    if (nextShape === previousShape) return;
+
+    const current = { w: window.innerWidth, h: window.innerHeight };
+    let target: { w: number; h: number };
+    if (nextShape === "square") {
+      if (previousShape === "ribbon" && isValidRibbonSize(current)) {
+        ribbonSizeRef.current = current;
+        writeStoredRibbonSize(current);
+      }
+      const preserveStartupSquare =
+        previousShape === null && isApproximatelySquare(current);
+      target = preserveStartupSquare
+        ? current
+        : { w: SQUARE_WINDOW_SIZE_PX, h: SQUARE_WINDOW_SIZE_PX };
+      overlayShapeRef.current = "square";
+    } else {
+      overlayShapeRef.current = "ribbon";
+      if (
+        previousShape === null &&
+        storedRibbonSizeAtStartup === null &&
+        isValidRibbonSize(current)
+      ) {
+        ribbonSizeRef.current = current;
+        writeStoredRibbonSize(current);
+      }
+      target = ribbonSizeRef.current;
+    }
+
+    const request = ++shapeGeometryRequestRef.current;
+    resizeOverlayWithinWorkArea(
+      target,
+      () => request === shapeGeometryRequestRef.current,
+    ).catch(() => {});
+  }, [settings.overlay_shape, settingsHydrated, storedRibbonSizeAtStartup]);
 
   let prev: LyricLine | undefined;
   let cur: LyricLine | undefined;
@@ -591,12 +658,12 @@ export default function Overlay() {
   const effectiveTextColorDim = autoColorActive
     ? (surfaceIsLight ? "#5a5a5a" : "#c8c8c8")
     : settings.text_color_dim;
-  // Scale factor: driven by WIDTH only since height auto-follows content
-  // (see the innerRow ResizeObserver above). Drag the window wider →
-  // text scales up → content gets taller → window height auto-grows.
-  // Drag narrower → text scales down → content shrinks → window height
-  // auto-shrinks. No empty vertical space ever.
-  const scale = Math.max(0.4, winSize.w / BASELINE_WINDOW_W_PX);
+  // Ribbon scaling follows width, preserving its existing behavior. Square
+  // scaling follows its tighter dimension so resized square windows keep the
+  // full composition visible.
+  const scale = settings.overlay_shape === "square"
+    ? Math.max(0.58, Math.min(winSize.w, winSize.h) / SQUARE_WINDOW_SIZE_PX)
+    : Math.max(0.4, winSize.w / BASELINE_WINDOW_W_PX);
   const baseSettings = autoColorActive
     ? { ...settings, text_color: effectiveTextColor, text_color_dim: effectiveTextColorDim }
     : settings;
@@ -814,6 +881,39 @@ export default function Overlay() {
     cur && cur.words && cur.words.length > 0
       ? { words: cur.words, currentWordIdx, nextTimeMs: nextLineTimeMs }
       : undefined;
+
+  if (settings.overlay_shape === "square") {
+    return (
+      <SquareLyricsView
+        track={track}
+        lyrics={lyrics}
+        displayIdx={displayIdx}
+        middleText={middleText}
+        translationText={translationText}
+        karaoke={curKaraoke}
+        settings={settingsForRender}
+        scale={scale}
+        albumArt={albumArt}
+        showArt={showArt}
+        showBlurBg={showBlurBg}
+        background={containerBg}
+        backgroundTint={bgRgba}
+        ambientServiceName={ambientServiceName}
+        textColor={effectiveTextColor}
+        textColorDim={effectiveTextColorDim}
+        textShadow={effectiveTextShadow}
+        isEdit={isEdit}
+        borderColor={borderColor}
+        openArtistPanel={openArtistPanel}
+        nudgeBanner={nudgeBanner}
+        updateState={updateState}
+        onInstallUpdate={installUpdate}
+        bridgeServiceName={bridgeServiceName}
+        adActive={adActive}
+        onHoverChange={setHovered}
+      />
+    );
+  }
 
   if (layoutMode === "single_line") {
     return (
@@ -1047,6 +1147,662 @@ export default function Overlay() {
   );
 }
 
+function SquareLyricsView({
+  track,
+  lyrics,
+  displayIdx,
+  middleText,
+  translationText,
+  karaoke,
+  settings,
+  scale,
+  albumArt,
+  showArt,
+  showBlurBg,
+  background,
+  backgroundTint,
+  ambientServiceName,
+  textColor,
+  textColorDim,
+  textShadow,
+  isEdit,
+  borderColor,
+  openArtistPanel,
+  nudgeBanner,
+  updateState,
+  onInstallUpdate,
+  bridgeServiceName,
+  adActive,
+  onHoverChange,
+}: {
+  track: CurrentTrack | null;
+  lyrics: CurrentLyrics | null;
+  displayIdx: number;
+  middleText: string;
+  translationText: string | undefined;
+  karaoke?: { words: WordSpan[]; currentWordIdx: number; nextTimeMs: number };
+  settings: Settings;
+  scale: number;
+  albumArt: { title: string; artist: string; data_url: string } | null;
+  showArt: boolean;
+  showBlurBg: boolean;
+  background: string;
+  backgroundTint: string;
+  ambientServiceName: string | null;
+  textColor: string;
+  textColorDim: string;
+  textShadow: string;
+  isEdit: boolean;
+  borderColor: string;
+  openArtistPanel?: () => void;
+  nudgeBanner: { value: number; until: number } | null;
+  updateState:
+    | { phase: "idle" }
+    | { phase: "available"; version: string; update: Update }
+    | { phase: "downloading"; version: string }
+    | { phase: "ready"; version: string }
+    | { phase: "error"; message: string };
+  onInstallUpdate: () => void;
+  bridgeServiceName: string | null;
+  adActive: boolean;
+  onHoverChange: (hovered: boolean) => void;
+}) {
+  const reducedMotion = usePrefersReducedMotion();
+  const lyricsScrollportRef = useRef<HTMLElement | null>(null);
+  const [lyricsScrollportHeight, setLyricsScrollportHeight] = useState(0);
+  const drag = isEdit ? { "data-tauri-drag-region": true } : {};
+  const resolvedTrack = lyrics?.track?.title?.trim() ? lyrics.track : track;
+  const title = resolvedTrack?.title?.trim() || "Nothing playing";
+  const artist = resolvedTrack?.artist?.trim() || "Waiting for media";
+  const radius = Math.max(10, Math.round(18 * scale));
+  const showFullPageLyrics =
+    settings.layout_mode === "full_page" &&
+    !adActive &&
+    lyrics?.status === "synced" &&
+    lyrics.lines.length > 0;
+  const fullPageSpacerHeight = showFullPageLyrics
+    ? Math.max(0, Math.floor(lyricsScrollportHeight / 2))
+    : 0;
+
+  useLayoutEffect(() => {
+    const scrollport = lyricsScrollportRef.current;
+    if (!scrollport) return;
+
+    const measure = () => {
+      setLyricsScrollportHeight(Math.round(scrollport.getBoundingClientRect().height));
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(scrollport);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!showFullPageLyrics || displayIdx >= 0) return;
+    const scrollport = lyricsScrollportRef.current;
+    if (scrollport) scrollport.scrollTop = 0;
+  }, [displayIdx, fullPageSpacerHeight, lyrics?.track_key, showFullPageLyrics]);
+
+  const renderSyncedLyrics = () => {
+    if (!lyrics || lyrics.status !== "synced" || lyrics.lines.length === 0) {
+      return (
+        <SquareLyricLine
+          text={middleText}
+          active
+          distance={0}
+          settings={settings}
+          scale={scale}
+          textShadow={textShadow}
+          reducedMotion={reducedMotion}
+          karaoke={karaoke}
+        />
+      );
+    }
+
+    if (settings.layout_mode === "full_page") {
+      return lyrics.lines.map((line, index) => {
+        const active = index === displayIdx;
+        return (
+          <SquareLyricLine
+            key={`${line.time_ms}-${index}`}
+            text={line.text}
+            active={active}
+            distance={displayIdx < 0 ? index + 1 : Math.abs(index - displayIdx)}
+            settings={settings}
+            scale={scale}
+            textShadow={textShadow}
+            reducedMotion={reducedMotion}
+            karaoke={active ? karaoke : undefined}
+            translation={active ? translationText : undefined}
+            scrollIntoView={active}
+            scrollContextKey={fullPageSpacerHeight}
+          />
+        );
+      });
+    }
+
+    if (displayIdx < 0) {
+      return (
+        <>
+          <SquareLyricLine
+            text={middleText}
+            active
+            distance={0}
+            settings={settings}
+            scale={scale}
+            textShadow={textShadow}
+            reducedMotion={reducedMotion}
+          />
+          {settings.layout_mode === "three_line" ? (
+            <SquareLyricLine
+              text={lyrics.lines[0]?.text}
+              active={false}
+              distance={1}
+              settings={settings}
+              scale={scale}
+              textShadow={textShadow}
+              reducedMotion={reducedMotion}
+            />
+          ) : null}
+        </>
+      );
+    }
+
+    const offsets = settings.layout_mode === "single_line" ? [0] : [-1, 0, 1];
+    return offsets.map((offset) => {
+      const line = lyrics.lines[displayIdx + offset];
+      if (!line) return null;
+      const active = offset === 0;
+      return (
+        <SquareLyricLine
+          key={`${line.time_ms}-${offset}`}
+          text={line.text}
+          active={active}
+          distance={Math.abs(offset)}
+          settings={settings}
+          scale={scale}
+          textShadow={textShadow}
+          reducedMotion={reducedMotion}
+          karaoke={active ? karaoke : undefined}
+          translation={active ? translationText : undefined}
+        />
+      );
+    });
+  };
+
+  return (
+    <div
+      {...drag}
+      onMouseEnter={() => onHoverChange(true)}
+      onMouseLeave={() => onHoverChange(false)}
+      style={{
+        position: "relative",
+        width: "100vw",
+        height: "100vh",
+        boxSizing: "border-box",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        padding: `${Math.max(16, 28 * scale)}px ${Math.max(18, 32 * scale)}px`,
+        border: `1px dashed ${borderColor}`,
+        borderRadius: radius,
+        background,
+        color: textColor,
+        fontFamily: `"${settings.font_family}", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`,
+        cursor: isEdit ? "move" : "default",
+        userSelect: "none",
+        transition: reducedMotion
+          ? "none"
+          : "border-color 160ms ease, background 160ms ease",
+      }}
+    >
+      {showBlurBg && albumArt ? (
+        <BlurredAlbumBg dataUrl={albumArt.data_url} tintColor={backgroundTint} />
+      ) : null}
+      {!albumArt && !settings.bg_hidden && background !== "transparent" ? (
+        <ServiceBg serviceName={ambientServiceName} />
+      ) : null}
+      {showBlurBg ? (
+        <div
+          aria-hidden
+          style={{
+            position: "absolute",
+            inset: 0,
+            borderRadius: radius,
+            background:
+              "linear-gradient(180deg, rgba(4,5,7,0.08) 0%, rgba(4,5,7,0.18) 42%, rgba(2,3,5,0.62) 100%)",
+            boxShadow:
+              "inset 0 1px 0 rgba(255,255,255,0.08), inset 0 -80px 120px rgba(0,0,0,0.18)",
+            pointerEvents: "none",
+          }}
+        />
+      ) : null}
+
+      <NudgeBanner banner={nudgeBanner} />
+      <div style={{ position: "absolute", top: 10, left: 14, zIndex: 5 }}>
+        <UpdateBanner state={updateState} onInstall={onInstallUpdate} />
+      </div>
+
+      {settings.show_media || (showArt && albumArt) ? (
+        <header
+          {...drag}
+          style={{
+            position: "relative",
+            zIndex: 2,
+            display: "flex",
+            alignItems: "center",
+            gap: Math.max(10, 13 * scale),
+            minHeight: Math.max(48, 66 * scale),
+            paddingRight: 54,
+          }}
+        >
+          {showArt && albumArt ? (
+            <button
+              type="button"
+              aria-label={openArtistPanel ? "Open artist info" : "Album art"}
+              disabled={!openArtistPanel}
+              onClick={(event) => {
+                event.stopPropagation();
+                openArtistPanel?.();
+              }}
+              style={{
+                width: Math.max(48, 66 * scale),
+                height: Math.max(48, 66 * scale),
+                flexShrink: 0,
+                padding: 0,
+                border: "1px solid rgba(255,255,255,0.14)",
+                borderRadius: Math.max(7, 10 * scale),
+                overflow: "hidden",
+                background: "rgba(0,0,0,0.18)",
+                boxShadow: "0 8px 24px rgba(0,0,0,0.34)",
+                cursor: openArtistPanel ? "pointer" : "default",
+              }}
+            >
+              <img
+                src={albumArt.data_url}
+                alt=""
+                draggable={false}
+                style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+              />
+            </button>
+          ) : null}
+          {settings.show_media ? (
+            <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
+              <div
+                title={title}
+                style={{
+                  color: textColor,
+                  fontSize: Math.max(13, 16 * scale),
+                  fontWeight: 700,
+                  lineHeight: 1.18,
+                  textShadow,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {title}
+              </div>
+              <div
+                title={artist}
+                style={{
+                  color: textColorDim,
+                  fontSize: Math.max(11, 13 * scale),
+                  fontWeight: 500,
+                  lineHeight: 1.2,
+                  textShadow,
+                  opacity: 0.9,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {artist}
+              </div>
+            </div>
+          ) : null}
+        </header>
+      ) : null}
+
+      {openArtistPanel && (!showArt || !albumArt) && lyrics?.status !== "unsupported" ? (
+        <div
+          style={{
+            position: "absolute",
+            top: Math.max(34, 45 * scale),
+            right: 20,
+            zIndex: 4,
+          }}
+        >
+          <ArtistInfoDot onClick={openArtistPanel} />
+        </div>
+      ) : null}
+
+      <main
+        ref={lyricsScrollportRef}
+        {...drag}
+        style={{
+          position: "relative",
+          zIndex: 2,
+          flex: 1,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: showFullPageLyrics ? "flex-start" : "center",
+          gap: Math.max(6 * scale, settings.line_padding_px + 8 * scale),
+          overflowY: showFullPageLyrics ? "auto" : "hidden",
+          overflowX: "hidden",
+          padding: showFullPageLyrics ? "0 1px" : `${Math.max(14, 22 * scale)}px 1px`,
+          scrollbarWidth: "none",
+          maskImage:
+            "linear-gradient(to bottom, transparent 0%, black 8%, black 92%, transparent 100%)",
+          WebkitMaskImage:
+            "linear-gradient(to bottom, transparent 0%, black 8%, black 92%, transparent 100%)",
+        }}
+      >
+        {showFullPageLyrics ? (
+          <div
+            aria-hidden
+            style={{
+              height: fullPageSpacerHeight,
+              minHeight: fullPageSpacerHeight,
+              flex: `0 0 ${fullPageSpacerHeight}px`,
+              pointerEvents: "none",
+            }}
+          />
+        ) : null}
+        {adActive && settings.ad_break_promos_enabled ? (
+          <PromoCard
+            promo={lyrics?.promo ?? null}
+            textColor={textColor}
+            textColorDim={textColorDim}
+            textShadow={textShadow}
+            scaledFontSize={Math.max(20, settings.font_size_px)}
+            layoutMode="full_page"
+            dragRegion={isEdit}
+            reducedMotion={reducedMotion}
+          />
+        ) : adActive ? (
+          <SquareLyricLine
+            text="Ad break"
+            active
+            distance={0}
+            settings={settings}
+            scale={scale}
+            textShadow={textShadow}
+            reducedMotion={reducedMotion}
+          />
+        ) : lyrics?.status === "unsupported" ? (
+          <UnsupportedBlock
+            track={track}
+            sourceLabelText={sourceLabel(track?.source_app_id ?? null, null)}
+            bridgeServiceName={bridgeServiceName}
+            settings={settings}
+            textShadow={textShadow}
+            dragRegion={isEdit}
+          />
+        ) : (
+          renderSyncedLyrics()
+        )}
+        {showFullPageLyrics ? (
+          <div
+            aria-hidden
+            style={{
+              height: fullPageSpacerHeight,
+              minHeight: fullPageSpacerHeight,
+              flex: `0 0 ${fullPageSpacerHeight}px`,
+              pointerEvents: "none",
+            }}
+          />
+        ) : null}
+      </main>
+
+      {settings.show_media ? (
+        <SquarePlaybackFooter
+          track={track}
+          textColor={textColor}
+          textColorDim={textColorDim}
+          textShadow={textShadow}
+          adActive={adActive}
+          scale={scale}
+          reducedMotion={reducedMotion}
+        />
+      ) : null}
+
+      <img
+        src={textColor === "#0a0a0a" ? "/hum-logo-dark.png" : "/hum-logo.png"}
+        alt=""
+        draggable={false}
+        style={{
+          position: "absolute",
+          right: Math.max(18, 24 * scale),
+          bottom: settings.show_media
+            ? Math.max(47, 58 * scale)
+            : Math.max(18, 24 * scale),
+          zIndex: 2,
+          width: Math.max(24, 31 * scale),
+          height: "auto",
+          opacity: 0.24,
+          pointerEvents: "none",
+        }}
+      />
+    </div>
+  );
+}
+
+function SquareLyricLine({
+  text,
+  active,
+  distance,
+  settings,
+  scale,
+  textShadow,
+  reducedMotion,
+  karaoke,
+  translation,
+  scrollIntoView,
+  scrollContextKey,
+}: {
+  text: string | undefined;
+  active: boolean;
+  distance: number;
+  settings: Settings;
+  scale: number;
+  textShadow: string;
+  reducedMotion: boolean;
+  karaoke?: { words: WordSpan[]; currentWordIdx: number; nextTimeMs: number };
+  translation?: string;
+  scrollIntoView?: boolean;
+  scrollContextKey?: number;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!scrollIntoView || !ref.current) return;
+    ref.current.scrollIntoView({
+      behavior: reducedMotion ? "auto" : "smooth",
+      block: "center",
+    });
+  }, [scrollIntoView, text, reducedMotion, scrollContextKey]);
+
+  if (!text) return null;
+  const useKaraoke = active && !!karaoke?.words.length;
+  const fontSize = active
+    ? Math.max(22 * scale, settings.font_size_px * 1.45)
+    : Math.max(13 * scale, settings.font_size_px * 0.86);
+  const opacity = active ? 1 : distance > 1 ? 0.28 : 0.52;
+
+  return (
+    <div
+      ref={ref}
+      className={reducedMotion ? undefined : "hum-line-in"}
+      style={{
+        position: "relative",
+        flexShrink: 0,
+        width: "100%",
+        color: active ? settings.text_color : settings.text_color_dim,
+        fontSize,
+        fontWeight: active ? Math.max(700, settings.font_weight) : 600,
+        lineHeight: active ? 1.1 : 1.18,
+        letterSpacing: active ? -0.55 : -0.15,
+        textAlign: settings.text_align,
+        textShadow,
+        opacity,
+        overflowWrap: "anywhere",
+        transition: reducedMotion
+          ? "none"
+          : "color 240ms ease, opacity 240ms ease, filter 240ms ease",
+        filter: active ? "none" : "blur(0.2px)",
+      }}
+    >
+      {useKaraoke
+        ? karaoke!.words.map((word, index) => {
+            const current = karaoke!.currentWordIdx;
+            const lit = current >= index;
+            const duration = wordDurationMs(karaoke!.words, index, karaoke!.nextTimeMs);
+            return (
+              <span
+                key={`${word.time_ms}-${index}`}
+                style={{
+                  background: `linear-gradient(to right, ${settings.text_color} 0%, ${settings.text_color} 50%, ${settings.text_color_dim} 50%, ${settings.text_color_dim} 100%)`,
+                  backgroundSize: "200% 100%",
+                  backgroundPosition: lit ? "0% 0%" : "100% 0%",
+                  backgroundClip: "text",
+                  WebkitBackgroundClip: "text",
+                  color: "transparent",
+                  WebkitTextFillColor: "transparent",
+                  transition:
+                    !reducedMotion && current === index
+                      ? `background-position ${duration}ms linear`
+                      : "none",
+                }}
+              >
+                {word.text}
+              </span>
+            );
+          })
+        : text}
+      {translation ? (
+        <div
+          style={{
+            marginTop: Math.max(6, 8 * scale),
+            color: settings.text_color_dim,
+            fontSize: Math.max(12 * scale, fontSize * 0.48),
+            fontWeight: 500,
+            lineHeight: 1.3,
+            letterSpacing: 0,
+            opacity: 0.82,
+          }}
+        >
+          {translation}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SquarePlaybackFooter({
+  track,
+  textColor,
+  textColorDim,
+  textShadow,
+  adActive,
+  scale,
+  reducedMotion,
+}: {
+  track: CurrentTrack | null;
+  textColor: string;
+  textColorDim: string;
+  textShadow: string;
+  adActive: boolean;
+  scale: number;
+  reducedMotion: boolean;
+}) {
+  if (!track) return <div style={{ minHeight: Math.max(28, 34 * scale) }} />;
+  const duration = Math.max(0, track.duration_ms);
+  let position = track.position_ms;
+  if (track.state === "playing") {
+    position += Math.max(0, Date.now() - track.last_update_unix_ms);
+  }
+  position = Math.max(0, Math.min(duration || position, position));
+  const progress = duration > 0 ? Math.min(1, position / duration) : 0;
+  const source = sourceLabel(track.source_app_id, null);
+
+  return (
+    <footer
+      style={{
+        position: "relative",
+        zIndex: 2,
+        display: "flex",
+        flexDirection: "column",
+        gap: Math.max(6, 8 * scale),
+        paddingTop: Math.max(7, 10 * scale),
+      }}
+    >
+      <div
+        style={{
+          position: "relative",
+          width: "100%",
+          height: Math.max(2, 3 * scale),
+          overflow: "hidden",
+          borderRadius: 99,
+          background: "rgba(255,255,255,0.22)",
+          boxShadow: "0 1px 2px rgba(0,0,0,0.2)",
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            inset: "0 auto 0 0",
+            width: `${(progress * 100).toFixed(2)}%`,
+            borderRadius: 99,
+            background: textColor,
+            opacity: 0.92,
+            transition: reducedMotion ? "none" : "width 480ms linear",
+          }}
+        />
+      </div>
+      <div
+        style={{
+          minHeight: Math.max(19, 24 * scale),
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 12,
+          color: textColorDim,
+          fontSize: Math.max(9, 10.5 * scale),
+          fontWeight: 600,
+          letterSpacing: 0.35,
+          fontVariantNumeric: "tabular-nums",
+          textShadow,
+          opacity: 0.86,
+        }}
+      >
+        <span>{fmtMs(position)}</span>
+        <span style={{ textTransform: "uppercase", letterSpacing: 0.8 }}>
+          {adActive ? "Ad break" : source ?? track.state}
+        </span>
+        <span>{fmtMs(duration)}</span>
+      </div>
+    </footer>
+  );
+}
+
+function usePrefersReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(() =>
+    typeof window !== "undefined"
+      ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      : false,
+  );
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const sync = () => setReduced(query.matches);
+    sync();
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, []);
+  return reduced;
+}
+
 // Update notice pinned to the top-right of the overlay. Default state is
 // just a small gold dot — minimal pixel footprint, doesn't compete with
 // the lyrics for attention. Hovering expands it into the full message.
@@ -1175,11 +1931,17 @@ function UpdateBanner({
 function ArtistInfoDot({ onClick }: { onClick: () => void }) {
   const [hover, setHover] = useState(false);
   return (
-    <div
+    <button
+      type="button"
+      aria-label="Open artist info"
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
+      onFocus={() => setHover(true)}
+      onBlur={() => setHover(false)}
       onClick={onClick}
       style={{
+        appearance: "none",
+        WebkitAppearance: "none",
         alignSelf: "flex-start",
         display: "flex",
         alignItems: "center",
@@ -1187,7 +1949,13 @@ function ArtistInfoDot({ onClick }: { onClick: () => void }) {
         cursor: "pointer",
         userSelect: "none",
         padding: "2px 4px",
+        margin: 0,
+        border: 0,
         borderRadius: 4,
+        background: "transparent",
+        color: "inherit",
+        font: "inherit",
+        textAlign: "left",
       }}
     >
       <span
@@ -1217,7 +1985,7 @@ function ArtistInfoDot({ onClick }: { onClick: () => void }) {
       >
         Artist info
       </span>
-    </div>
+    </button>
   );
 }
 
@@ -1232,6 +2000,7 @@ function PromoCard({
   scaledFontSize,
   layoutMode,
   dragRegion,
+  reducedMotion = false,
 }: {
   promo: Promo | null | undefined;
   textColor: string;
@@ -1240,6 +2009,7 @@ function PromoCard({
   scaledFontSize: number;
   layoutMode: LayoutMode;
   dragRegion: boolean;
+  reducedMotion?: boolean;
 }) {
   const accent = promo?.accent_color ?? "#d4af37";
   const cta = promo?.cta_text ?? "Learn more →";
@@ -1290,6 +2060,7 @@ function PromoCard({
           width: "100%",
           maxWidth: "92vw",
           overflow: "hidden",
+          animation: reducedMotion ? "none" : undefined,
         }}
       >
         <img
@@ -1380,6 +2151,7 @@ function PromoCard({
         cursor: dragRegion ? "move" : "pointer",
         maxWidth: "92vw",
         overflow: "hidden",
+        animation: reducedMotion ? "none" : undefined,
       }}
     >
       <div style={{
@@ -2671,8 +3443,113 @@ function alignToFlex(a: TextAlign): React.CSSProperties["alignItems"] {
 // pixel size at the baseline 720×200 window. Smaller window scales down,
 // larger scales up; whichever dimension is the tighter constraint wins
 // (so text never overflows when only the width is dragged narrower).
-const BASELINE_WINDOW_W_PX = 1100;
+const DEFAULT_RIBBON_WINDOW_W_PX = 1100;
+const DEFAULT_RIBBON_WINDOW_H_PX = 130;
+const SQUARE_WINDOW_SIZE_PX = 620;
+const RIBBON_SIZE_STORAGE_KEY = "hum.overlay.ribbon-size.v1";
+const BASELINE_WINDOW_W_PX = DEFAULT_RIBBON_WINDOW_W_PX;
 const BASELINE_WINDOW_H_PX = 200;
+
+function isValidRibbonSize(size: { w: number; h: number }): boolean {
+  return Number.isFinite(size.w) &&
+    Number.isFinite(size.h) &&
+    size.w >= 360 &&
+    size.w <= 10_000 &&
+    size.h >= 36 &&
+    size.h <= 5_000 &&
+    size.w / size.h > 1.3;
+}
+
+function readStoredRibbonSize(): { w: number; h: number } | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const parsed: unknown = JSON.parse(
+      window.localStorage.getItem(RIBBON_SIZE_STORAGE_KEY) ?? "null",
+    );
+    if (!parsed || typeof parsed !== "object") return null;
+    const candidate = parsed as { w?: unknown; h?: unknown };
+    if (typeof candidate.w !== "number" || typeof candidate.h !== "number") {
+      return null;
+    }
+    const size = { w: candidate.w, h: candidate.h };
+    return isValidRibbonSize(size) ? size : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredRibbonSize(size: { w: number; h: number }): void {
+  if (typeof window === "undefined" || !isValidRibbonSize(size)) return;
+  try {
+    window.localStorage.setItem(
+      RIBBON_SIZE_STORAGE_KEY,
+      JSON.stringify({ w: Math.round(size.w), h: Math.round(size.h) }),
+    );
+  } catch {
+    // Local storage can be unavailable in hardened webview environments.
+  }
+}
+
+function isApproximatelySquare(size: { w: number; h: number }): boolean {
+  const longest = Math.max(size.w, size.h);
+  return longest > 0 && Math.abs(size.w - size.h) / longest <= 0.08;
+}
+
+async function resizeOverlayWithinWorkArea(
+  preferredLogicalSize: { w: number; h: number },
+  shouldApply: () => boolean,
+): Promise<void> {
+  const overlay = getCurrentWindow();
+  const monitor = (await currentMonitor()) ?? (await primaryMonitor());
+  if (!monitor || !shouldApply()) return;
+
+  const [currentPosition, currentSize] = await Promise.all([
+    overlay.outerPosition().catch(() => null),
+    overlay.outerSize().catch(() => null),
+  ]);
+  if (!shouldApply()) return;
+
+  const workArea = monitor.workArea;
+  const scaleFactor = monitor.scaleFactor;
+  const maxLogicalWidth = workArea.size.width / scaleFactor;
+  const maxLogicalHeight = workArea.size.height / scaleFactor;
+  const fitScale = Math.min(
+    1,
+    maxLogicalWidth / Math.max(1, preferredLogicalSize.w),
+    maxLogicalHeight / Math.max(1, preferredLogicalSize.h),
+  );
+  const targetLogical = {
+    w: Math.max(1, Math.floor(preferredLogicalSize.w * fitScale)),
+    h: Math.max(1, Math.floor(preferredLogicalSize.h * fitScale)),
+  };
+  const targetPhysical = new LogicalSize(
+    targetLogical.w,
+    targetLogical.h,
+  ).toPhysical(scaleFactor);
+
+  const workLeft = workArea.position.x;
+  const workTop = workArea.position.y;
+  const workRight = workLeft + workArea.size.width;
+  const workBottom = workTop + workArea.size.height;
+  const centerX = currentPosition && currentSize
+    ? currentPosition.x + currentSize.width / 2
+    : workLeft + workArea.size.width / 2;
+  const centerY = currentPosition && currentSize
+    ? currentPosition.y + currentSize.height / 2
+    : workTop + workArea.size.height / 2;
+  const maxLeft = Math.max(workLeft, workRight - targetPhysical.width);
+  const maxTop = Math.max(workTop, workBottom - targetPhysical.height);
+  const targetLeft = Math.round(
+    Math.min(maxLeft, Math.max(workLeft, centerX - targetPhysical.width / 2)),
+  );
+  const targetTop = Math.round(
+    Math.min(maxTop, Math.max(workTop, centerY - targetPhysical.height / 2)),
+  );
+
+  await overlay.setSize(new LogicalSize(targetLogical.w, targetLogical.h));
+  if (!shouldApply()) return;
+  await overlay.setPosition(new PhysicalPosition(targetLeft, targetTop));
+}
 
 // Convert hex (#rrggbb) + opacity-percent to rgba(...) string. Also accepts
 // rgb(r, g, b) input from mixHexWithRgb's output. Falls back to transparent

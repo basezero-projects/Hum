@@ -6,6 +6,15 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.48] - 2026-08-18
+
+### Added
+- **Square lyrics view with live shape switching.** Settings > Layout now has an Overlay shape control with Horizontal ribbon and Square choices. Square opens a focused 620 by 620 lyrics canvas inspired by Apple Music: compact album art and track details at the top, large wrapped active lyrics, softer surrounding lines, and a slim progress footer. The existing Single line, Three line scroll, and Full page scroll choices still control how many lyrics appear inside either window shape.
+
+### Changed
+- **Shape changes stay visible and remember the previous ribbon size.** Switching layouts keeps the window centered around its current position, clamps it inside the active monitor, and scales the square down when the monitor work area is smaller than 620 pixels. Hum stores custom ribbon dimensions separately, so returning from Square restores the user's ribbon size even after restarting the app.
+- **Square mode follows the existing appearance controls.** Blurred album art, transparent background, album art visibility, translated lyrics, text alignment, auto contrast, and the Show media info toggle all apply to the square canvas. Hiding media info removes the track header and progress footer while leaving album art under its own toggle. Reduced motion is also respected. The OBS browser source remains horizontal in this version.
+
 ## [0.13.47] - 2026-06-09
 
 ### Added

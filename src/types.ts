@@ -20,6 +20,7 @@ export type CurrentTrack = {
 export type OverlayMode = "edit" | "locked" | "ghost";
 
 export type LayoutMode = "three_line" | "single_line" | "full_page";
+export type OverlayShape = "ribbon" | "square";
 export type TextAlign = "left" | "center" | "right";
 
 export type Settings = {
@@ -36,6 +37,7 @@ export type Settings = {
   text_align: TextAlign;
   line_padding_px: number;
   layout_mode: LayoutMode;
+  overlay_shape: OverlayShape;
   show_album_art: boolean;
   show_translation: boolean;
   tint_bg_from_album_art: boolean;

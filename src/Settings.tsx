@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { LayoutMode, OverlayMode, Settings, TextAlign } from "./types";
+import type {
+  LayoutMode,
+  OverlayMode,
+  OverlayShape,
+  Settings,
+  TextAlign,
+} from "./types";
 
 const ACCENT = "#d4af37";
 
@@ -224,6 +230,21 @@ export default function SettingsView() {
       </Section>
 
       <Section title="Layout">
+        <Row label="Overlay shape">
+          <SegmentedControl<OverlayShape>
+            ariaLabel="Overlay shape"
+            value={s.overlay_shape}
+            onChange={(v) => update("overlay_shape", v)}
+            options={[
+              ["ribbon", "Horizontal ribbon"],
+              ["square", "Square"],
+            ]}
+          />
+        </Row>
+        <Hint>
+          Square gives the lyrics more room to wrap. Horizontal ribbon keeps
+          the compact overlay.
+        </Hint>
         <Row label="Layout mode">
           <Select
             value={s.layout_mode}
@@ -258,9 +279,9 @@ export default function SettingsView() {
           onChange={(v) => update("show_media", v)}
         />
         <Hint>
-          The right-hand column with the track title, progress bar, and source
-          badge. Turn it off to show just the lyrics. Toggle on the fly with{" "}
-          <code>Ctrl+Alt+H</code>.
+          Shows the track details, progress bar, and source. They sit beside the
+          horizontal ribbon and along the bottom of the square view. Toggle on
+          the fly with <code>Ctrl+Alt+H</code>.
         </Hint>
         <Toggle
           label="Show translated lyrics (when available)"
@@ -508,6 +529,99 @@ function Select<T extends string>({
         </option>
       ))}
     </select>
+  );
+}
+
+function SegmentedControl<T extends string>({
+  ariaLabel,
+  value,
+  onChange,
+  options,
+}: {
+  ariaLabel: string;
+  value: T;
+  onChange: (v: T) => void;
+  options: Array<[T, string]>;
+}) {
+  const moveSelection = (
+    event: React.KeyboardEvent<HTMLButtonElement>,
+    direction: number,
+  ) => {
+    const current = options.findIndex(([option]) => option === value);
+    const next = (current + direction + options.length) % options.length;
+    const nextValue = options[next]?.[0];
+    if (!nextValue) return;
+    event.preventDefault();
+    onChange(nextValue);
+    const group = event.currentTarget.parentElement;
+    window.requestAnimationFrame(() => {
+      group
+        ?.querySelector<HTMLButtonElement>(`button[data-value="${nextValue}"]`)
+        ?.focus();
+    });
+  };
+
+  return (
+    <div
+      role="radiogroup"
+      aria-label={ariaLabel}
+      style={{
+        display: "inline-flex",
+        gap: 3,
+        padding: 3,
+        borderRadius: 8,
+        border: "1px solid rgba(255,255,255,0.09)",
+        background: "rgba(0,0,0,0.35)",
+      }}
+    >
+      {options.map(([option, label]) => {
+        const selected = option === value;
+        return (
+          <button
+            key={option}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            tabIndex={selected ? 0 : -1}
+            data-value={option}
+            onClick={() => onChange(option)}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+                moveSelection(event, -1);
+              } else if (
+                event.key === "ArrowRight" ||
+                event.key === "ArrowDown"
+              ) {
+                moveSelection(event, 1);
+              }
+            }}
+            style={{
+              border: selected
+                ? "1px solid rgba(212,175,55,0.55)"
+                : "1px solid transparent",
+              borderRadius: 6,
+              padding: "6px 11px",
+              background: selected
+                ? "rgba(212,175,55,0.14)"
+                : "transparent",
+              color: selected ? "#f2d77e" : "rgba(234,234,234,0.62)",
+              boxShadow: selected
+                ? "0 1px 8px rgba(0,0,0,0.22)"
+                : "none",
+              fontSize: 12,
+              fontWeight: selected ? 600 : 500,
+              fontFamily: "inherit",
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+              transition:
+                "background 140ms ease, border-color 140ms ease, color 140ms ease",
+            }}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

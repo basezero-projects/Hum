@@ -33,6 +33,7 @@ pub struct Settings {
     pub line_padding_px: i32,
 
     pub layout_mode: String,
+    pub overlay_shape: String,
 
     pub show_album_art: bool,
     pub show_translation: bool,
@@ -129,6 +130,7 @@ impl Default for Settings {
             text_align: "left".to_string(),
             line_padding_px: 6,
             layout_mode: "three_line".to_string(),
+            overlay_shape: "ribbon".to_string(),
             show_album_art: true,
             show_translation: false,
             tint_bg_from_album_art: false,
@@ -367,6 +369,9 @@ fn sanitize(s: &mut Settings) {
     if !matches!(s.layout_mode.as_str(), "three_line" | "single_line" | "full_page") {
         s.layout_mode = defaults.layout_mode.clone();
     }
+    if !matches!(s.overlay_shape.as_str(), "ribbon" | "square") {
+        s.overlay_shape = defaults.overlay_shape.clone();
+    }
 
     // Numeric clamps to keep the UI sensible.
     s.anticipate_ms = s.anticipate_ms.clamp(-2_000, 5_000);
@@ -423,6 +428,36 @@ fn is_valid_color_string(s: &str) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn overlay_shape_defaults_to_ribbon_when_missing() {
+        let settings: Settings = serde_json::from_str(r#"{}"#).unwrap();
+        assert_eq!(settings.overlay_shape, "ribbon");
+    }
+
+    #[test]
+    fn overlay_shape_sanitizes_unknown_values() {
+        let mut settings = Settings {
+            overlay_shape: "portrait".to_string(),
+            ..Default::default()
+        };
+
+        sanitize(&mut settings);
+
+        assert_eq!(settings.overlay_shape, "ribbon");
+    }
+
+    #[test]
+    fn overlay_shape_preserves_square() {
+        let mut settings = Settings {
+            overlay_shape: "square".to_string(),
+            ..Default::default()
+        };
+
+        sanitize(&mut settings);
+
+        assert_eq!(settings.overlay_shape, "square");
+    }
+
     #[cfg(windows)]
     #[test]
     fn window_backdrop_round_trips_through_serde() {
@@ -472,4 +507,3 @@ pub fn open_settings_window(app: AppHandle<Wry>) -> Result<(), String> {
     // be retrievable above. This branch is defensive.
     Err("settings window not registered".to_string())
 }
-
