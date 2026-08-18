@@ -6,6 +6,16 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.49] - 2026-08-18
+
+### Fixed
+- **Square lyrics now begin under the track header instead of halfway down the window.** The large empty area at the start of a song came from treating Square like the Full page scroll ribbon. Square now has its own focused view with one soft previous line, one large active line, and up to two faded upcoming lines. Before the first timed lyric, the first few lines appear immediately under the header instead of leaving a blank canvas.
+- **Square lyrics have a clearer Apple Music style hierarchy.** The active lyric uses larger, heavier type while nearby lines are smaller, dimmer, and lightly blurred. Line changes fade and rise into their slots instead of rebuilding a dense full-song list. Blank timed entries keep the layout stable with a restrained music note.
+- **Long lyrics fit without cutting off the active line.** Hum measures the lyric stage at runtime. If a wrapped lyric or translation needs more room, it removes the farthest upcoming line first, then the previous line, and only then reduces the lyric scale within a readable limit. Compact 480 pixel squares start with fewer nearby lines automatically.
+
+### Changed
+- **The square footer is simpler.** The source label such as Chrome or Unknown is gone. The footer now shows elapsed time on the left and remaining time on the right. Settings also makes clear that Single line, Three line scroll, and Full page scroll apply to the Horizontal ribbon, while Square always uses the focused lyric view. The shape hint points users to Transparent background when they want to switch between the desktop and blurred album art looks.
+
 ## [0.13.48] - 2026-08-18
 
 ### Added

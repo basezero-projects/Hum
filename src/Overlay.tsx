@@ -1208,51 +1208,132 @@ function SquareLyricsView({
   onHoverChange: (hovered: boolean) => void;
 }) {
   const reducedMotion = usePrefersReducedMotion();
-  const lyricsScrollportRef = useRef<HTMLElement | null>(null);
-  const [lyricsScrollportHeight, setLyricsScrollportHeight] = useState(0);
+  const lyricStageRef = useRef<HTMLElement | null>(null);
+  const lyricStackRef = useRef<HTMLDivElement | null>(null);
+  const [lyricStageHeight, setLyricStageHeight] = useState(0);
+  const desiredFutureLineCount = scale < 0.9 ? 1 : 2;
+  const [futureLineCount, setFutureLineCount] = useState(desiredFutureLineCount);
+  const [showPreviousLine, setShowPreviousLine] = useState(true);
+  const [stackTypographyScale, setStackTypographyScale] = useState(1);
+  const [stackMeasurement, setStackMeasurement] = useState({
+    height: 0,
+    configuration: "",
+  });
   const drag = isEdit ? { "data-tauri-drag-region": true } : {};
   const resolvedTrack = lyrics?.track?.title?.trim() ? lyrics.track : track;
   const title = resolvedTrack?.title?.trim() || "Nothing playing";
   const artist = resolvedTrack?.artist?.trim() || "Waiting for media";
   const radius = Math.max(10, Math.round(18 * scale));
-  const showFullPageLyrics =
-    settings.layout_mode === "full_page" &&
-    !adActive &&
-    lyrics?.status === "synced" &&
-    lyrics.lines.length > 0;
-  const fullPageSpacerHeight = showFullPageLyrics
-    ? Math.max(0, Math.floor(lyricsScrollportHeight / 2))
-    : 0;
+  const hasSyncedLyrics =
+    lyrics?.status === "synced" && lyrics.lines.length > 0;
+  const stackConfiguration = `${futureLineCount}:${showPreviousLine}:${stackTypographyScale}`;
 
   useLayoutEffect(() => {
-    const scrollport = lyricsScrollportRef.current;
-    if (!scrollport) return;
+    setFutureLineCount(desiredFutureLineCount);
+    setShowPreviousLine(true);
+    setStackTypographyScale(1);
+  }, [
+    desiredFutureLineCount,
+    displayIdx,
+    lyricStageHeight,
+    lyrics?.track_key,
+    settings.font_family,
+    settings.font_size_px,
+    settings.font_weight,
+    settings.line_padding_px,
+    translationText,
+  ]);
+
+  useLayoutEffect(() => {
+    const stage = lyricStageRef.current;
+    if (!stage) return;
 
     const measure = () => {
-      setLyricsScrollportHeight(Math.round(scrollport.getBoundingClientRect().height));
+      const styles = window.getComputedStyle(stage);
+      const blockPadding =
+        Number.parseFloat(styles.paddingTop) + Number.parseFloat(styles.paddingBottom);
+      setLyricStageHeight(Math.max(0, stage.clientHeight - blockPadding));
     };
 
     measure();
     const observer = new ResizeObserver(measure);
-    observer.observe(scrollport);
+    observer.observe(stage);
     return () => observer.disconnect();
   }, []);
 
-  useEffect(() => {
-    if (!showFullPageLyrics || displayIdx >= 0) return;
-    const scrollport = lyricsScrollportRef.current;
-    if (scrollport) scrollport.scrollTop = 0;
-  }, [displayIdx, fullPageSpacerHeight, lyrics?.track_key, showFullPageLyrics]);
+  useLayoutEffect(() => {
+    const stack = lyricStackRef.current;
+    if (!stack) return;
+
+    const measure = () => {
+      setStackMeasurement({
+        height: stack.getBoundingClientRect().height,
+        configuration: stackConfiguration,
+      });
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(stack);
+    return () => observer.disconnect();
+  }, [stackConfiguration]);
+
+  useLayoutEffect(() => {
+    if (
+      !hasSyncedLyrics ||
+      lyricStageHeight <= 0 ||
+      stackMeasurement.configuration !== stackConfiguration ||
+      stackMeasurement.height <= lyricStageHeight + 1
+    ) {
+      return;
+    }
+
+    if (futureLineCount > 0) {
+      setFutureLineCount((count) => count - 1);
+      return;
+    }
+    if (showPreviousLine && displayIdx >= 0) {
+      setShowPreviousLine(false);
+      return;
+    }
+
+    const minimumTypographyScale = 0.76;
+    if (stackTypographyScale > minimumTypographyScale) {
+      const fitRatio = lyricStageHeight / stackMeasurement.height;
+      const nextScale = Math.max(
+        minimumTypographyScale,
+        Math.min(stackTypographyScale - 0.04, stackTypographyScale * fitRatio * 0.98),
+      );
+      setStackTypographyScale(Math.round(nextScale * 1000) / 1000);
+    }
+  }, [
+    displayIdx,
+    futureLineCount,
+    hasSyncedLyrics,
+    lyricStageHeight,
+    showPreviousLine,
+    stackConfiguration,
+    stackMeasurement,
+    stackTypographyScale,
+  ]);
 
   const renderSyncedLyrics = () => {
     if (!lyrics || lyrics.status !== "synced" || lyrics.lines.length === 0) {
+      const fallbackText = lyrics
+        ? middleText
+        : track?.title
+          ? "Finding lyrics..."
+          : "Play something to see lyrics";
       return (
         <SquareLyricLine
-          text={middleText}
+          text={fallbackText}
           active
           distance={0}
+          relativePosition={0}
+          contentKey={`status:${lyrics?.track_key ?? "idle"}:${fallbackText}`}
           settings={settings}
           scale={scale}
+          typographyScale={1}
           textShadow={textShadow}
           reducedMotion={reducedMotion}
           karaoke={karaoke}
@@ -1260,75 +1341,105 @@ function SquareLyricsView({
       );
     }
 
-    if (settings.layout_mode === "full_page") {
-      return lyrics.lines.map((line, index) => {
-        const active = index === displayIdx;
-        return (
-          <SquareLyricLine
-            key={`${line.time_ms}-${index}`}
-            text={line.text}
-            active={active}
-            distance={displayIdx < 0 ? index + 1 : Math.abs(index - displayIdx)}
-            settings={settings}
-            scale={scale}
-            textShadow={textShadow}
-            reducedMotion={reducedMotion}
-            karaoke={active ? karaoke : undefined}
-            translation={active ? translationText : undefined}
-            scrollIntoView={active}
-            scrollContextKey={fullPageSpacerHeight}
-          />
-        );
-      });
-    }
+    const collectNonEmptyLines = (startIndex: number, count: number) => {
+      const collected: Array<{ line: LyricLine; index: number }> = [];
+      if (count <= 0) return collected;
+      for (let index = startIndex; index < lyrics.lines.length; index += 1) {
+        const line = lyrics.lines[index];
+        if (!line?.text.trim()) continue;
+        collected.push({ line, index });
+        if (collected.length === count) break;
+      }
+      return collected;
+    };
 
     if (displayIdx < 0) {
-      return (
-        <>
+      return collectNonEmptyLines(0, futureLineCount + 1).map(
+        ({ line, index }, slotIndex) => (
           <SquareLyricLine
-            text={middleText}
-            active
-            distance={0}
+            key={slotIndex === 0 ? "lead" : `future-${slotIndex - 1}`}
+            text={line.text}
+            active={false}
+            distance={slotIndex + 1}
+            relativePosition={slotIndex + 1}
+            leadUpcoming={slotIndex === 0}
+            contentKey={`${lyrics.track_key}:${index}:${line.time_ms}`}
             settings={settings}
             scale={scale}
+            typographyScale={stackTypographyScale}
             textShadow={textShadow}
             reducedMotion={reducedMotion}
           />
-          {settings.layout_mode === "three_line" ? (
-            <SquareLyricLine
-              text={lyrics.lines[0]?.text}
-              active={false}
-              distance={1}
-              settings={settings}
-              scale={scale}
-              textShadow={textShadow}
-              reducedMotion={reducedMotion}
-            />
-          ) : null}
-        </>
+        ),
       );
     }
 
-    const offsets = settings.layout_mode === "single_line" ? [0] : [-1, 0, 1];
-    return offsets.map((offset) => {
-      const line = lyrics.lines[displayIdx + offset];
-      if (!line) return null;
-      const active = offset === 0;
-      return (
-        <SquareLyricLine
-          key={`${line.time_ms}-${offset}`}
-          text={line.text}
-          active={active}
-          distance={Math.abs(offset)}
-          settings={settings}
-          scale={scale}
-          textShadow={textShadow}
-          reducedMotion={reducedMotion}
-          karaoke={active ? karaoke : undefined}
-          translation={active ? translationText : undefined}
-        />
-      );
-    });
+    const slots: React.ReactNode[] = [];
+    if (showPreviousLine) {
+      for (let index = displayIdx - 1; index >= 0; index -= 1) {
+        const line = lyrics.lines[index];
+        if (!line?.text.trim()) continue;
+        slots.push(
+          <SquareLyricLine
+            key="previous"
+            text={line.text}
+            active={false}
+            distance={1}
+            relativePosition={-1}
+            contentKey={`${lyrics.track_key}:${index}:${line.time_ms}`}
+            settings={settings}
+            scale={scale}
+            typographyScale={stackTypographyScale}
+            textShadow={textShadow}
+            reducedMotion={reducedMotion}
+          />,
+        );
+        break;
+      }
+    }
+
+    const activeLine = lyrics.lines[displayIdx];
+    const activeIsBlank = !activeLine?.text.trim();
+    slots.push(
+      <SquareLyricLine
+        key="active"
+        text={activeIsBlank ? "♪" : activeLine?.text}
+        active
+        placeholder={activeIsBlank}
+        distance={0}
+        relativePosition={0}
+        contentKey={`${lyrics.track_key}:${displayIdx}:${activeLine?.time_ms ?? 0}`}
+        settings={settings}
+        scale={scale}
+        typographyScale={stackTypographyScale}
+        textShadow={textShadow}
+        reducedMotion={reducedMotion}
+        karaoke={activeIsBlank ? undefined : karaoke}
+        translation={activeIsBlank ? undefined : translationText}
+      />,
+    );
+
+    collectNonEmptyLines(displayIdx + 1, futureLineCount).forEach(
+      ({ line, index }, slotIndex) => {
+        slots.push(
+          <SquareLyricLine
+            key={`future-${slotIndex}`}
+            text={line.text}
+            active={false}
+            distance={slotIndex + 1}
+            relativePosition={slotIndex + 1}
+            contentKey={`${lyrics.track_key}:${index}:${line.time_ms}`}
+            settings={settings}
+            scale={scale}
+            typographyScale={stackTypographyScale}
+            textShadow={textShadow}
+            reducedMotion={reducedMotion}
+          />,
+        );
+      },
+    );
+
+    return slots;
   };
 
   return (
@@ -1479,7 +1590,7 @@ function SquareLyricsView({
       ) : null}
 
       <main
-        ref={lyricsScrollportRef}
+        ref={lyricStageRef}
         {...drag}
         style={{
           position: "relative",
@@ -1488,73 +1599,65 @@ function SquareLyricsView({
           minHeight: 0,
           display: "flex",
           flexDirection: "column",
-          justifyContent: showFullPageLyrics ? "flex-start" : "center",
-          gap: Math.max(6 * scale, settings.line_padding_px + 8 * scale),
-          overflowY: showFullPageLyrics ? "auto" : "hidden",
+          justifyContent: "flex-start",
+          overflowY: "hidden",
           overflowX: "hidden",
-          padding: showFullPageLyrics ? "0 1px" : `${Math.max(14, 22 * scale)}px 1px`,
-          scrollbarWidth: "none",
-          maskImage:
-            "linear-gradient(to bottom, transparent 0%, black 8%, black 92%, transparent 100%)",
-          WebkitMaskImage:
-            "linear-gradient(to bottom, transparent 0%, black 8%, black 92%, transparent 100%)",
+          padding: `${Math.max(20, 30 * scale)}px 1px ${Math.max(12, 18 * scale)}px`,
+          maskImage: futureLineCount > 0
+            ? "linear-gradient(to bottom, black 0%, black 88%, transparent 100%)"
+            : "none",
+          WebkitMaskImage: futureLineCount > 0
+            ? "linear-gradient(to bottom, black 0%, black 88%, transparent 100%)"
+            : "none",
         }}
       >
-        {showFullPageLyrics ? (
-          <div
-            aria-hidden
-            style={{
-              height: fullPageSpacerHeight,
-              minHeight: fullPageSpacerHeight,
-              flex: `0 0 ${fullPageSpacerHeight}px`,
-              pointerEvents: "none",
-            }}
-          />
-        ) : null}
-        {adActive && settings.ad_break_promos_enabled ? (
-          <PromoCard
-            promo={lyrics?.promo ?? null}
-            textColor={textColor}
-            textColorDim={textColorDim}
-            textShadow={textShadow}
-            scaledFontSize={Math.max(20, settings.font_size_px)}
-            layoutMode="full_page"
-            dragRegion={isEdit}
-            reducedMotion={reducedMotion}
-          />
-        ) : adActive ? (
-          <SquareLyricLine
-            text="Ad break"
-            active
-            distance={0}
-            settings={settings}
-            scale={scale}
-            textShadow={textShadow}
-            reducedMotion={reducedMotion}
-          />
-        ) : lyrics?.status === "unsupported" ? (
-          <UnsupportedBlock
-            track={track}
-            sourceLabelText={sourceLabel(track?.source_app_id ?? null, null)}
-            bridgeServiceName={bridgeServiceName}
-            settings={settings}
-            textShadow={textShadow}
-            dragRegion={isEdit}
-          />
-        ) : (
-          renderSyncedLyrics()
-        )}
-        {showFullPageLyrics ? (
-          <div
-            aria-hidden
-            style={{
-              height: fullPageSpacerHeight,
-              minHeight: fullPageSpacerHeight,
-              flex: `0 0 ${fullPageSpacerHeight}px`,
-              pointerEvents: "none",
-            }}
-          />
-        ) : null}
+        <div
+          ref={lyricStackRef}
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap:
+              Math.max(14 * scale, settings.line_padding_px + 14 * scale) *
+              stackTypographyScale,
+          }}
+        >
+          {adActive && settings.ad_break_promos_enabled ? (
+            <PromoCard
+              promo={lyrics?.promo ?? null}
+              textColor={textColor}
+              textColorDim={textColorDim}
+              textShadow={textShadow}
+              scaledFontSize={Math.max(20, settings.font_size_px)}
+              layoutMode="full_page"
+              dragRegion={isEdit}
+              reducedMotion={reducedMotion}
+            />
+          ) : adActive ? (
+            <SquareLyricLine
+              text="Ad break"
+              active
+              distance={0}
+              relativePosition={0}
+              contentKey="ad-break"
+              settings={settings}
+              scale={scale}
+              typographyScale={1}
+              textShadow={textShadow}
+              reducedMotion={reducedMotion}
+            />
+          ) : lyrics?.status === "unsupported" ? (
+            <UnsupportedBlock
+              track={track}
+              sourceLabelText={sourceLabel(track?.source_app_id ?? null, null)}
+              bridgeServiceName={bridgeServiceName}
+              settings={settings}
+              textShadow={textShadow}
+              dragRegion={isEdit}
+            />
+          ) : (
+            renderSyncedLyrics()
+          )}
+        </div>
       </main>
 
       {settings.show_media ? (
@@ -1594,108 +1697,143 @@ function SquareLyricLine({
   text,
   active,
   distance,
+  relativePosition,
+  leadUpcoming = false,
+  placeholder = false,
+  contentKey,
   settings,
   scale,
+  typographyScale,
   textShadow,
   reducedMotion,
   karaoke,
   translation,
-  scrollIntoView,
-  scrollContextKey,
 }: {
   text: string | undefined;
   active: boolean;
   distance: number;
+  relativePosition: number;
+  leadUpcoming?: boolean;
+  placeholder?: boolean;
+  contentKey: string;
   settings: Settings;
   scale: number;
+  typographyScale: number;
   textShadow: string;
   reducedMotion: boolean;
   karaoke?: { words: WordSpan[]; currentWordIdx: number; nextTimeMs: number };
   translation?: string;
-  scrollIntoView?: boolean;
-  scrollContextKey?: number;
 }) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!scrollIntoView || !ref.current) return;
-    ref.current.scrollIntoView({
-      behavior: reducedMotion ? "auto" : "smooth",
-      block: "center",
-    });
-  }, [scrollIntoView, text, reducedMotion, scrollContextKey]);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const content = contentRef.current;
+    if (!content || reducedMotion || typeof content.animate !== "function") return;
+    const animation = content.animate(
+      [
+        { opacity: 0, transform: "translate3d(0, 7px, 0)" },
+        { opacity: 1, transform: "translate3d(0, 0, 0)" },
+      ],
+      {
+        duration: 260,
+        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+        fill: "both",
+      },
+    );
+    return () => animation.cancel();
+  }, [contentKey, reducedMotion]);
 
   if (!text) return null;
   const useKaraoke = active && !!karaoke?.words.length;
-  const fontSize = active
-    ? Math.max(22 * scale, settings.font_size_px * 1.45)
-    : Math.max(13 * scale, settings.font_size_px * 0.86);
-  const opacity = active ? 1 : distance > 1 ? 0.28 : 0.52;
+  const baseFontSize = active
+    ? Math.max(28 * scale, settings.font_size_px * 1.5)
+    : Math.max(17 * scale, settings.font_size_px * 0.84);
+  const fontSize = (placeholder ? baseFontSize * 0.68 : baseFontSize) * typographyScale;
+  const opacity = active
+    ? placeholder ? 0.62 : 1
+    : leadUpcoming
+      ? 0.56
+      : relativePosition < 0
+        ? 0.3
+        : distance === 1
+          ? 0.38
+          : distance === 2
+            ? 0.22
+            : 0.12;
+  const blur = active ? 0 : leadUpcoming ? 0.25 : distance <= 1 ? 0.45 : 0.8;
+  const translateY = active || leadUpcoming
+    ? 0
+    : relativePosition < 0
+      ? -3 * scale
+      : Math.min(9 * scale, distance * 3 * scale);
 
   return (
     <div
-      ref={ref}
-      className={reducedMotion ? undefined : "hum-line-in"}
       style={{
         position: "relative",
         flexShrink: 0,
         width: "100%",
         color: active ? settings.text_color : settings.text_color_dim,
         fontSize,
-        fontWeight: active ? Math.max(700, settings.font_weight) : 600,
-        lineHeight: active ? 1.1 : 1.18,
-        letterSpacing: active ? -0.55 : -0.15,
+        fontWeight: active
+          ? placeholder ? 600 : Math.max(780, settings.font_weight)
+          : Math.min(620, Math.max(520, settings.font_weight - 100)),
+        lineHeight: active ? placeholder ? 1 : 1.08 : 1.16,
+        letterSpacing: active ? placeholder ? 0 : -0.85 : -0.2,
         textAlign: settings.text_align,
         textShadow,
         opacity,
         overflowWrap: "anywhere",
         transition: reducedMotion
           ? "none"
-          : "color 240ms ease, opacity 240ms ease, filter 240ms ease",
-        filter: active ? "none" : "blur(0.2px)",
+          : "color 220ms ease, opacity 240ms ease, filter 240ms ease, transform 280ms cubic-bezier(0.22, 1, 0.36, 1), font-size 220ms ease, line-height 220ms ease",
+        filter: blur > 0 ? `blur(${blur}px)` : "none",
+        transform: `translate3d(0, ${translateY}px, 0)`,
       }}
     >
-      {useKaraoke
-        ? karaoke!.words.map((word, index) => {
-            const current = karaoke!.currentWordIdx;
-            const lit = current >= index;
-            const duration = wordDurationMs(karaoke!.words, index, karaoke!.nextTimeMs);
-            return (
-              <span
-                key={`${word.time_ms}-${index}`}
-                style={{
-                  background: `linear-gradient(to right, ${settings.text_color} 0%, ${settings.text_color} 50%, ${settings.text_color_dim} 50%, ${settings.text_color_dim} 100%)`,
-                  backgroundSize: "200% 100%",
-                  backgroundPosition: lit ? "0% 0%" : "100% 0%",
-                  backgroundClip: "text",
-                  WebkitBackgroundClip: "text",
-                  color: "transparent",
-                  WebkitTextFillColor: "transparent",
-                  transition:
-                    !reducedMotion && current === index
-                      ? `background-position ${duration}ms linear`
-                      : "none",
-                }}
-              >
-                {word.text}
-              </span>
-            );
-          })
-        : text}
-      {translation ? (
-        <div
-          style={{
-            marginTop: Math.max(6, 8 * scale),
-            color: settings.text_color_dim,
-            fontSize: Math.max(12 * scale, fontSize * 0.48),
-            fontWeight: 500,
-            lineHeight: 1.3,
-            letterSpacing: 0,
-            opacity: 0.82,
-          }}
-        >
-          {translation}
-        </div>
-      ) : null}
+      <div key={contentKey} ref={contentRef}>
+        {useKaraoke
+          ? karaoke!.words.map((word, index) => {
+              const current = karaoke!.currentWordIdx;
+              const lit = current >= index;
+              const duration = wordDurationMs(karaoke!.words, index, karaoke!.nextTimeMs);
+              return (
+                <span
+                  key={`${word.time_ms}-${index}`}
+                  style={{
+                    background: `linear-gradient(to right, ${settings.text_color} 0%, ${settings.text_color} 50%, ${settings.text_color_dim} 50%, ${settings.text_color_dim} 100%)`,
+                    backgroundSize: "200% 100%",
+                    backgroundPosition: lit ? "0% 0%" : "100% 0%",
+                    backgroundClip: "text",
+                    WebkitBackgroundClip: "text",
+                    color: "transparent",
+                    WebkitTextFillColor: "transparent",
+                    transition:
+                      !reducedMotion && current === index
+                        ? `background-position ${duration}ms linear`
+                        : "none",
+                  }}
+                >
+                  {word.text}
+                </span>
+              );
+            })
+          : text}
+        {translation ? (
+          <div
+            style={{
+              marginTop: Math.max(5, 7 * scale) * typographyScale,
+              color: settings.text_color_dim,
+              fontSize: Math.max(10 * scale, fontSize * 0.46),
+              fontWeight: 500,
+              lineHeight: 1.28,
+              letterSpacing: 0,
+              opacity: 0.82,
+            }}
+          >
+            {translation}
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -1725,7 +1863,7 @@ function SquarePlaybackFooter({
   }
   position = Math.max(0, Math.min(duration || position, position));
   const progress = duration > 0 ? Math.min(1, position / duration) : 0;
-  const source = sourceLabel(track.source_app_id, null);
+  const remaining = duration > 0 ? Math.max(0, duration - position) : 0;
 
   return (
     <footer
@@ -1778,10 +1916,9 @@ function SquarePlaybackFooter({
         }}
       >
         <span>{fmtMs(position)}</span>
-        <span style={{ textTransform: "uppercase", letterSpacing: 0.8 }}>
-          {adActive ? "Ad break" : source ?? track.state}
+        <span>
+          {adActive ? "Ad break" : duration > 0 ? `-${fmtMs(remaining)}` : ""}
         </span>
-        <span>{fmtMs(duration)}</span>
       </div>
     </footer>
   );

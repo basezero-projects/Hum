@@ -242,10 +242,11 @@ export default function SettingsView() {
           />
         </Row>
         <Hint>
-          Square gives the lyrics more room to wrap. Horizontal ribbon keeps
-          the compact overlay.
+          Square keeps the current lyric in focus with a few nearby lines.
+          Turn off Transparent background to use blurred album art. Horizontal
+          ribbon stays compact.
         </Hint>
-        <Row label="Layout mode">
+        <Row label="Ribbon lyric layout">
           <Select
             value={s.layout_mode}
             onChange={(v) => update("layout_mode", v as LayoutMode)}
@@ -256,6 +257,10 @@ export default function SettingsView() {
             ]}
           />
         </Row>
+        <Hint>
+          This setting only changes the Horizontal ribbon. Square always uses
+          its focused lyric stack.
+        </Hint>
         <Slider
           label="Line padding"
           suffix="px"
