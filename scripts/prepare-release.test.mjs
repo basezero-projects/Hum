@@ -130,6 +130,14 @@ test("release workflow keeps proof runs private and tag releases signed", async 
   assert.match(workflow, /TAURI_SIGNING_PRIVATE_KEY/);
   assert.doesNotMatch(workflow, /Get-AuthenticodeSignature/);
   assert.match(workflow, /"SIGNTOOL_PATH=\$signtool" \| Add-Content \$env:GITHUB_ENV/);
+  assert.doesNotMatch(workflow, /\$targets = @\('src-tauri\/target\/release\/hum\.exe'/);
+  assert.doesNotMatch(workflow, /Get-Command 7z/);
+  assert.match(workflow, /\$sevenZip = 'C:\\Program Files\\7-Zip\\7z\.exe'/);
+  assert.match(workflow, /7z\.exe was not found/);
+  assert.match(workflow, /& \$sevenZip x -y "-o\$extractRoot" \$installer\[0\]\.FullName/);
+  assert.match(workflow, /Get-ChildItem \$extractRoot -Recurse -File -Filter 'hum\.exe'/);
+  assert.match(workflow, /Expected one installed Hum executable, found \$\(\$installedApp\.Count\)/);
+  assert.match(workflow, /\$targets = @\(\$installedApp\[0\]\.FullName, \$installer\[0\]\.FullName\)/);
   assert.match(workflow, /& \$env:SIGNTOOL_PATH verify \/pa \/v \$target/);
   assert.match(workflow, /if \(\$LASTEXITCODE -ne 0\)/);
   assert.match(workflow, /SignTool exited \$LASTEXITCODE/);

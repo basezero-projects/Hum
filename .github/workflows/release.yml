@@ -120,7 +120,15 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $installer = @(Get-ChildItem src-tauri/target/release/bundle/nsis -Filter '*.exe')
           if ($installer.Count -ne 1) { throw "Expected one installer, found $($installer.Count)" }
-          $targets = @('src-tauri/target/release/hum.exe', $installer[0].FullName)
+          $sevenZip = 'C:\Program Files\7-Zip\7z.exe'
+          if (-not (Test-Path -LiteralPath $sevenZip)) { throw '7z.exe was not found' }
+          $extractRoot = Join-Path $env:RUNNER_TEMP "hum-installer-proof-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          New-Item -ItemType Directory -Path $extractRoot -ErrorAction Stop | Out-Null
+          & $sevenZip x -y "-o$extractRoot" $installer[0].FullName
+          if ($LASTEXITCODE -ne 0) { throw "Could not inspect installer payload: 7z exited $LASTEXITCODE" }
+          $installedApp = @(Get-ChildItem $extractRoot -Recurse -File -Filter 'hum.exe')
+          if ($installedApp.Count -ne 1) { throw "Expected one installed Hum executable, found $($installedApp.Count)" }
+          $targets = @($installedApp[0].FullName, $installer[0].FullName)
           foreach ($target in $targets) {
             & $env:SIGNTOOL_PATH verify /pa /v $target
             if ($LASTEXITCODE -ne 0) {

@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.72] - 2026-08-19
+
+### Fixed
+- **Signed release proofs now inspect the application customers actually receive.** The private Windows workflow opens the completed NSIS installer, requires exactly one installed `hum.exe`, and verifies that executable plus the installer with Windows SignTool. This matches Tauri's packaging behavior, which restores the unsigned development executable after it has placed the signed copy inside the installer.
+
 ## [0.13.71] - 2026-08-19
 
 ### Fixed
