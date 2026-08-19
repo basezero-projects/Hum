@@ -4,11 +4,11 @@ This file is the durable execution cursor for HUM-00. Update it at every slice b
 
 ## Current cursor
 
-- Slice: HUM-00E, Platform information and React
-- Step: E1, lock the executable plan
-- Next action: map native capabilities, resolved settings paths, and every React control or copy branch they drive
+- Slice: HUM-00F, Audio-output discovery
+- Step: F1, survey the accepted audio-output boundary and lock the executable plan
+- Next action: map Windows endpoint discovery and active-output events without changing the selected listening profile
 - Blocker: None
-- Last updated: 2026-08-19 08:44 MDT
+- Last updated: 2026-08-19 10:00 MDT
 
 ## Completed slices
 
@@ -49,12 +49,23 @@ This file is the durable execution cursor for HUM-00. Update it at every slice b
 
 - Status: Complete
 - Version: 0.13.57
-- Commit: closeout commit titled `Isolate native window effects`; hash will be recorded from Git at HUM-00E plan lock
-- Remote: push is the final closeout action before HUM-00E implementation
+- Commit: `b10b6a4` (`Isolate native window effects`)
+- Remote: pushed to `origin/main`
 - Validation: frontend typecheck and build passed; Cargo all-target check passed; Clippy passed with warnings denied; 151 Rust tests passed; full-tree Rust formatting passed; diff check passed
 - Review: independent review found four behavioral and portability issues, then one follow-up trigger regression; all five were fixed red-first and received final approval
 - Acceptance criteria: HUM-00-AC10 complete
 - Known deferrals: Reset all settings still does not reapply the default native backdrop immediately and is recorded in `BUGS.md`
+
+### HUM-00E, Platform information and React
+
+- Status: Complete
+- Version: 0.13.58
+- Commit: closeout commit titled `Expose platform capabilities to React`
+- Remote: push required before HUM-00F implementation begins
+- Validation: frontend typecheck and build passed; Cargo all-target check passed; Clippy passed with warnings denied; 157 Rust tests passed; full-tree Rust formatting passed; the platform recovery Node test passed; diff check passed
+- Review: independent review found one updater recovery issue, which was fixed red-first and approved on follow-up
+- Acceptance criteria: HUM-00-AC5 and HUM-00-AC6 complete
+- Known deferrals: native macOS and Linux compilation remains assigned to HUM-00G CI; audio-output discovery remains intentionally false until HUM-00F
 
 ## Execution log
 
@@ -70,3 +81,6 @@ This file is the durable execution cursor for HUM-00. Update it at every slice b
 - 2026-08-19 09:12 MDT: HUM-00C committed as `ff791b2`, pushed to `origin/main`, and HUM-00D plan lock began.
 - 2026-08-19 09:18 MDT: HUM-00D native call sites, geometry, cadence, settings triggers, and failure behavior were mapped. The executable 11-file plan was locked.
 - 2026-08-19 09:35 MDT: HUM-00D passed 151 Rust tests and the full gate after five red-first review fixes. The ledger advanced to HUM-00E plan lock pending the closeout commit and push.
+- 2026-08-19 09:39 MDT: HUM-00D committed as `b10b6a4`, pushed to `origin/main`, and HUM-00E plan lock began.
+- 2026-08-19 09:46 MDT: HUM-00E capability facts, path ownership, updater assumptions, and React control branches were mapped. The executable eight-file plan was locked.
+- 2026-08-19 10:00 MDT: HUM-00E passed 157 Rust tests and the full gate after a red-first updater recovery fix. The ledger advanced to HUM-00F survey pending the closeout commit and push.

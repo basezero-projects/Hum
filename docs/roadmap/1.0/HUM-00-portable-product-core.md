@@ -49,8 +49,8 @@ React, lyrics, timing, caches, artwork, settings, and OBS can travel to another 
 - [x] HUM-00-AC2: Windows SMTC, iTunes, browser probes, and Pandora playback detection publish through one backend boundary. Completed in v0.13.56.
 - [x] HUM-00-AC3: Lyrics and streamer modules do not import a Windows-specific snapshot type. Completed in v0.13.56.
 - [x] HUM-00-AC4: Windows-only crates are declared under Windows target dependencies. Completed in v0.13.55.
-- [ ] HUM-00-AC5: React receives one tested platform-capabilities payload and hides unsupported native effects from it.
-- [ ] HUM-00-AC6: Settings displays the resolved application data path returned by Rust.
+- [x] HUM-00-AC5: React receives one tested platform-capabilities payload and hides unsupported native effects from it. Completed in v0.13.58.
+- [x] HUM-00-AC6: Settings displays the resolved application data path returned by Rust. Completed in v0.13.58.
 - [ ] HUM-00-AC7: Existing Windows player priority, timing, tray, overlay, and OBS behavior pass regression tests.
 - [ ] HUM-00-AC8: `docs/systems/media-and-timing.md` describes the implemented boundary and event flow.
 - [ ] HUM-00-AC9: Audio-output discovery publishes platform-neutral devices and active-output changes through its own interface.
@@ -75,6 +75,7 @@ React, lyrics, timing, caches, artwork, settings, and OBS can travel to another 
 - [HUM-00B build boundary](../../superpowers/plans/2026-08-19-hum-00b-build-boundary.md), Complete in v0.13.55
 - [HUM-00C media backend and publisher](../../superpowers/plans/2026-08-19-hum-00c-media-backend-publisher.md), Complete in v0.13.56
 - [HUM-00D native window interfaces](../../superpowers/plans/2026-08-19-hum-00d-native-window-interfaces.md), Complete in v0.13.57
+- [HUM-00E platform information and React](../../superpowers/plans/2026-08-19-hum-00e-platform-info-react.md), Complete in v0.13.58
 - [HUM-00 progress ledger](HUM-00-progress-ledger.md), current execution cursor and completion record
 
 ## Completion record

@@ -6,26 +6,47 @@ import type {
   ListeningMode,
   OverlayMode,
   OverlayShape,
+  PlatformInfo,
   Settings,
   TextAlign,
+  WindowBackdrop,
 } from "./types";
 
 const ACCENT = "#d4af37";
 
 export default function SettingsView() {
   const [s, setS] = useState<Settings | null>(null);
+  const [platformInfo, setPlatformInfo] = useState<PlatformInfo | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   // Track in-flight pending writes so slider drags coalesce.
   const writeTimer = useRef<number | null>(null);
   const pendingPatch = useRef<Partial<Settings>>({});
 
   useEffect(() => {
-    invoke<Settings>("get_settings").then(setS).catch(console.error);
+    let active = true;
+    setS(null);
+    setPlatformInfo(null);
+    setLoadError(null);
+    Promise.all([
+      invoke<Settings>("get_settings"),
+      invoke<PlatformInfo>("get_platform_info"),
+    ])
+      .then(([settings, info]) => {
+        if (!active) return;
+        setS(settings);
+        setPlatformInfo(info);
+      })
+      .catch((error: unknown) => {
+        if (active) setLoadError(String(error));
+      });
     const un = listen<Settings>("settings-changed", (e) => setS(e.payload));
     return () => {
+      active = false;
       un.then((fn) => fn()).catch(() => {});
       if (writeTimer.current) window.clearTimeout(writeTimer.current);
     };
-  }, []);
+  }, [loadAttempt]);
 
   function update<K extends keyof Settings>(key: K, value: Settings[K]) {
     if (!s) return;
@@ -55,13 +76,44 @@ export default function SettingsView() {
     invoke<Settings>("reset_settings").then(setS).catch(console.error);
   }
 
-  if (!s) {
+  if (loadError) {
+    return (
+      <div style={pageStyle}>
+        <div style={{ maxWidth: 520 }}>
+          <h1 style={{ margin: "0 0 8px", fontSize: 22, fontWeight: 600 }}>
+            Settings could not load
+          </h1>
+          <p style={{ margin: "0 0 16px", opacity: 0.7, fontSize: 13 }}>
+            Hum could not read its settings or platform details. {loadError}
+          </p>
+          <button
+            type="button"
+            onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+            style={{ ...inputStyle, cursor: "pointer" }}
+          >
+            Try again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!s || !platformInfo) {
     return (
       <div style={pageStyle}>
         <div style={{ opacity: 0.6 }}>Loading settings…</div>
       </div>
     );
   }
+
+  const modeOptions: Array<[OverlayMode, string]> = [
+    ["edit", "Edit"],
+    ["locked", "Locked"],
+  ];
+  if (platformInfo.window.click_through) {
+    modeOptions.push(["ghost", "Ghost (click-through)"]);
+  }
+  const shortcutHelp = platformInfo.services.global_shortcuts;
 
   return (
     <div style={pageStyle}>
@@ -79,24 +131,26 @@ export default function SettingsView() {
           <Select
             value={s.last_mode}
             onChange={(v) => update("last_mode", v as OverlayMode)}
-            options={[
-              ["edit", "Edit"],
-              ["locked", "Locked"],
-              ["ghost", "Ghost (click-through)"],
-            ]}
+            options={modeOptions}
           />
         </Row>
-        <Hint>Hotkey to cycle modes: Ctrl+Alt+L (system-wide).</Hint>
-        <Toggle
-          label="Launch Hum when I sign into my PC"
-          checked={s.launch_on_startup}
-          onChange={(v) => update("launch_on_startup", v)}
-        />
-        <Hint>
-          When on, Hum starts automatically with Windows. Off by default. Toggles
-          the standard Windows Startup Apps entry — you can also manage it from
-          Settings → Apps → Startup if you prefer.
-        </Hint>
+        {shortcutHelp ? (
+          <Hint>Hotkey to cycle modes: Ctrl+Alt+L (system-wide).</Hint>
+        ) : null}
+        {platformInfo.services.autostart ? (
+          <>
+            <Toggle
+              label="Launch Hum when I sign into my PC"
+              checked={s.launch_on_startup}
+              onChange={(v) => update("launch_on_startup", v)}
+            />
+            <Hint>
+              When on, Hum starts automatically when you sign in. Off by
+              default. You can also manage startup apps in your operating
+              system settings.
+            </Hint>
+          </>
+        ) : null}
       </Section>
 
       <Section title="Lyrics timing">
@@ -137,7 +191,7 @@ export default function SettingsView() {
           step={25}
           value={s.anticipate_ms}
           onChange={(v) => update("anticipate_ms", v)}
-          help="Fine-tunes every listening mode. Positive values show lyrics earlier, while negative values show them later. Temporary per-song adjustment is Ctrl+Alt+[ or Ctrl+Alt+]."
+          help={`Fine-tunes every listening mode. Positive values show lyrics earlier, while negative values show them later.${shortcutHelp ? " Temporary per-song adjustment is Ctrl+Alt+[ or Ctrl+Alt+]." : ""}`}
         />
         <Slider
           label="Seek-jitter tolerance"
@@ -241,21 +295,23 @@ export default function SettingsView() {
           Paints a heavily blurred, dimmed copy of the current track's album
           art behind the lyrics — Apple Music "Now Playing" style. Your
           background color renders on top so the opacity slider still tints
-          the result. No effect on tracks without art. Toggle on the fly
-          with <code>Ctrl+Alt+B</code>.
+          the result. No effect on tracks without art.
+          {shortcutHelp ? (
+            <> Toggle on the fly with <code>Ctrl+Alt+B</code>.</>
+          ) : null}
         </Hint>
-        <Row label="Window backdrop">
-          <Select<"acrylic" | "mica" | "tabbed_mica" | "none">
-            value={s.window_backdrop}
-            onChange={(v) => update("window_backdrop", v)}
-            options={[
-              ["acrylic", "Acrylic (default)"],
-              ["mica", "Mica"],
-              ["tabbed_mica", "Tabbed Mica"],
-              ["none", "None"],
-            ]}
-          />
-        </Row>
+        {platformInfo.window.supported_backdrops.length > 0 ? (
+          <Row label="Window backdrop">
+            <Select<WindowBackdrop>
+              value={s.window_backdrop}
+              onChange={(v) => update("window_backdrop", v)}
+              options={platformInfo.window.supported_backdrops.map((backdrop) => [
+                backdrop,
+                backdropLabel(backdrop),
+              ])}
+            />
+          </Row>
+        ) : null}
         <Toggle
           label="Transparent background (lyrics only)"
           checked={s.bg_hidden}
@@ -264,8 +320,10 @@ export default function SettingsView() {
         <Hint>
           Hides every background layer — blurred album art, color tint,
           background paint, and the window backdrop — so only the lyrics, art,
-          and media info float over the desktop. Toggle on the fly with{" "}
-          <code>Ctrl+Alt+T</code>.
+          and media info float over the desktop.
+          {shortcutHelp ? (
+            <> Toggle on the fly with <code>Ctrl+Alt+T</code>.</>
+          ) : null}
         </Hint>
       </Section>
 
@@ -325,25 +383,31 @@ export default function SettingsView() {
         />
         <Hint>
           Shows the track details, progress bar, and source. They sit beside the
-          horizontal ribbon and along the bottom of the square view. Toggle on
-          the fly with <code>Ctrl+Alt+H</code>.
+          horizontal ribbon and along the bottom of the square view.
+          {shortcutHelp ? (
+            <> Toggle on the fly with <code>Ctrl+Alt+H</code>.</>
+          ) : null}
         </Hint>
         <Toggle
           label="Show translated lyrics (when available)"
           checked={s.show_translation}
           onChange={(v) => update("show_translation", v)}
         />
-        <Toggle
-          label="Auto-contrast text (read background, invert if needed)"
-          checked={s.auto_contrast}
-          onChange={(v) => update("auto_contrast", v)}
-        />
-        <Hint>
-          Samples a strip of pixels just outside the overlay every ~2s and
-          flips text to white over dark backgrounds, dark over light. Useful
-          when the desktop / app behind the overlay isn't predictably dark.
-          Overrides the Text color settings while active.
-        </Hint>
+        {platformInfo.window.screen_sampling ? (
+          <>
+            <Toggle
+              label="Auto-contrast text (read background, invert if needed)"
+              checked={s.auto_contrast}
+              onChange={(v) => update("auto_contrast", v)}
+            />
+            <Hint>
+              Samples a strip of pixels just outside the overlay every ~2s and
+              flips text to white over dark backgrounds, dark over light. Useful
+              when the desktop or app behind the overlay is not predictably dark.
+              Overrides the Text color settings while active.
+            </Hint>
+          </>
+        ) : null}
         <Toggle
           label="Show SYVR promo cards during ad breaks"
           checked={s.ad_break_promos_enabled}
@@ -422,15 +486,29 @@ export default function SettingsView() {
           alignItems: "center",
         }}
       >
-        <span style={{ opacity: 0.5, fontSize: 12 }}>
-          Stored at <code style={{ opacity: 0.7 }}>%APPDATA%\com.syvr.hum\settings.json</code>
-        </span>
+        <div style={{ opacity: 0.5, fontSize: 12, display: "grid", gap: 4 }}>
+          <span>
+            Application data: {" "}
+            <code style={{ opacity: 0.7 }}>{platformInfo.paths.app_data_dir}</code>
+          </span>
+          <span>
+            Settings file: {" "}
+            <code style={{ opacity: 0.7 }}>{platformInfo.paths.settings_file}</code>
+          </span>
+        </div>
         <button onClick={reset} style={dangerButtonStyle}>
           Reset to defaults
         </button>
       </footer>
     </div>
   );
+}
+
+function backdropLabel(backdrop: WindowBackdrop): string {
+  if (backdrop === "acrylic") return "Acrylic (default)";
+  if (backdrop === "mica") return "Mica";
+  if (backdrop === "tabbed_mica") return "Tabbed Mica";
+  return "None";
 }
 
 function listeningModeLabel(mode: ListeningMode): string {

@@ -11,7 +11,7 @@ use crate::mode::OverlayMode;
 use crate::window_effects::backdrop::BackdropKind;
 use crate::window_effects::{SystemWindowEffects, WindowEffects};
 
-const SETTINGS_STORE_FILE: &str = "settings.json";
+pub(crate) const SETTINGS_STORE_FILE: &str = "settings.json";
 const SETTINGS_STORE_KEY: &str = "settings";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

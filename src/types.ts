@@ -19,6 +19,7 @@ export type CurrentTrack = {
 
 export type OverlayMode = "edit" | "locked" | "ghost";
 export type ListeningMode = "wired" | "speakers" | "bluetooth";
+export type WindowBackdrop = "acrylic" | "mica" | "tabbed_mica" | "none";
 
 export type LayoutMode = "three_line" | "single_line" | "full_page";
 export type OverlayShape = "ribbon" | "square";
@@ -47,7 +48,7 @@ export type Settings = {
   show_translation: boolean;
   tint_bg_from_album_art: boolean;
   blur_album_art_background: boolean;
-  window_backdrop: "acrylic" | "mica" | "tabbed_mica" | "none";
+  window_backdrop: WindowBackdrop;
   auto_contrast: boolean;
   streamer_enabled: boolean;
   streamer_port: number;
@@ -61,6 +62,55 @@ export type Settings = {
   // Show the right-hand metadata column ("media player"). Toggle: Ctrl+Alt+H.
   show_media: boolean;
 };
+
+export type PlatformInfo = {
+  platform: "windows" | "macos" | "linux";
+  media: {
+    playback: boolean;
+  };
+  audio_output: {
+    discovery: boolean;
+    active_output_changes: boolean;
+  };
+  window: {
+    supported_backdrops: WindowBackdrop[];
+    aspect_lock: boolean;
+    click_through: boolean;
+    update_banner_pointer_exception: boolean;
+    screen_sampling: boolean;
+  };
+  services: {
+    tray: boolean;
+    global_shortcuts: boolean;
+    autostart: boolean;
+    updater: boolean;
+  };
+  paths: {
+    app_data_dir: string;
+    settings_file: string;
+  };
+};
+
+type RetryWait = (delayMs: number) => Promise<void>;
+
+const waitForRetry: RetryWait = (delayMs) =>
+  new Promise((resolve) => globalThis.setTimeout(resolve, delayMs));
+
+export async function loadPlatformInfoWithRetry(
+  load: () => Promise<PlatformInfo>,
+  wait: RetryWait = waitForRetry,
+  shouldContinue: () => boolean = () => true,
+): Promise<PlatformInfo | null> {
+  while (shouldContinue()) {
+    try {
+      return await load();
+    } catch {
+      if (!shouldContinue()) return null;
+      await wait(1000);
+    }
+  }
+  return null;
+}
 
 export type TicketStatus = "available" | "sold_out";
 

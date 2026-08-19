@@ -6,6 +6,14 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.58] - 2026-08-19
+
+### Changed
+- **Settings now shows only controls this operating system can support.** Hum receives one capability report from Rust and uses it to hide unavailable window backdrops, Ghost mode, auto-contrast, autostart, and global-shortcut hints. Windows keeps its existing controls, order, and updater behavior.
+- **Settings now shows the real storage locations used by Hum.** The footer lists the resolved application data directory and full `settings.json` path instead of a hardcoded Windows example. If settings or platform details cannot load, the page shows the error with a Try again button.
+- **Platform startup failures no longer disable updates for the rest of the session.** The overlay retries a failed platform-information request, then starts the supported updater and tray update listener after recovery. A production-backed test protects the rejected-then-successful path.
+- **Developer copy is platform-neutral.** The development console now describes supported media apps without claiming that every Windows app is available.
+
 ## [0.13.57] - 2026-08-19
 
 ### Changed

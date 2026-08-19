@@ -46,6 +46,7 @@ use mode::{
     apply_mode, cycle_overlay_mode, get_overlay_mode, icon_for, set_overlay_mode, ModeMenuItems,
     OverlayMode, SharedMode, TRAY_ID,
 };
+use platform::info::get_platform_info;
 use settings::{
     get_settings, open_settings_window, reset_settings, update_settings, SharedSettings,
 };
@@ -383,6 +384,7 @@ pub fn run() {
             get_overlay_mode,
             set_overlay_mode,
             cycle_overlay_mode,
+            get_platform_info,
             get_settings,
             update_settings,
             reset_settings,

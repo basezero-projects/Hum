@@ -17,12 +17,13 @@ import type {
   ListeningMode,
   LyricLine,
   OverlayMode,
+  PlatformInfo,
   Promo,
   Settings,
   TextAlign,
   WordSpan,
 } from "./types";
-import { fmtMs } from "./types";
+import { fmtMs, loadPlatformInfoWithRetry } from "./types";
 
 const DEFAULT_SETTINGS: Settings = {
   last_mode: "edit",
@@ -74,6 +75,7 @@ export default function Overlay() {
   const [hovered, setHovered] = useState(false);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [settingsHydrated, setSettingsHydrated] = useState(false);
+  const [platformInfo, setPlatformInfo] = useState<PlatformInfo | null>(null);
   const [albumArt, setAlbumArt] = useState<{ title: string; artist: string; data_url: string } | null>(null);
   // Per-word karaoke cursor — only relevant when the active line has
   // .words populated (NetEase YRC tracks). -1 = before-first.
@@ -152,6 +154,21 @@ export default function Overlay() {
   const wordProgressRef = useRef<number>(0);
   const settingsRef = useRef<Settings>(DEFAULT_SETTINGS);
   const settingsHydratedRef = useRef(false);
+
+  useEffect(() => {
+    let active = true;
+    void loadPlatformInfoWithRetry(
+      () => invoke<PlatformInfo>("get_platform_info"),
+      (delayMs) =>
+        new Promise((resolve) => window.setTimeout(resolve, delayMs)),
+      () => active,
+    ).then((info) => {
+      if (active && info) setPlatformInfo(info);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     function interpolatedPositionMs(): number {
@@ -420,6 +437,8 @@ export default function Overlay() {
   // Same tray event covers both: if we already have an Update object,
   // install it; otherwise run a fresh check.
   useEffect(() => {
+    if (!platformInfo?.services.updater) return;
+
     const runCheck = async () => {
       try {
         const update = await checkForUpdate();
@@ -444,15 +463,17 @@ export default function Overlay() {
     return () => {
       un.then((fn) => fn()).catch(() => {});
     };
-  }, []);
+  }, [platformInfo]);
 
   // Tell the Rust ghost-mode cursor-poll worker whether the banner is
   // currently visible so it can poke a clickable hole in the
   // click-through region when needed.
   useEffect(() => {
+    if (!platformInfo?.window.update_banner_pointer_exception) return;
+
     const visible = updateState.phase !== "idle";
     invoke("set_update_banner_visible", { visible }).catch(() => {});
-  }, [updateState.phase]);
+  }, [platformInfo, updateState.phase]);
 
   async function installUpdateInternal() {
     const cur = updateStateRef.current;

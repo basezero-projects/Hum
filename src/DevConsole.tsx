@@ -114,10 +114,10 @@ export default function DevConsole() {
           color: "#d4af37",
         }}
       >
-        Hum — SMTC + iTunes + LRCLib dev console
+        Hum media and lyrics dev console
       </h1>
       <p style={{ fontSize: 12, color: "#888", margin: "4px 0 16px" }}>
-        Play music in any Windows app. Lyrics fetch automatically on track change.
+        Play music in a supported app. Lyrics fetch automatically when the track changes.
       </p>
 
       <section
