@@ -129,6 +129,8 @@ test("release workflow keeps proof runs private and tag releases signed", async 
   assert.doesNotMatch(workflow, /Copy-Item \$signtool signtool\.exe/);
   assert.match(workflow, /TAURI_SIGNING_PRIVATE_KEY/);
   assert.match(workflow, /Get-AuthenticodeSignature/);
+  assert.doesNotMatch(workflow, /Invalid Authenticode signature for \$target:/);
+  assert.match(workflow, /Invalid Authenticode signature for \$\{target\}:/);
   assert.match(workflow, /prepare-release\.mjs/);
   assert.match(
     workflow,

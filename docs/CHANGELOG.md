@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.70] - 2026-08-19
+
+### Fixed
+- **Signed release proofs now reach real certificate validation.** The Windows workflow now parses its Authenticode failure message correctly, so it can inspect both `hum.exe` and the customer installer before any artifact is published. A release-contract test protects the PowerShell variable boundary that caused the previous proof to stop before validation ran.
+
 ## [0.13.69] - 2026-08-19
 
 ### Fixed
