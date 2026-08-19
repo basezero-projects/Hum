@@ -15,13 +15,6 @@ mod media;
 #[cfg(windows)]
 mod smtc;
 
-#[cfg(not(windows))]
-mod smtc {
-    pub use crate::media::{
-        AlbumArtPayload, CurrentTrack, PlaybackState, SharedAlbumArt, SharedSnapshot,
-    };
-}
-
 #[cfg(windows)]
 mod web_bridge;
 
@@ -43,6 +36,7 @@ mod artist_window;
 mod contrast;
 mod lyrics;
 mod mode;
+mod platform;
 mod promos;
 mod settings;
 mod streamer;
@@ -51,6 +45,8 @@ use artist_info::{clear_artist_info_cache, get_artist_info, ArtistInfoCache};
 use artist_window::{close_artist_panel_cmd, open_artist_panel_cmd, open_ticket_url};
 use lyrics::{CurrentLyrics, SharedLyrics};
 use media::{AlbumArtPayload, CurrentTrack, SharedAlbumArt, SharedSnapshot};
+#[cfg(windows)]
+use media::{MediaBackend, MediaBackendContext};
 use mode::{
     apply_mode, cycle_overlay_mode, get_overlay_mode, icon_for, set_overlay_mode, ModeMenuItems,
     OverlayMode, SharedMode, TRAY_ID,
@@ -217,23 +213,13 @@ pub fn run() {
 
             #[cfg(windows)]
             {
-                smtc::start(
-                    app.handle().clone(),
-                    snap.clone(),
-                    art_state.clone(),
-                    smtc_active.clone(),
-                );
-                itunes::start(
-                    app.handle().clone(),
-                    snap.clone(),
-                    art_state.clone(),
-                    smtc_active.clone(),
-                );
-                let shared_bridge: web_bridge::SharedWebBridge =
-                    std::sync::Arc::new(tokio::sync::RwLock::new(None));
-                app.manage(shared_bridge.clone());
-                web_bridge::start(app.handle().clone(), snap.clone(), shared_bridge.clone());
-                lyrics::start(app.handle().clone(), lyrics_shared, snap, shared_bridge);
+                platform::windows::WindowsMediaBackend.start(MediaBackendContext {
+                    app: app.handle().clone(),
+                    snapshot: snap,
+                    album_art: art_state,
+                    lyrics: lyrics_shared,
+                    smtc_playing: smtc_active.clone(),
+                });
             }
             #[cfg(not(windows))]
             {

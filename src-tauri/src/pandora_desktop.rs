@@ -47,7 +47,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowThreadProcessId, IsWindowVisible,
 };
 
-use crate::smtc::PlaybackState;
+use crate::media::PlaybackState;
 use crate::web_bridge::{
     read_process_name_for_window, read_window_title, WebBridgeTrack, WebPlayerProbe,
 };

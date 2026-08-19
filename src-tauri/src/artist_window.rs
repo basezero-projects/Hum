@@ -72,7 +72,7 @@ pub async fn open_artist_panel(app: AppHandle) -> Result<()> {
     // We capture the artist name at open time from get_current_track.
     let app_for_listener = app.clone();
     let open_artist = {
-        let snap = app.state::<crate::smtc::SharedSnapshot>();
+        let snap = app.state::<crate::media::SharedSnapshot>();
         let track = snap.read().await;
         crate::lyrics::clean_artist(&track.artist)
     };

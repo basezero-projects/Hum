@@ -16,12 +16,14 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::time::sleep;
 
-use crate::smtc::{AlbumArtPayload, CurrentTrack, PlaybackState, SharedAlbumArt, SharedSnapshot};
+use crate::media::{
+    should_publish_itunes, AlbumArtPayload, CurrentTrack, MediaPublisher, PlaybackState,
+    SharedSnapshot,
+};
 
 const SCRIPT: &str = include_str!("../scripts/itunes_poll.ps1");
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -51,12 +53,7 @@ struct Line {
     error: Option<String>,
 }
 
-pub fn start(
-    app: AppHandle,
-    snapshot: SharedSnapshot,
-    art: SharedAlbumArt,
-    smtc_playing: Arc<AtomicBool>,
-) {
+pub fn start(snapshot: SharedSnapshot, smtc_playing: Arc<AtomicBool>, publisher: MediaPublisher) {
     tauri::async_runtime::spawn(async move {
         // Supervise the PowerShell poller. itunes_poll.ps1 is a `while($true)`
         // loop that self-heals iTunes opening/closing, so `run()` returning at
@@ -65,14 +62,7 @@ pub fn start(
         // tracking silently dead for the rest of the session. The backoff also
         // bounds the retry rate if PowerShell can't start at all.
         loop {
-            match run(
-                app.clone(),
-                snapshot.clone(),
-                art.clone(),
-                smtc_playing.clone(),
-            )
-            .await
-            {
+            match run(snapshot.clone(), smtc_playing.clone(), publisher.clone()).await {
                 Ok(()) => eprintln!("[itunes] poller exited; respawning in 5s"),
                 Err(e) => eprintln!("[itunes] worker exited: {e:#}; respawning in 5s"),
             }
@@ -82,10 +72,9 @@ pub fn start(
 }
 
 async fn run(
-    app: AppHandle,
     snapshot: SharedSnapshot,
-    art: SharedAlbumArt,
     smtc_playing: Arc<AtomicBool>,
+    publisher: MediaPublisher,
 ) -> Result<()> {
     // Stage the script to a UNIQUE temp file per process. The previous fixed
     // path (%TEMP%\hum-itunes-poll.ps1) was writable by any process
@@ -188,7 +177,7 @@ async fn run(
                 // SMTC has priority while it's actively playing. Otherwise
                 // iTunes wins (e.g. Chrome's stale-paused SMTC session shouldn't
                 // mute iTunes).
-                if smtc_playing.load(Ordering::Relaxed) {
+                if !should_publish_itunes(smtc_playing.load(Ordering::Relaxed)) {
                     continue;
                 }
 
@@ -198,8 +187,8 @@ async fn run(
                     if last_emitted_title.is_some() {
                         let mut snap = snapshot.write().await;
                         *snap = CurrentTrack::default();
-                        let _ = app.emit("track-changed", &*snap);
-                        let _ = app.emit("playback-state-changed", &*snap);
+                        publisher.publish_track(&snap);
+                        publisher.publish_playback(&snap);
                         last_emitted_title = None;
                         last_emitted_state = PlaybackState::Unknown;
                     }
@@ -231,15 +220,15 @@ async fn run(
 
                 let snap_ro = snapshot.read().await;
                 if track_changed {
-                    let _ = app.emit("track-changed", &*snap_ro);
+                    publisher.publish_track(&snap_ro);
                     eprintln!(
                         "[itunes] track-changed → title='{}' artist='{}' state={:?}",
                         snap_ro.title, snap_ro.artist, snap_ro.state
                     );
                 }
-                let _ = app.emit("timeline-changed", &*snap_ro);
+                publisher.publish_timeline(&snap_ro);
                 if state_changed {
-                    let _ = app.emit("playback-state-changed", &*snap_ro);
+                    publisher.publish_playback(&snap_ro);
                 }
                 drop(snap_ro);
 
@@ -253,11 +242,7 @@ async fn run(
                         artist: snapshot.read().await.artist.clone(),
                         data_url: url,
                     };
-                    {
-                        let mut a = art.write().await;
-                        *a = Some(payload.clone());
-                    }
-                    let _ = app.emit("album-art-loaded", &payload);
+                    publisher.publish_artwork(payload).await;
                     eprintln!("[itunes] album-art-loaded for '{title}'");
                 }
 

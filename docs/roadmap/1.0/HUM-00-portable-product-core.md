@@ -46,8 +46,8 @@ React, lyrics, timing, caches, artwork, settings, and OBS can travel to another 
 ## Acceptance criteria
 
 - [x] HUM-00-AC1: The shared `CurrentTrack` snapshot contains every field used by lyrics, the overlay, artist information, and OBS. Exact wire-contract tests shipped in v0.13.54.
-- [ ] HUM-00-AC2: Windows SMTC, iTunes, browser probes, and Pandora playback detection publish through one backend boundary.
-- [ ] HUM-00-AC3: Lyrics and streamer modules do not import a Windows-specific snapshot type.
+- [x] HUM-00-AC2: Windows SMTC, iTunes, browser probes, and Pandora playback detection publish through one backend boundary. Completed in v0.13.56.
+- [x] HUM-00-AC3: Lyrics and streamer modules do not import a Windows-specific snapshot type. Completed in v0.13.56.
 - [x] HUM-00-AC4: Windows-only crates are declared under Windows target dependencies. Completed in v0.13.55.
 - [ ] HUM-00-AC5: React receives one tested platform-capabilities payload and hides unsupported native effects from it.
 - [ ] HUM-00-AC6: Settings displays the resolved application data path returned by Rust.
@@ -73,6 +73,7 @@ React, lyrics, timing, caches, artwork, settings, and OBS can travel to another 
 
 - [HUM-00A shared media model](../../superpowers/plans/2026-08-19-hum-00a-shared-media-model.md), Complete in v0.13.54
 - [HUM-00B build boundary](../../superpowers/plans/2026-08-19-hum-00b-build-boundary.md), Complete in v0.13.55
+- [HUM-00C media backend and publisher](../../superpowers/plans/2026-08-19-hum-00c-media-backend-publisher.md), Complete in v0.13.56
 - [HUM-00 progress ledger](HUM-00-progress-ledger.md), current execution cursor and completion record
 
 ## Completion record

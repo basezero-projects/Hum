@@ -29,11 +29,7 @@ use tokio::sync::{mpsc, RwLock};
 /// `tauri-plugin-store` cache backs cold misses so eviction is cheap.
 const LYRICS_CACHE_CAP: usize = 256;
 
-#[cfg(windows)]
-use crate::smtc::SharedSnapshot;
-
-#[cfg(not(windows))]
-use crate::smtc::SharedSnapshot;
+use crate::media::{CurrentTrack, SharedSnapshot};
 
 const STORE_FILE: &str = "lyrics-cache.json";
 const USER_AGENT: &str =
@@ -743,7 +739,7 @@ fn emit_state(app: &AppHandle, s: &CurrentLyrics) {
 /// and embeds it on the payload. The frontend reads `status == Ad` and
 /// renders the SYVR promo card in place of the lyric rows.
 async fn ad_break_outcome(
-    snap: &crate::smtc::CurrentTrack,
+    snap: &CurrentTrack,
     promo_source: &std::sync::Arc<crate::promos::SyvrRemoteSource>,
     last_shown: &std::sync::Arc<tokio::sync::RwLock<Option<String>>>,
     promos_enabled: bool,
@@ -2328,7 +2324,7 @@ mod ad_short_circuit_tests {
 
     #[tokio::test]
     async fn ad_active_skips_network_and_emits_ad_status() {
-        let snap = crate::smtc::CurrentTrack {
+        let snap = CurrentTrack {
             title: "Advertisement".into(),
             artist: "Spotify".into(),
             duration_ms: 30_000,

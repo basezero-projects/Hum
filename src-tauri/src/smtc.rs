@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use base64::Engine;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use tokio::sync::mpsc;
 use windows::Foundation::{EventRegistrationToken, TypedEventHandler};
 use windows::Media::Control::{
@@ -26,8 +26,9 @@ use windows::Media::Control::{
 };
 use windows::Storage::Streams::DataReader;
 
-pub use crate::media::{
-    AlbumArtPayload, CurrentTrack, PlaybackState, SharedAlbumArt, SharedSnapshot,
+use crate::media::{
+    smtc_publication_policy, AlbumArtPayload, CurrentTrack, MediaPublisher, PlaybackState,
+    SharedSnapshot, SmtcPublication, SnapshotEvent,
 };
 
 impl From<GlobalSystemMediaTransportControlsSessionPlaybackStatus> for PlaybackState {
@@ -152,12 +153,12 @@ impl Drop for ManagerHook {
 pub fn start(
     app: AppHandle,
     snapshot: SharedSnapshot,
-    art: SharedAlbumArt,
     smtc_playing: Arc<AtomicBool>,
+    publisher: MediaPublisher,
 ) {
     tauri::async_runtime::spawn(async move {
         eprintln!("[smtc] worker starting");
-        if let Err(e) = run(app, snapshot, art, smtc_playing).await {
+        if let Err(e) = run(app, snapshot, smtc_playing, publisher).await {
             eprintln!("[smtc] worker exited: {e:#}");
         } else {
             eprintln!("[smtc] worker exited (rx channel closed)");
@@ -184,7 +185,8 @@ pub fn start(
 async fn emit_blended(
     app: &AppHandle,
     snapshot: &SharedSnapshot,
-    event: &str,
+    publisher: &MediaPublisher,
+    event: SnapshotEvent,
     mut snap: CurrentTrack,
 ) {
     use tauri::Manager;
@@ -241,38 +243,45 @@ async fn emit_blended(
     // YouTube via Chrome / etc.). Real publishers always beat the bridge's
     // estimated position. Emit raw and skip the bridge entirely so a paused
     // Pandora session can't keep eating the airwaves.
-    let smtc_actively_playing =
-        snap.state == PlaybackState::Playing && !snap.title.trim().is_empty();
-    if smtc_actively_playing {
-        let _ = app.emit(event, &snap);
+    // Active SMTC returns before touching bridge state, matching the original
+    // fast path and avoiding bridge-lock contention on the authoritative feed.
+    if smtc_publication_policy(&snap, false) == SmtcPublication::Raw {
+        publisher.publish_event(event, &snap);
         return;
     }
-    // Tier 2: defer to the bridge if a position-supplying probe is currently
-    // authoritative (Pandora desktop with Hyperlinks present + state =
-    // Playing). The bridge worker emits its own timeline-changed events, so
-    // suppress ours to avoid two streams racing into the frontend.
-    if let Some(bridge_state) = app.try_state::<crate::web_bridge::SharedWebBridge>() {
-        if crate::web_bridge::bridge_is_authoritative(bridge_state.inner()).await {
-            return;
-        }
-        crate::web_bridge::blend_bridge_into_snapshot(&mut snap, bridge_state.inner()).await;
-        // Bridge blend may have flipped ad_active to true via bt.is_ad
-        // (Pandora ad detection). Re-sync to shared so the resolver sees it.
-        {
-            let mut shared = snapshot.write().await;
-            shared.ad_active = snap.ad_active;
+
+    let bridge_state = app.try_state::<crate::web_bridge::SharedWebBridge>();
+    let bridge_is_authoritative = match bridge_state.as_ref() {
+        Some(state) => crate::web_bridge::bridge_is_authoritative(state.inner()).await,
+        None => false,
+    };
+
+    match smtc_publication_policy(&snap, bridge_is_authoritative) {
+        SmtcPublication::Raw => publisher.publish_event(event, &snap),
+        SmtcPublication::Suppress => {}
+        SmtcPublication::Blend => {
+            if let Some(bridge_state) = bridge_state {
+                crate::web_bridge::blend_bridge_into_snapshot(&mut snap, bridge_state.inner())
+                    .await;
+                // Bridge blend may have flipped ad_active to true via bt.is_ad
+                // (Pandora ad detection). Re-sync to shared so the resolver sees it.
+                {
+                    let mut shared = snapshot.write().await;
+                    shared.ad_active = snap.ad_active;
+                }
+            }
+            // Tier 3: nothing claimed authority. Publish the supplied clone,
+            // possibly enriched with fresh bridge data.
+            publisher.publish_event(event, &snap);
         }
     }
-    // Tier 3: nothing claimed authority — emit whatever SMTC has (possibly
-    // stale, possibly Paused/Stopped from an idle app).
-    let _ = app.emit(event, &snap);
 }
 
 async fn run(
     app: AppHandle,
     snapshot: SharedSnapshot,
-    art: SharedAlbumArt,
     smtc_playing: Arc<AtomicBool>,
+    publisher: MediaPublisher,
 ) -> Result<()> {
     // RequestAsync returns IAsyncOperation; .get() blocks until ready. The
     // call is one-shot at startup and resolves in milliseconds, so blocking
@@ -320,7 +329,7 @@ async fn run(
             .unwrap_or_default();
         smtc_playing.store(state == PlaybackState::Playing, Ordering::Relaxed);
         eprintln!("[smtc] startup: session attached, source='{aumid}', state={state:?}");
-        emit_full(&app, &snapshot, &art, &h.session).await;
+        emit_full(&app, &snapshot, &publisher, &h.session).await;
     } else {
         smtc_playing.store(false, Ordering::Relaxed);
         eprintln!("[smtc] startup: no active session, smtc_playing=false");
@@ -353,7 +362,7 @@ async fn run(
                         .unwrap_or_default();
                     smtc_playing.store(state == PlaybackState::Playing, Ordering::Relaxed);
                     eprintln!("[smtc] new session attached, source='{aumid}', state={state:?}");
-                    emit_full(&app, &snapshot, &art, &h.session).await;
+                    emit_full(&app, &snapshot, &publisher, &h.session).await;
                 } else {
                     // No active session — clear the snapshot and notify.
                     smtc_playing.store(false, Ordering::Relaxed);
@@ -362,8 +371,22 @@ async fn run(
                         *snap = CurrentTrack::default();
                         snap.clone()
                     };
-                    emit_blended(&app, &snapshot, "track-changed", emit_snap.clone()).await;
-                    emit_blended(&app, &snapshot, "playback-state-changed", emit_snap).await;
+                    emit_blended(
+                        &app,
+                        &snapshot,
+                        &publisher,
+                        SnapshotEvent::Track,
+                        emit_snap.clone(),
+                    )
+                    .await;
+                    emit_blended(
+                        &app,
+                        &snapshot,
+                        &publisher,
+                        SnapshotEvent::Playback,
+                        emit_snap,
+                    )
+                    .await;
                     eprintln!("[smtc] no active session, snapshot cleared");
                 }
             }
@@ -384,14 +407,15 @@ async fn run(
                                 snap.duration_ms = track.duration_ms;
                                 snap.clone()
                             };
-                            emit_blended(&app, &snapshot, "track-changed", emit_snap).await;
-                            spawn_art_fetch(
-                                app.clone(),
-                                art.clone(),
-                                h.session.clone(),
-                                title,
-                                artist,
-                            );
+                            emit_blended(
+                                &app,
+                                &snapshot,
+                                &publisher,
+                                SnapshotEvent::Track,
+                                emit_snap,
+                            )
+                            .await;
+                            spawn_art_fetch(publisher.clone(), h.session.clone(), title, artist);
                         }
                         Err(e) => {
                             eprintln!("[smtc] Msg::MediaChanged → read_track failed: {e:#}");
@@ -413,7 +437,14 @@ async fn run(
                                 snap.last_update_unix_ms = last_update;
                                 snap.clone()
                             };
-                            emit_blended(&app, &snapshot, "timeline-changed", emit_snap).await;
+                            emit_blended(
+                                &app,
+                                &snapshot,
+                                &publisher,
+                                SnapshotEvent::Timeline,
+                                emit_snap,
+                            )
+                            .await;
                         }
                         Err(e) => {
                             eprintln!("[smtc] Msg::TimelineChanged → read_timeline failed: {e:#}");
@@ -432,8 +463,14 @@ async fn run(
                                 snap.state = state;
                                 snap.clone()
                             };
-                            emit_blended(&app, &snapshot, "playback-state-changed", emit_snap)
-                                .await;
+                            emit_blended(
+                                &app,
+                                &snapshot,
+                                &publisher,
+                                SnapshotEvent::Playback,
+                                emit_snap,
+                            )
+                            .await;
                         }
                         Err(e) => {
                             eprintln!("[smtc] Msg::PlaybackChanged → read_state failed: {e:#}");
@@ -483,7 +520,7 @@ fn attach_session(
 async fn emit_full(
     app: &AppHandle,
     snapshot: &SharedSnapshot,
-    art: &SharedAlbumArt,
+    publisher: &MediaPublisher,
     session: &GlobalSystemMediaTransportControlsSession,
 ) {
     let track = read_track(session).await.ok();
@@ -519,20 +556,14 @@ async fn emit_full(
             );
             snap.clone()
         };
-        emit_blended(app, snapshot, "track-changed", emit_snap.clone()).await;
-        emit_blended(app, snapshot, "timeline-changed", emit_snap.clone()).await;
-        emit_blended(app, snapshot, "playback-state-changed", emit_snap.clone()).await;
+        for event in MediaPublisher::full_refresh_order() {
+            emit_blended(app, snapshot, publisher, event, emit_snap.clone()).await;
+        }
         (emit_snap.title.clone(), emit_snap.artist.clone())
     };
 
     if !snap_title.trim().is_empty() {
-        spawn_art_fetch(
-            app.clone(),
-            art.clone(),
-            session.clone(),
-            snap_title,
-            snap_artist,
-        );
+        spawn_art_fetch(publisher.clone(), session.clone(), snap_title, snap_artist);
     }
 }
 
@@ -550,8 +581,7 @@ async fn emit_full(
 // returns the same cover anyway, so the iTunes-first preference is
 // strictly an improvement or a no-op.
 fn spawn_art_fetch(
-    app: AppHandle,
-    art: SharedAlbumArt,
+    publisher: MediaPublisher,
     session: GlobalSystemMediaTransportControlsSession,
     title: String,
     artist: String,
@@ -628,14 +658,7 @@ fn spawn_art_fetch(
             artist,
             data_url,
         };
-        // Write to shared cache BEFORE emitting so a get_current_album_art
-        // invocation racing the listener subscription on the frontend's mount
-        // never sees a stale value relative to the just-emitted event.
-        {
-            let mut a = art.write().await;
-            *a = Some(payload.clone());
-        }
-        let _ = app.emit("album-art-loaded", &payload);
+        publisher.publish_artwork(payload).await;
     });
 }
 

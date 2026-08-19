@@ -48,8 +48,8 @@ use tauri::{AppHandle, Manager};
 use tokio::sync::oneshot;
 
 use crate::lyrics::{CurrentLyrics, SharedLyrics};
+use crate::media::{CurrentTrack, PlaybackState, SharedAlbumArt, SharedSnapshot};
 use crate::settings::SharedSettings;
-use crate::smtc::{CurrentTrack, SharedAlbumArt, SharedSnapshot};
 
 #[derive(Clone)]
 struct AppState {
@@ -101,7 +101,7 @@ async fn build_state(s: &AppState) -> StateResponse {
     };
 
     let now_ms = unix_ms_now();
-    let pos_ms = if snap.state == crate::smtc::PlaybackState::Playing {
+    let pos_ms = if snap.state == PlaybackState::Playing {
         let elapsed = (now_ms - snap.last_update_unix_ms).max(0);
         snap.position_ms.saturating_add(elapsed as u64)
     } else {

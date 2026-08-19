@@ -6,6 +6,13 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.56] - 2026-08-19
+
+### Changed
+- **Windows playback keeps the same behavior behind a portable media boundary.** Hum now starts SMTC, iTunes, browser and Pandora detection, and lyrics through one Windows backend while preserving their existing order and source priority. Track, timeline, playback, and artwork updates pass through one publisher with the same event names and complete payloads used by the overlay and OBS.
+- **Media authority and event ordering are now protected by focused tests.** Tests cover active SMTC priority, bridge suppression and fallback, iTunes suppression, bridge timeline eligibility, the track-to-timeline-to-playback refresh sequence, and artwork caching before its event reaches listeners. This is architecture work with no intended visual or workflow change for Windows users.
+- **Shared lyrics and OBS code no longer depend on Windows SMTC types.** They consume the platform-neutral media model directly while OBS continues reading the same raw snapshot it used before.
+
 ## [0.13.55] - 2026-08-19
 
 ### Changed

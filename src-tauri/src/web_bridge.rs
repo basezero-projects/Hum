@@ -31,7 +31,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
 };
 
-use crate::smtc::SharedSnapshot;
+use crate::media::{
+    should_publish_bridge_timeline, AlbumArtPayload, CurrentTrack, MediaPublisher, PlaybackState,
+    SharedSnapshot,
+};
 
 /// Unix epoch milliseconds at the current moment. Inline helper used by both
 /// the web and desktop probes — keeps the call sites readable.
@@ -69,7 +72,7 @@ pub struct WebBridgeTrack {
     /// position while `Playing`, so a paused Pandora desktop session
     /// freezes the lyrics where they are instead of scrolling forward.
     #[serde(default)]
-    pub state: Option<crate::smtc::PlaybackState>,
+    pub state: Option<PlaybackState>,
     /// Set by probes that can detect an ad break (Pandora desktop /
     /// Pandora web). When true, `blend_bridge_into_snapshot` flips
     /// `snap.ad_active = true`. `position_ms` / `duration_ms` still
@@ -107,10 +110,7 @@ pub const BRIDGE_AUTHORITY_MS: i64 = 60_000;
 /// `get_current_track` command and emitted in `timeline-changed` events)
 /// needs the same treatment so the *frontend* sees bridge-accurate
 /// playback position for non-SMTC apps like Pandora desktop.
-pub async fn blend_bridge_into_snapshot(
-    snap: &mut crate::smtc::CurrentTrack,
-    bridge: &SharedWebBridge,
-) {
+pub async fn blend_bridge_into_snapshot(snap: &mut CurrentTrack, bridge: &SharedWebBridge) {
     let bridge_track = { bridge.read().await.clone() };
     let Some(bt) = bridge_track else { return };
 
@@ -198,7 +198,7 @@ pub async fn bridge_is_authoritative(bridge: &SharedWebBridge) -> bool {
     // take over. Without this, pausing Pandora.exe and starting Spotify
     // would leave Hum stuck on the (paused) Pandora track because SMTC's
     // Spotify emits would still be suppressed.
-    if matches!(bt.state, Some(crate::smtc::PlaybackState::Paused)) {
+    if matches!(bt.state, Some(PlaybackState::Paused)) {
         return false;
     }
     let now_unix_ms = std::time::SystemTime::now()
@@ -752,7 +752,12 @@ impl WebPlayerProbe for PandoraProbe {
 /// Spawn the bridge worker. The worker watches the SMTC snapshot and,
 /// when a probe matches, polls UIA every 2s. Idle (5s tick, zero UIA
 /// calls) when no probe matches.
-pub fn start(app: AppHandle, snapshot: SharedSnapshot, shared: SharedWebBridge) {
+pub fn start(
+    app: AppHandle,
+    snapshot: SharedSnapshot,
+    shared: SharedWebBridge,
+    publisher: MediaPublisher,
+) {
     // HTTP client for iTunes Search art lookups. Created once and cloned
     // per-track so we get connection reuse across requests.
     let http_client = match reqwest::Client::builder()
@@ -815,10 +820,9 @@ pub fn start(app: AppHandle, snapshot: SharedSnapshot, shared: SharedWebBridge) 
                             // ours is estimated. Emitting our timeline-
                             // changed in that case would flicker the
                             // frontend between two sources every 2s.
-                            let smtc_actively_playing = {
+                            let publish_bridge_timeline = {
                                 let s = snapshot.read().await;
-                                matches!(s.state, crate::smtc::PlaybackState::Playing)
-                                    && !s.title.trim().is_empty()
+                                should_publish_bridge_timeline(has_bridge_position, &s)
                             };
                             // Sync ad_active back to the SHARED snapshot
                             // UNCONDITIONALLY — decoupled from the position-
@@ -842,8 +846,8 @@ pub fn start(app: AppHandle, snapshot: SharedSnapshot, shared: SharedWebBridge) 
                                 let mut s = snapshot.write().await;
                                 s.ad_active = blended.ad_active;
                             }
-                            if has_bridge_position && !smtc_actively_playing {
-                                let _ = app.emit("timeline-changed", &blended);
+                            if publish_bridge_timeline {
+                                publisher.publish_timeline(&blended);
                             }
                             if new_title != last_emitted_title {
                                 eprintln!(
@@ -854,7 +858,7 @@ pub fn start(app: AppHandle, snapshot: SharedSnapshot, shared: SharedWebBridge) 
 
                                 // Kick off art fetch in the background so it
                                 // doesn't slow the 2s polling cadence.
-                                let app_for_art = app.clone();
+                                let publisher_for_art = publisher.clone();
                                 let client_for_art = http_client.clone();
                                 tauri::async_runtime::spawn(async move {
                                     let Some(data_url) = crate::smtc::fetch_art_via_itunes(
@@ -869,21 +873,12 @@ pub fn start(app: AppHandle, snapshot: SharedSnapshot, shared: SharedWebBridge) 
                                         );
                                         return;
                                     };
-                                    let payload = crate::smtc::AlbumArtPayload {
+                                    let payload = AlbumArtPayload {
                                         title: art_title,
                                         artist: art_artist,
                                         data_url,
                                     };
-                                    // Mirror smtc::spawn_art_fetch's cache-then-emit
-                                    // pattern so get_current_album_art (called by
-                                    // the frontend on mount) returns this payload
-                                    // for the bridge-keyed title, not whatever
-                                    // SMTC's spawn_art_fetch last wrote.
-                                    use tauri::Manager;
-                                    let art_state =
-                                        app_for_art.state::<crate::smtc::SharedAlbumArt>();
-                                    *art_state.inner().write().await = Some(payload.clone());
-                                    let _ = app_for_art.emit("album-art-loaded", &payload);
+                                    publisher_for_art.publish_artwork(payload).await;
                                 });
                             }
                         }
