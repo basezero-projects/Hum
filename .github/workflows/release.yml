@@ -1,0 +1,155 @@
+name: Signed Windows release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hum-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Build and verify signed Windows artifacts
+    runs-on: windows-2022
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CODE_SIGNING_ENDPOINT: ${{ secrets.AZURE_CODE_SIGNING_ENDPOINT }}
+      AZURE_CODE_SIGNING_NAME: ${{ secrets.AZURE_CODE_SIGNING_NAME }}
+      AZURE_CERT_PROFILE_NAME: ${{ secrets.AZURE_CERT_PROFILE_NAME }}
+      RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.22.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.93.1
+        with:
+          components: rustfmt, clippy
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test frontend and release contracts
+        run: pnpm test
+
+      - name: Typecheck frontend
+        run: pnpm typecheck
+
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Check Rust formatting
+        working-directory: src-tauri
+        run: cargo fmt --all --check
+
+      - name: Check all Rust targets
+        working-directory: src-tauri
+        run: cargo check --all-targets
+
+      - name: Run Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test all Rust targets
+        working-directory: src-tauri
+        run: cargo test --all-targets
+
+      - name: Verify release version and tag
+        shell: pwsh
+        run: node scripts/prepare-release.mjs check-version --repo-root . --tag "$env:RELEASE_TAG"
+
+      - name: Set up Azure Trusted Signing
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Invoke-WebRequest -Uri 'https://dist.nuget.org/win-x86-commandline/latest/nuget.exe' -OutFile nuget.exe
+          .\nuget.exe install Microsoft.Trusted.Signing.Client -Version 1.0.60 -x -OutputDirectory signing
+          $dll = Get-ChildItem signing -Recurse -Filter Azure.CodeSigning.Dlib.dll |
+            Where-Object { $_.FullName -like '*x64*' } |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $dll) { throw 'Azure Trusted Signing library was not found' }
+          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter signtool.exe |
+            Where-Object { $_.FullName -like '*x64*' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signtool) { throw 'signtool.exe was not found' }
+          Copy-Item $signtool signtool.exe
+          @{
+            Endpoint = $env:AZURE_CODE_SIGNING_ENDPOINT
+            CodeSigningAccountName = $env:AZURE_CODE_SIGNING_NAME
+            CertificateProfileName = $env:AZURE_CERT_PROFILE_NAME
+          } | ConvertTo-Json | Set-Content signing-metadata.json
+          $signCommand = "$pwd\signtool.exe sign /v /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib $dll /dmdf $pwd\signing-metadata.json %1"
+          @{
+            bundle = @{
+              windows = @{
+                signCommand = $signCommand
+              }
+            }
+          } | ConvertTo-Json -Depth 5 | Set-Content sign-config.json
+
+      - name: Verify updater private key matches Hum
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Content updater-key-probe.txt 'hum-updater-key-probe'
+          pnpm tauri signer sign updater-key-probe.txt -k "$env:TAURI_SIGNING_PRIVATE_KEY" -p "$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          node scripts/prepare-release.mjs verify-key --repo-root . --signature updater-key-probe.txt.sig
+          Remove-Item updater-key-probe.txt, updater-key-probe.txt.sig
+
+      - name: Build signed Tauri bundle
+        run: pnpm tauri build --config sign-config.json
+
+      - name: Verify Authenticode signatures
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = @(Get-ChildItem src-tauri/target/release/bundle/nsis -Filter '*.exe')
+          if ($installer.Count -ne 1) { throw "Expected one installer, found $($installer.Count)" }
+          $targets = @('src-tauri/target/release/hum.exe', $installer[0].FullName)
+          foreach ($target in $targets) {
+            $signature = Get-AuthenticodeSignature $target
+            if ($signature.Status -ne 'Valid') {
+              throw "Invalid Authenticode signature for $target: $($signature.Status)"
+            }
+          }
+
+      - name: Prepare checked release metadata
+        shell: pwsh
+        run: node scripts/prepare-release.mjs prepare --repo-root . --artifacts src-tauri/target/release/bundle/nsis --output release-output --repository basezero-projects/Hum --tag "$env:RELEASE_TAG"
+
+      - name: Upload private signed proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: Hum-Windows-${{ github.sha }}
+          path: release-output/*
+          if-no-files-found: error
+
+      - name: Publish tagged release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-output/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

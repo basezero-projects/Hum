@@ -6,6 +6,15 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.67] - 2026-08-19
+
+### Added
+- **Hum now has a protected signed Windows release path.** A private GitHub Actions proof run builds the Windows installer through Azure Trusted Signing, creates the separately signed Tauri updater package, verifies both signatures, and keeps the result private unless an exact matching `vX.Y.Z` tag starts the workflow. Ordinary pushes and manual proof runs cannot replace the public update feed.
+- **Manual update checks now explain every step.** The overlay and tray show checking, up to date, available, download percentage when known, installing, restarting, and safe retry states. Automatic checks remain quiet when Hum is current or the network is unavailable. A real updater resource is required before download or installation can begin.
+
+### Changed
+- **Update failures now offer a clear recovery action without exposing internal errors.** Check, download, install, and restart failures use short customer-facing copy and matching tray actions. Update operations cannot overlap, a manual request can take over a quiet automatic check, unsafe version text is rejected, and stale updater resources are closed before replacement.
+
 ## [0.13.66] - 2026-08-19
 
 ### Fixed

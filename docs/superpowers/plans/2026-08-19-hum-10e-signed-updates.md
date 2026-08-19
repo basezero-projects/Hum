@@ -1,8 +1,8 @@
 # HUM-10E signed updates plan
 
 Date: 2026-08-19
-Status: Ready after v0.13.66 corrective closeout
-Target version: 0.13.67
+Status: Implementation complete, signed proof pending
+Target version: 0.13.68 after the v0.13.67 proof candidate
 Related phase: [HUM-10](../../roadmap/1.0/HUM-10-purchase-trust-first-run.md)
 Progress ledger: [HUM-10 ledger](../../roadmap/1.0/HUM-10-progress-ledger.md)
 

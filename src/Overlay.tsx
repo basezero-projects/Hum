@@ -7,7 +7,11 @@ import {
   getCurrentWindow,
   primaryMonitor,
 } from "@tauri-apps/api/window";
-import { check as checkForUpdate, type Update } from "@tauri-apps/plugin-updater";
+import {
+  check as checkForUpdate,
+  type DownloadEvent,
+  type Update,
+} from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
@@ -24,6 +28,19 @@ import type {
   WordSpan,
 } from "./types";
 import { fmtMs, loadPlatformInfoWithRetry, loadSettingsWithRetry } from "./types";
+import {
+  canInstallUpdate,
+  clampDownloadProgress,
+  nativeUpdateStatus,
+  promoteUpdateOrigin,
+  sanitizeUpdateVersion,
+  shouldRequestManualCheck,
+  updatePresentation,
+  type UpdateErrorStage,
+  type UpdateOrigin,
+  type UpdateOperation,
+  type UpdateState,
+} from "./update-state";
 
 const DEFAULT_SETTINGS: Settings = {
   last_mode: "edit",
@@ -127,15 +144,11 @@ export default function Overlay() {
   // it; the React state is the brief on-screen banner only.
   const nudgeMsRef = useRef<number>(0);
   const [nudgeBanner, setNudgeBanner] = useState<TimingBanner | null>(null);
-  // Auto-update banner state. `available` shows the gold "v X.Y.Z" pill;
-  // `installing` shows the spinner state; `ready` prompts to restart.
-  const [updateState, setUpdateState] = useState<
-    | { phase: "idle" }
-    | { phase: "available"; version: string; update: Update }
-    | { phase: "downloading"; version: string }
-    | { phase: "ready"; version: string }
-    | { phase: "error"; message: string }
-  >({ phase: "idle" });
+  const [updateState, setUpdateState] = useState<UpdateState>({ phase: "idle" });
+  const availableUpdateRef = useRef<Update | null>(null);
+  const updateOperationRef = useRef<UpdateOperation>("idle");
+  const updateCheckOriginRef = useRef<UpdateOrigin>("automatic");
+  const updateOutcomeTimerRef = useRef<number | null>(null);
   // Coarse re-render trigger for the progress bar / time readout.
   // Position interpolation is computed in render from
   // `track.position_ms + (Date.now() - track.last_update_unix_ms)` while
@@ -435,85 +448,206 @@ export default function Overlay() {
     return () => window.clearInterval(id);
   }, [track?.state, track?.last_update_unix_ms]);
 
-  // updateStateRef so the tray-event listener (single closure created
-  // on mount) can read the latest state without re-subscribing every
-  // time the state changes.
   const updateStateRef = useRef(updateState);
   useEffect(() => {
     updateStateRef.current = updateState;
   }, [updateState]);
 
-  // Auto-update check. Runs once on overlay mount + whenever the user
-  // picks "Check for updates" / "Install update vX" from the tray menu.
-  // Same tray event covers both: if we already have an Update object,
-  // install it; otherwise run a fresh check.
   useEffect(() => {
     if (!platformInfo?.services.updater) return;
 
-    const runCheck = async () => {
-      try {
-        const update = await checkForUpdate();
-        if (update?.available) {
-          setUpdateState({ phase: "available", version: update.version, update });
-          invoke("set_update_indicator", { pendingVersion: update.version }).catch(() => {});
-        }
-      } catch {
-        // Silent — don't surface "no endpoint reachable" noise to users.
-      }
-    };
-    runCheck();
+    void runUpdateCheck("automatic");
     const un = listen("updater-check-requested", () => {
-      if (updateStateRef.current.phase === "available") {
-        // Trigger install by calling the same handler the banner uses.
-        // We re-derive from state so we don't need to pass it in.
-        installUpdateInternal();
-      } else {
-        runCheck();
-      }
+      void handleUpdateAction();
     });
     return () => {
       un.then((fn) => fn()).catch(() => {});
+      if (updateOutcomeTimerRef.current !== null) {
+        window.clearTimeout(updateOutcomeTimerRef.current);
+        updateOutcomeTimerRef.current = null;
+      }
+      const resource = availableUpdateRef.current;
+      availableUpdateRef.current = null;
+      resource?.close().catch(() => {});
     };
   }, [platformInfo]);
 
-  // Tell the Rust ghost-mode cursor-poll worker whether the banner is
-  // currently visible so it can poke a clickable hole in the
-  // click-through region when needed.
   useEffect(() => {
     if (!platformInfo?.window.update_banner_pointer_exception) return;
 
-    const visible = updateState.phase !== "idle";
+    const visible = updatePresentation(updateState).bannerText !== null;
     invoke("set_update_banner_visible", { visible }).catch(() => {});
-  }, [platformInfo, updateState.phase]);
+  }, [platformInfo, updateState]);
 
-  async function installUpdateInternal() {
-    const cur = updateStateRef.current;
-    if (cur.phase !== "available") return;
-    const { version, update } = cur;
-    if (!update) {
-      // Demo path — no real Update object. Simulate the lifecycle so
-      // Wes can see the visual. Remove the inner branch when ready.
-      setUpdateState({ phase: "downloading", version });
-      window.setTimeout(() => {
-        setUpdateState({ phase: "ready", version });
-        invoke("set_update_indicator", { pendingVersion: null }).catch(() => {});
-      }, 1500);
-      return;
-    }
-    setUpdateState({ phase: "downloading", version });
-    try {
-      await update.downloadAndInstall();
-      setUpdateState({ phase: "ready", version });
-      invoke("set_update_indicator", { pendingVersion: null }).catch(() => {});
-      window.setTimeout(() => {
-        relaunch().catch(() => {});
-      }, 800);
-    } catch (e) {
-      setUpdateState({ phase: "error", message: String(e) });
+  function publishUpdateState(next: UpdateState) {
+    updateStateRef.current = next;
+    setUpdateState(next);
+    invoke("set_update_status", { status: nativeUpdateStatus(next) }).catch(() => {});
+  }
+
+  function clearUpdateOutcomeTimer() {
+    if (updateOutcomeTimerRef.current !== null) {
+      window.clearTimeout(updateOutcomeTimerRef.current);
+      updateOutcomeTimerRef.current = null;
     }
   }
-  // Backwards-compat name for the banner's onInstall prop.
-  const installUpdate = installUpdateInternal;
+
+  function returnUpdateTrayToIdle(delayMs: number) {
+    clearUpdateOutcomeTimer();
+    updateOutcomeTimerRef.current = window.setTimeout(() => {
+      updateOutcomeTimerRef.current = null;
+      publishUpdateState({ phase: "idle" });
+    }, delayMs);
+  }
+
+  async function replaceAvailableUpdate(next: Update | null) {
+    const previous = availableUpdateRef.current;
+    availableUpdateRef.current = next;
+    if (previous && previous !== next) await previous.close().catch(() => {});
+  }
+
+  async function runUpdateCheck(origin: UpdateOrigin): Promise<Update | null> {
+    if (updateOperationRef.current === "checking") {
+      updateCheckOriginRef.current = promoteUpdateOrigin(
+        updateCheckOriginRef.current,
+        origin,
+      );
+      if (updateCheckOriginRef.current === "manual") {
+        publishUpdateState({ phase: "checking", origin: "manual" });
+      }
+      return null;
+    }
+    if (updateOperationRef.current !== "idle") return null;
+    updateOperationRef.current = "checking";
+    updateCheckOriginRef.current = origin;
+    clearUpdateOutcomeTimer();
+    publishUpdateState({ phase: "checking", origin });
+    try {
+      const update = await checkForUpdate();
+      const finalOrigin = updateCheckOriginRef.current;
+      if (!update) {
+        await replaceAvailableUpdate(null);
+        if (finalOrigin === "manual") {
+          publishUpdateState({ phase: "current", origin: finalOrigin });
+          returnUpdateTrayToIdle(2500);
+        } else {
+          publishUpdateState({ phase: "idle" });
+        }
+        return null;
+      }
+      const version = sanitizeUpdateVersion(update.version);
+      if (!version) {
+        await update.close().catch(() => {});
+        if (finalOrigin === "manual") {
+          publishUpdateState({ phase: "error", stage: "check", origin: finalOrigin });
+        } else {
+          publishUpdateState({ phase: "idle" });
+        }
+        return null;
+      }
+      await replaceAvailableUpdate(update);
+      publishUpdateState({ phase: "available", version });
+      return update;
+    } catch {
+      await replaceAvailableUpdate(null);
+      const finalOrigin = updateCheckOriginRef.current;
+      if (finalOrigin === "manual") {
+        publishUpdateState({ phase: "error", stage: "check", origin: finalOrigin });
+      } else {
+        publishUpdateState({ phase: "idle" });
+      }
+      return null;
+    } finally {
+      updateOperationRef.current = "idle";
+    }
+  }
+
+  async function installUpdateInternal() {
+    if (updateOperationRef.current !== "idle") return;
+    const current = updateStateRef.current;
+    const resource = availableUpdateRef.current;
+    if (current.phase !== "available") return;
+    if (!canInstallUpdate(current, resource !== null)) {
+      publishUpdateState({
+        phase: "error",
+        stage: "download",
+        version: current.version,
+      });
+      return;
+    }
+
+    const version = current.version;
+    updateOperationRef.current = "installing";
+    availableUpdateRef.current = null;
+    let stage: UpdateErrorStage = "download";
+    let totalBytes: number | undefined;
+    let downloadedBytes = 0;
+    let publishedProgress: number | null = null;
+    publishUpdateState({ phase: "downloading", version, progress: null });
+
+    const onDownload = (event: DownloadEvent) => {
+      if (event.event === "Started") {
+        totalBytes = event.data.contentLength;
+        downloadedBytes = 0;
+      } else if (event.event === "Progress") {
+        downloadedBytes += event.data.chunkLength;
+      } else if (event.event === "Finished" && totalBytes) {
+        downloadedBytes = totalBytes;
+      }
+      const progress = clampDownloadProgress(downloadedBytes, totalBytes);
+      if (progress !== publishedProgress) {
+        publishedProgress = progress;
+        publishUpdateState({ phase: "downloading", version, progress });
+      }
+    };
+
+    try {
+      await resource!.download(onDownload);
+      stage = "install";
+      publishUpdateState({ phase: "installing", version });
+      await resource!.install();
+      stage = "restart";
+      publishUpdateState({ phase: "restarting", version });
+      await relaunch();
+    } catch {
+      await resource!.close().catch(() => {});
+      publishUpdateState({ phase: "error", stage, version });
+    } finally {
+      updateOperationRef.current = "idle";
+    }
+  }
+
+  async function retryUpdateInternal() {
+    const current = updateStateRef.current;
+    if (current.phase !== "error" || updateOperationRef.current !== "idle") return;
+    if (current.stage === "restart") {
+      updateOperationRef.current = "installing";
+      publishUpdateState({ phase: "restarting", version: current.version ?? "" });
+      try {
+        await relaunch();
+      } catch {
+        publishUpdateState(current);
+      } finally {
+        updateOperationRef.current = "idle";
+      }
+      return;
+    }
+    if (current.stage === "check") {
+      await runUpdateCheck("manual");
+      return;
+    }
+    const update = await runUpdateCheck("manual");
+    if (update) await installUpdateInternal();
+  }
+
+  async function handleUpdateAction() {
+    const action = updatePresentation(updateStateRef.current).action;
+    if (action === "install") await installUpdateInternal();
+    if (action === "retry") await retryUpdateInternal();
+    if (shouldRequestManualCheck(action, updateOperationRef.current)) {
+      await runUpdateCheck("manual");
+    }
+  }
 
   // Sync the album art's size to the lyrics column's measured height.
   // useLayoutEffect for the initial measure (before browser paint, so no
@@ -994,7 +1128,7 @@ export default function Overlay() {
         openArtistPanel={openArtistPanel}
         nudgeBanner={nudgeBanner}
         updateState={updateState}
-        onInstallUpdate={installUpdate}
+        onInstallUpdate={handleUpdateAction}
         bridgeServiceName={bridgeServiceName}
         adActive={adActive}
         onHoverChange={setHovered}
@@ -1017,7 +1151,7 @@ export default function Overlay() {
           <ServiceBg serviceName={ambientServiceName} />
         ) : null}
         <NudgeBanner banner={nudgeBanner} />
-        <UpdateBanner state={updateState} onInstall={installUpdate} />
+        <UpdateBanner state={updateState} onAction={handleUpdateAction} />
         <div {...dragProps} style={innerRowStyle}>
           {showArt && albumArt ? (
             <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} dragRegion={isEdit} onClick={openArtistPanel} />
@@ -1096,7 +1230,7 @@ export default function Overlay() {
           <ServiceBg serviceName={ambientServiceName} />
         ) : null}
         <NudgeBanner banner={nudgeBanner} />
-        <UpdateBanner state={updateState} onInstall={installUpdate} />
+        <UpdateBanner state={updateState} onAction={handleUpdateAction} />
         {showArt && albumArt ? <AlbumArtBadge dataUrl={albumArt.data_url} onClick={openArtistPanel} /> : null}
         {openArtistPanel && (!showArt || !albumArt) && lyrics?.status !== "unsupported" ? (
           <ArtistInfoDot onClick={openArtistPanel} />
@@ -1164,7 +1298,7 @@ export default function Overlay() {
       ) : null}
       <NudgeBanner banner={nudgeBanner} />
       <div {...dragProps} style={outerStackStyle}>
-        <UpdateBanner state={updateState} onInstall={installUpdate} />
+        <UpdateBanner state={updateState} onAction={handleUpdateAction} />
         {openArtistPanel && (!showArt || !albumArt) && lyrics?.status !== "unsupported" ? (
           <ArtistInfoDot onClick={openArtistPanel} />
         ) : null}
@@ -1288,12 +1422,7 @@ function SquareLyricsView({
   borderColor: string;
   openArtistPanel?: () => void;
   nudgeBanner: TimingBanner | null;
-  updateState:
-    | { phase: "idle" }
-    | { phase: "available"; version: string; update: Update }
-    | { phase: "downloading"; version: string }
-    | { phase: "ready"; version: string }
-    | { phase: "error"; message: string };
+  updateState: UpdateState;
   onInstallUpdate: () => void;
   bridgeServiceName: string | null;
   adActive: boolean;
@@ -1544,7 +1673,7 @@ function SquareLyricsView({
 
       <NudgeBanner banner={nudgeBanner} />
       <div style={{ position: "absolute", top: 10, left: 14, zIndex: 5 }}>
-        <UpdateBanner state={updateState} onInstall={onInstallUpdate} />
+        <UpdateBanner state={updateState} onAction={onInstallUpdate} />
       </div>
 
       {settings.show_media || (showArt && albumArt) ? (
@@ -2025,19 +2154,15 @@ function usePrefersReducedMotion(): boolean {
 // while the rest of the overlay stays click-through.
 function UpdateBanner({
   state,
-  onInstall,
+  onAction,
 }: {
-  state:
-    | { phase: "idle" }
-    | { phase: "available"; version: string; update: Update }
-    | { phase: "downloading"; version: string }
-    | { phase: "ready"; version: string }
-    | { phase: "error"; message: string };
-  onInstall: () => void;
+  state: UpdateState;
+  onAction: () => void;
 }) {
   const [hover, setHover] = useState(false);
-  if (state.phase === "idle") return null;
-  const clickable = state.phase === "available";
+  const presentation = updatePresentation(state);
+  if (presentation.bannerText === null) return null;
+  const clickable = presentation.action !== "none";
 
   // Sits in normal flow as the first child of `outerStackStyle` in the main
   // render tree — above the art+lyrics row, contributing its own height to
@@ -2075,26 +2200,12 @@ function UpdateBanner({
     transition: "opacity 180ms ease, max-width 220ms ease",
   };
 
-  let dotColor = "#d4af37";
-  let labelText: React.ReactNode = null;
-  switch (state.phase) {
-    case "available":
-      dotColor = "#d4af37";
-      labelText = `New Update Available: v${state.version} — Click to update`;
-      break;
-    case "downloading":
-      dotColor = "#d4af37";
-      labelText = `Installing v${state.version}…`;
-      break;
-    case "ready":
-      dotColor = "#7ad07a";
-      labelText = `v${state.version} installed — restarting`;
-      break;
-    case "error":
-      dotColor = "#e57373";
-      labelText = "Update failed";
-      break;
-  }
+  const dotColor =
+    state.phase === "error"
+      ? "#e57373"
+      : state.phase === "current"
+        ? "#7ad07a"
+        : "#d4af37";
 
   // Force-show the label for non-"available" states so users see what's
   // happening during install / failure without needing to hover.
@@ -2105,11 +2216,13 @@ function UpdateBanner({
       style={wrapperStyle}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      onClick={clickable ? onInstall : undefined}
+      onClick={clickable ? onAction : undefined}
       title={
-        clickable
-          ? `Install update v${(state as { version: string }).version} and restart`
-          : undefined
+        presentation.action === "install"
+          ? "Install this update and restart Hum"
+          : presentation.action === "retry"
+            ? "Try this update step again"
+            : undefined
       }
     >
       <span
@@ -2130,7 +2243,7 @@ function UpdateBanner({
               : labelStyle.color,
         }}
       >
-        {labelText}
+        {presentation.bannerText}
       </span>
     </div>
   );

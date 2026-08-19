@@ -37,6 +37,7 @@ mod platform;
 mod promos;
 mod settings;
 mod streamer;
+mod update_status;
 pub mod window_effects;
 
 use artist_info::{clear_artist_info_cache, get_artist_info, ArtistInfoCache};
@@ -110,30 +111,23 @@ async fn get_current_album_art(
     Ok(a.clone())
 }
 
-/// Frontend calls this when a tray-relevant update is detected (or
-/// cleared) so the "Check for updates" menu item can flip its label
-/// to "Install update vX.Y.Z". The tray becomes the actionable
-/// surface; the overlay banner is just a pointer.
 #[tauri::command]
-fn set_update_indicator(
+fn set_update_status(
     app: tauri::AppHandle,
-    pending_version: Option<String>,
+    status: update_status::UpdateStatus,
 ) -> Result<(), String> {
     let item = match app.try_state::<UpdateMenuItem>() {
         Some(s) => s.0.clone(),
         None => return Err("update menu item not registered".into()),
     };
-    let new_text = match pending_version {
-        Some(v) => format!("Install update v{v}"),
-        None => "Check for updates".to_string(),
-    };
-    item.set_text(new_text).map_err(|e| e.to_string())?;
+    let projection = update_status::tray_projection(&status);
+    item.set_text(projection.text).map_err(|e| e.to_string())?;
+    item.set_enabled(projection.enabled)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
-/// Managed state handle to the dynamic-label "Check for updates" /
-/// "Install update vX" tray menu item. Held in Tauri state so
-/// `set_update_indicator` can find it.
+/// Managed state handle for the dynamic update tray item.
 struct UpdateMenuItem(MenuItem<tauri::Wry>);
 
 /// Frontend tells us when the update banner is visible / hidden so the
@@ -483,7 +477,7 @@ pub fn run() {
             update_settings,
             reset_settings,
             open_settings_window,
-            set_update_indicator,
+            set_update_status,
             set_update_banner_visible,
             get_artist_info,
             clear_artist_info_cache,

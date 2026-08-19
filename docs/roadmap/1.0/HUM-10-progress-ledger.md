@@ -5,10 +5,10 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 ## Current cursor
 
 - Slice: HUM-10E, signed updates and update states
-- Step: Red-first implementation
-- Next action: create the Hum updater key, lock the release contracts with failing tests, then implement the signed workflow and complete update states
+- Step: Candidate closeout and signed workflow proof
+- Next action: pass the full v0.13.67 gate, push the proof candidate, dispatch the private signed workflow, and audit its artifacts before the final closeout patch
 - Blocker: None for local implementation. Live purchase proof still requires a Polar organization and Hum product.
-- Last updated: 2026-08-19 14:45 MDT
+- Last updated: 2026-08-19 15:07 MDT
 - Last completed plan: `docs/superpowers/plans/2026-08-19-hum-10d-first-run-setup.md`
 - Current plan: `docs/superpowers/plans/2026-08-19-hum-10e-signed-updates.md`
 
@@ -94,3 +94,4 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 - 2026-08-19 14:32 MDT: HUM-10D passed 244 Rust tests, the complete debug and release gate, a live two-song NetEase smoke test, and native setup, lyrics, overlay-brand, and title-bar QA. The slice repaired provider fallback lyrics and replaced the remaining waveform assets with the approved hummingbird before v0.13.65 shipped. The cursor advanced to HUM-10E survey.
 - 2026-08-19 14:48 MDT: HUM-10E locked a twelve-file production boundary for a Hum-specific updater key, Azure Trusted Signing inside the Tauri build, private signed proof runs, tag-only GitHub publishing, checked release metadata, and complete customer-visible update states.
 - 2026-08-19 14:45 MDT: A real startup exposed the overlay's one-shot settings hydration race. The failure left Ribbon defaults rendered inside saved Square geometry, shrinking every lyric. A red-first retry test and native 620 by 620 replay closed the v0.13.66 correction before HUM-10E implementation resumed.
+- 2026-08-19 15:07 MDT: HUM-10E completed its red-first local implementation. Hum now owns a protected updater key, GitHub holds only encrypted release secrets, the committed config contains only the public key, update states and tray projections are tested, and the manual workflow is ready for its first private signed proof run.

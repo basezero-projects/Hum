@@ -22,5 +22,6 @@
     "baseUrl": "."
   },
   "include": ["src"],
+  "exclude": ["src/**/*.test.mts"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
