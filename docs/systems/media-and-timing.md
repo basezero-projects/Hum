@@ -1,6 +1,6 @@
 # Media and timing
 
-Last verified against v0.13.60 source on 2026-08-19.
+Last verified against v0.13.61 source on 2026-08-19.
 
 ## Purpose and boundary
 

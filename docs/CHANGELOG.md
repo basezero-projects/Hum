@@ -6,6 +6,16 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.61] - 2026-08-19
+
+### Fixed
+- **Hum's shared shell now compiles natively on macOS without enabling private Tauri APIs.** The artist panel keeps transparent-window behavior on Windows and Linux, while macOS uses the supported builder path until a future native effect adapter is implemented.
+- **Current-track commands now have valid signatures on every operating system.** Windows keeps browser-bridge enrichment. macOS and Linux return the raw shared snapshot through a separate fixed command signature that the Tauri macro can compile correctly.
+- **Portable builds no longer import Windows-only media wiring.** Backend and publisher re-exports remain available to Windows production code and shared tests, but non-Windows production checks no longer receive unused Windows orchestration imports.
+
+### Changed
+- **Native CI failures now remain visible until the repair commit is green.** The roadmap, ledger, plan, and regression evidence record v0.13.60 as the failed macOS proof and use the exact v0.13.61 workflow as HUM-00's final cross-platform evidence.
+
 ## [0.13.60] - 2026-08-19
 
 ### Fixed

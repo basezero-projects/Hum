@@ -4,6 +4,7 @@ Out-of-scope-to-fix-right-now things noticed during work. Each line should have 
 
 ## Open
 
+- **Portable-core CI actions still emit Node 20 deprecation annotations.** GitHub currently forces `actions/checkout@v4`, `actions/setup-node@v4`, and `pnpm/action-setup@v4` onto Node 24. The workflow passes, but the action majors should be reviewed and upgraded together after verifying their current release contracts. This is separate from Hum's application dependency versions.
 - **Reset all settings does not immediately reapply the default backdrop.** `settings::reset_settings` persists and broadcasts defaults but does not call the window-effects adapter. The overlay may keep its previous native backdrop until another backdrop-related setting changes or Hum restarts. HUM-00D preserved this existing behavior because reset workflow changes are outside the native-boundary refactor.
 - **YouTube metadata normalization is foreground-tab-only.** `youtube_bridge::YouTubeProbe::read` (v0.13.42) confirms the playing track via `web_bridge::youtube_window_shows_track`, which matches a browser *window* title — and browsers only set the window title to the *active* tab's `document.title`. So a YouTube song playing in a background tab still shows the raw channel/decorated-title and misses lyrics/art. Same root limitation as the YouTube ad detector. Full fix would need per-tab enumeration (UIA tree or CDP) instead of window-title matching. Acceptable for now since foreground-tab playback is the common case.
 

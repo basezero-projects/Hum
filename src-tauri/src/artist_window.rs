@@ -6,6 +6,11 @@ use crate::window_effects::{SystemWindowEffects, WindowEffects};
 use anyhow::{anyhow, Result};
 use tauri::{AppHandle, Listener, Manager, WebviewUrl, WebviewWindowBuilder};
 
+#[cfg(target_os = "macos")]
+const ARTIST_WINDOW_USES_TRANSPARENCY: bool = false;
+#[cfg(not(target_os = "macos"))]
+const ARTIST_WINDOW_USES_TRANSPARENCY: bool = true;
+
 /// Open the artist-info panel window.
 /// If a window with label "artist-info" already exists, focus it instead.
 /// Position: anchored below the "overlay" window (center-aligned horizontally).
@@ -27,23 +32,30 @@ pub async fn open_artist_panel(app: AppHandle) -> Result<()> {
     // index.html` by the dev server. Without the `src/` prefix the webview
     // 404s, Tauri falls back to the root `index.html`, main.tsx's
     // `pickComponent()` sees the unknown `artist-info` window label and
-    // defaults to `DevConsole` — which is the "blank black window with no
+    // defaults to `DevConsole`, which is the "blank black window with no
     // visible content and dev-console title" failure mode you can hit if
     // this URL drifts.
-    let window = WebviewWindowBuilder::new(
+    let builder = WebviewWindowBuilder::new(
         &app,
         "artist-info",
         WebviewUrl::App("src/artist-panel/index.html".into()),
     )
     .title("Artist Info")
     .inner_size(360.0, 480.0)
-    .decorations(false)
-    .transparent(true)
-    .always_on_top(true)
-    .resizable(false)
-    .skip_taskbar(true)
-    .position(x as f64, y as f64)
-    .build()?;
+    .decorations(false);
+    #[cfg(target_os = "macos")]
+    let builder = {
+        debug_assert!(!ARTIST_WINDOW_USES_TRANSPARENCY);
+        builder
+    };
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.transparent(ARTIST_WINDOW_USES_TRANSPARENCY);
+    let window = builder
+        .always_on_top(true)
+        .resizable(false)
+        .skip_taskbar(true)
+        .position(x as f64, y as f64)
+        .build()?;
 
     // Mirror the overlay's window_backdrop setting onto this peer window so
     // the visual matches (Mica / Acrylic / Tabbed Mica / None). v0.10.23
@@ -52,7 +64,7 @@ pub async fn open_artist_panel(app: AppHandle) -> Result<()> {
     {
         let settings_state = app.state::<crate::settings::SharedSettings>();
         // open_artist_panel is async + driven by the tokio runtime, so use the
-        // async read — blocking_read() here can stall a runtime worker under
+        // async read because blocking_read() can stall a runtime worker under
         // lock contention.
         let kind = settings_state.inner().read().await.window_backdrop;
         let window_effects = SystemWindowEffects;
@@ -145,7 +157,7 @@ fn compute_panel_position(app: &AppHandle) -> Result<(i32, i32)> {
 
     // Clamp to screen top.
     let y = y.max(0);
-    // Clamp x to screen left (rough guard — no right-side clamp needed for most setups).
+    // Clamp x to screen left. Most setups do not need a right-side clamp.
     let x = center_x.max(0);
 
     Ok((x, y))
@@ -168,7 +180,7 @@ const TICKET_URL_WHITELIST: &[&str] = &[
     "www.ticketmaster.co.uk",
     "ticketmaster.de",
     "www.ticketmaster.de",
-    // Impact tracking subdomain space — matched via ends_with below.
+    // Impact tracking subdomain space, matched via ends_with below.
     ".go.impact.com",
     "seatgeek.com",
     "www.seatgeek.com",
@@ -224,4 +236,14 @@ pub async fn open_artist_panel_cmd(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn close_artist_panel_cmd(app: AppHandle) -> Result<(), String> {
     close_artist_panel(&app).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ARTIST_WINDOW_USES_TRANSPARENCY;
+
+    #[test]
+    fn artist_window_transparency_matches_safe_tauri_target_support() {
+        assert_eq!(ARTIST_WINDOW_USES_TRANSPARENCY, !cfg!(target_os = "macos"));
+    }
 }

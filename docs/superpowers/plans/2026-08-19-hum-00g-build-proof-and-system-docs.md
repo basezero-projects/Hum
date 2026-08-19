@@ -1,7 +1,7 @@
 # HUM-00G build proof and system documentation plan
 
 Date: 2026-08-19
-Status: Complete in v0.13.60
+Status: Complete in v0.13.61
 Related phase: [HUM-00](../../roadmap/1.0/HUM-00-portable-product-core.md)
 Progress ledger: [HUM-00 ledger](../../roadmap/1.0/HUM-00-progress-ledger.md)
 
@@ -100,7 +100,7 @@ The physical matrix lists Spotify desktop, Chromium, iTunes, Pandora web, Pandor
 - Retry, cache, shutdown, and known limitation behavior
 - Verification links
 
-Update the systems index and README so they describe the current v0.13.60 architecture and development checks.
+Update the systems index and README so they describe the current v0.13.61 architecture and development checks.
 
 ## Implementation steps
 
@@ -110,7 +110,7 @@ Update the systems index and README so they describe the current v0.13.60 archit
 4. Add the native workflow with no packaging or artifacts.
 5. Add the system document, index entry, regression evidence, release-checklist links if needed, and current README architecture.
 6. Run the full local gate again and independently review code, workflow, evidence claims, platform commands, and documentation accuracy.
-7. Audit every changed file, bump to v0.13.60 across all manifests, update changelog and roadmap records, log out-of-scope findings, update the ledger and Hum brain records, commit, and push.
+7. Audit every changed file, bump the final repair to v0.13.61 across all manifests, update changelog and roadmap records, log out-of-scope findings, update the ledger and Hum brain records, commit, and push.
 8. Wait for the exact pushed commit's frontend, Windows, macOS, and Linux jobs.
 9. If a job fails, diagnose it, add a red-first local or workflow proof where possible, fix it, restart the complete gate, version, commit, push, and wait again.
 10. HUM-00 is complete only after the exact final commit is green on every native job.
@@ -122,7 +122,7 @@ Update the systems index and README so they describe the current v0.13.60 archit
 - [x] The smoke locks all six neutral defaults.
 - [x] Frontend frozen install, typecheck, build, and retry test run on Ubuntu.
 - [x] Windows runs formatting, all-target check, Clippy, all tests, and the named smoke.
-- [x] macOS and Linux run all-target check, library tests, and the named smoke.
+- [x] macOS and Linux run all-target check, library tests, and the named smoke on the final repair commit.
 - [x] Shared modules contain no Windows-only types or unconditional Windows dependencies.
 - [x] Regression evidence does not claim physical player testing from CI.
 - [x] System documentation matches the implementation and exact event names.
@@ -135,12 +135,12 @@ Update the systems index and README so they describe the current v0.13.60 archit
 - [x] HUM-00-AC12 the exact final commit passes native Windows, macOS, Linux, and frontend jobs.
 - [x] README describes the completed portable boundary in present tense.
 - [x] No non-Windows artifact is packaged or published.
-- [x] HUM-00G is committed and pushed.
+- [x] HUM-00G is committed and pushed with a green exact-commit workflow.
 - [x] HUM-00 is fully complete before execution stops.
 
 ## External evidence rule
 
-The v0.13.60 closeout commit may describe the workflow as the required proof for that same commit. HUM-00 completion becomes valid only after GitHub reports every required job green for that commit. Do not create a second evidence-only commit that starts an unnecessary new proof loop.
+The final repair commit may describe the workflow as the required proof for that same commit. HUM-00 completion becomes valid only after GitHub reports every required job green for that commit. Do not create a second evidence-only commit that starts an unnecessary new proof loop.
 
 ## Amendment gate
 

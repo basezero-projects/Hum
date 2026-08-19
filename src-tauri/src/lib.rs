@@ -59,17 +59,27 @@ use settings::{
 };
 use window_effects::{SystemWindowEffects, WindowEffects};
 
+async fn read_current_track(state: &SharedSnapshot) -> CurrentTrack {
+    state.read().await.clone()
+}
+
+#[cfg(windows)]
 #[tauri::command]
 async fn get_current_track(
     state: tauri::State<'_, SharedSnapshot>,
-    #[cfg(windows)] bridge: tauri::State<'_, crate::web_bridge::SharedWebBridge>,
+    bridge: tauri::State<'_, crate::web_bridge::SharedWebBridge>,
 ) -> Result<CurrentTrack, String> {
-    let mut snap = state.read().await.clone();
-    #[cfg(windows)]
-    {
-        crate::web_bridge::blend_bridge_into_snapshot(&mut snap, &bridge).await;
-    }
+    let mut snap = read_current_track(state.inner()).await;
+    crate::web_bridge::blend_bridge_into_snapshot(&mut snap, &bridge).await;
     Ok(snap)
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+async fn get_current_track(
+    state: tauri::State<'_, SharedSnapshot>,
+) -> Result<CurrentTrack, String> {
+    Ok(read_current_track(state.inner()).await)
 }
 
 #[tauri::command]
@@ -770,5 +780,22 @@ mod tests {
         let audio_output = state.audio_output_state.read().unwrap();
         assert!(audio_output.outputs.is_empty());
         assert!(audio_output.active.is_none());
+    }
+
+    #[tokio::test]
+    async fn raw_current_track_read_preserves_the_shared_snapshot() {
+        let expected = CurrentTrack {
+            title: "Portable track".into(),
+            artist: "Portable artist".into(),
+            duration_ms: 123_000,
+            state: crate::media::PlaybackState::Paused,
+            ..Default::default()
+        };
+        let state = Arc::new(RwLock::new(expected.clone()));
+
+        assert_eq!(
+            serde_json::to_value(read_current_track(&state).await).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
     }
 }

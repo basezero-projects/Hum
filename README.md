@@ -2,7 +2,7 @@
 
 Hum is a Windows lyric overlay for listeners and streamers. It follows the active media session, resolves synchronized lyrics, and keeps the current line above the apps the listener already uses. The desktop overlay has compact ribbon and square presentations. A local server provides the same playback state to an OBS browser source.
 
-Current development version: v0.13.60
+Current development version: v0.13.61
 
 Hum is still working toward its paid 1.0 release. The phase order and release gates live in the [1.0 roadmap](docs/ROADMAP.md).
 
@@ -56,7 +56,7 @@ The full timing and source-authority rules are in [Media and timing](docs/system
 
 Windows discovers active render endpoints and the default multimedia output on a dedicated COM thread. The backend publishes stable endpoint IDs, display names, and Wired, Speakers, Bluetooth, HDMI, or Unknown routes through cached commands and change events.
 
-Discovery is separate from saved listening profiles. Changing the Windows default output does not automatically change `listening_mode` or a profile delay in v0.13.60.
+Discovery is separate from saved listening profiles. Changing the Windows default output does not automatically change `listening_mode` or a profile delay in v0.13.61.
 
 ## Overlay controls
 

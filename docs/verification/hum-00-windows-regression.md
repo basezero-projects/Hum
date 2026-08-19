@@ -6,16 +6,16 @@ This record separates automated contract coverage from checks that require a rea
 
 ## Evidence status
 
-HUM-00 uses the checks attached to the exact v0.13.60 closeout commit as its native build evidence. The commit is not duplicated in this document because any source edit would start a new proof run. Open that commit in GitHub and verify every required check below is green.
+The v0.13.60 workflow exposed macOS compile failures and is not native build evidence. HUM-00 must use the checks attached to the final repair commit instead. That commit is not duplicated in this document because any source edit would start a new proof run. Open the final repair commit in GitHub and verify every required check below is green.
 
 Local Windows development checks cover the same Rust and frontend commands, but they do not replace the final GitHub runner proof.
 
 | Workflow job | Runner | What it proves | Current status |
 |---|---|---|---|
-| `frontend` | Ubuntu 24.04 | Frozen install, TypeScript, production frontend build, platform-info retry | Exact closeout commit check |
-| `windows` | Windows Server 2022 | Formatting, all-target check, Clippy, all Rust tests, named shared-shell smoke | Exact closeout commit check |
-| `portable-native` | Ubuntu 24.04 | Shared native check, library tests, named shared-shell smoke | Exact closeout commit check |
-| `portable-native` | macOS 15 | Shared native check, library tests, named shared-shell smoke | Exact closeout commit check |
+| `frontend` | Ubuntu 24.04 | Frozen install, TypeScript, production frontend build, platform-info retry | Exact v0.13.61 repair check |
+| `windows` | Windows Server 2022 | Formatting, all-target check, Clippy, all Rust tests, named shared-shell smoke | Exact v0.13.61 repair check |
+| `portable-native` | Ubuntu 24.04 | Shared native check, library tests, named shared-shell smoke | Exact v0.13.61 repair check |
+| `portable-native` | macOS 15 | Shared native check, library tests, named shared-shell smoke | Exact v0.13.61 repair check |
 
 No job launches the GUI, packages an installer, uploads an artifact, or publishes a release.
 
@@ -46,6 +46,7 @@ All Rust tests below run in the Windows `cargo test --all-targets` step. The por
 ### Shared shell startup
 
 - `tests::shared_shell_state_smoke_preserves_neutral_defaults`
+- `tests::raw_current_track_read_preserves_the_shared_snapshot`
 
 This smoke uses the same `SharedShellState::new()` constructor as production. It locks the default track, absent artwork, default lyrics, Edit mode, false SMTC active flag, and empty audio-output state.
 
@@ -112,6 +113,7 @@ The complete `web_bridge::tests`, `pandora_desktop::tests`, and `youtube_bridge:
 
 ### Native window behavior
 
+- `artist_window::tests::artist_window_transparency_matches_safe_tauri_target_support`
 - `window_effects::aspect::tests::current_ratio_is_derived_for_each_adjustment`
 - `window_effects::aspect::tests::height_driven_edges_adjust_right`
 - `window_effects::aspect::tests::top_corner_edges_adjust_top_from_width`

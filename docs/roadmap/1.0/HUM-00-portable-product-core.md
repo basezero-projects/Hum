@@ -1,6 +1,6 @@
 # HUM-00: Portable product core
 
-Status: Complete in v0.13.60
+Status: Complete in v0.13.61
 Target release: 0.14.x
 Depends on: None
 Blocks: HUM-10 through HUM-70
@@ -56,7 +56,7 @@ React, lyrics, timing, caches, artwork, settings, and OBS can travel to another 
 - [x] HUM-00-AC9: Audio-output discovery publishes platform-neutral devices and active-output changes through its own interface. Completed in v0.13.59.
 - [x] HUM-00-AC10: Backdrop effects, aspect behavior, screen sampling, and click-through exceptions are isolated behind native window interfaces. Completed in v0.13.57.
 - [x] HUM-00-AC11: Shared models and modules contain no Windows types or unconditional Windows dependencies. Completed in v0.13.60.
-- [x] HUM-00-AC12: Windows, macOS, and Linux CI jobs compile the shared shell and run its smoke tests. Completed by the portable-core workflow for the exact v0.13.60 closeout commit.
+- [x] HUM-00-AC12: Windows, macOS, and Linux CI jobs compile the shared shell and run its smoke tests. Completed by the portable-core workflow for the exact v0.13.61 repair commit after v0.13.60 exposed the macOS compile defects.
 
 ## Required test matrix
 
@@ -77,13 +77,13 @@ React, lyrics, timing, caches, artwork, settings, and OBS can travel to another 
 - [HUM-00D native window interfaces](../../superpowers/plans/2026-08-19-hum-00d-native-window-interfaces.md), Complete in v0.13.57
 - [HUM-00E platform information and React](../../superpowers/plans/2026-08-19-hum-00e-platform-info-react.md), Complete in v0.13.58
 - [HUM-00F audio-output discovery](../../superpowers/plans/2026-08-19-hum-00f-audio-output-discovery.md), Complete in v0.13.59
-- [HUM-00G build proof and system documentation](../../superpowers/plans/2026-08-19-hum-00g-build-proof-and-system-docs.md), Complete in v0.13.60
+- [HUM-00G build proof and system documentation](../../superpowers/plans/2026-08-19-hum-00g-build-proof-and-system-docs.md), Complete in v0.13.61
 - [HUM-00 progress ledger](HUM-00-progress-ledger.md), current execution cursor and completion record
 
 ## Completion record
 
-Version: 0.13.60
-Commit: closeout commit titled `Prove the portable product core`
-Validation: 188 local Rust tests, frontend frozen install, typecheck, build, Node retry test, all-target Cargo check, Clippy with warnings denied, full formatting, independent review, and the portable-core workflow for the exact closeout commit
-Changelog: `docs/CHANGELOG.md`, v0.13.60
+Version: 0.13.61
+Commit: closeout repair commit titled `Repair portable native compilation`
+Validation: 190 local Rust tests, frontend frozen install, typecheck, build, Node retry test, all-target Cargo check, Clippy with warnings denied, full formatting, independent review, and the portable-core workflow for the exact v0.13.61 repair commit
+Changelog: `docs/CHANGELOG.md`, v0.13.61
 Known deferrals: physical Windows source, layout, mode, and OBS checks remain release-validation work; macOS and Linux media backends and packaging remain outside HUM-00
