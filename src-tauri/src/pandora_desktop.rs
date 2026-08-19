@@ -124,9 +124,7 @@ fn update_track_state(
             s.period_start_unix_ms = now_unix_ms;
             (s.cumulative_ms, PlaybackState::Playing)
         }
-        (PlaybackState::Paused, PlaybackState::Paused) => {
-            (s.cumulative_ms, PlaybackState::Paused)
-        }
+        (PlaybackState::Paused, PlaybackState::Paused) => (s.cumulative_ms, PlaybackState::Paused),
         // Any other detected_state (Unknown/Stopped/Changing/Closed/Opened)
         // is treated as "no change to the timer" but the reported state
         // tracks the detection so suppressing logic can act on it.
@@ -159,7 +157,11 @@ impl WebPlayerProbe for PandoraDesktopProbe {
         !find_pandora_desktop_windows().is_empty()
     }
 
-    fn read(&self, _smtc_title: &str, _smtc_artist: &str) -> anyhow::Result<Option<WebBridgeTrack>> {
+    fn read(
+        &self,
+        _smtc_title: &str,
+        _smtc_artist: &str,
+    ) -> anyhow::Result<Option<WebBridgeTrack>> {
         use uiautomation::UIAutomation;
 
         let hwnds = find_pandora_desktop_windows();
@@ -167,8 +169,8 @@ impl WebPlayerProbe for PandoraDesktopProbe {
             return Ok(None);
         }
 
-        let automation = UIAutomation::new()
-            .map_err(|e| anyhow!("UIAutomation::new failed: {e:?}"))?;
+        let automation =
+            UIAutomation::new().map_err(|e| anyhow!("UIAutomation::new failed: {e:?}"))?;
 
         // Try each matching window — first one that yields a usable read wins.
         for hwnd in hwnds {
@@ -190,9 +192,8 @@ impl WebPlayerProbe for PandoraDesktopProbe {
             // UIA pattern reads if no audio session is found for this
             // PID. Default to Playing if neither produces a verdict.
             let pid = pid_for_window(hwnd);
-            let detected_state =
-                detect_playback_state_with_audio(&automation, &root, pid)
-                    .unwrap_or(PlaybackState::Playing);
+            let detected_state = detect_playback_state_with_audio(&automation, &root, pid)
+                .unwrap_or(PlaybackState::Playing);
 
             let now_unix_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -314,9 +315,10 @@ fn is_process_audio_silent(pid: u32) -> Option<bool> {
 
         let enumerator: IMMDeviceEnumerator =
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).ok()?;
-        let device = enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia).ok()?;
-        let session_mgr: IAudioSessionManager2 =
-            device.Activate(CLSCTX_ALL, None).ok()?;
+        let device = enumerator
+            .GetDefaultAudioEndpoint(eRender, eMultimedia)
+            .ok()?;
+        let session_mgr: IAudioSessionManager2 = device.Activate(CLSCTX_ALL, None).ok()?;
         let sessions: IAudioSessionEnumerator = session_mgr.GetSessionEnumerator().ok()?;
 
         let count = sessions.GetCount().ok()?;
@@ -444,14 +446,19 @@ fn collect_pandora_uia_data(
     root: &uiautomation::UIElement,
 ) -> UiaData {
     static COUNTDOWN_RE: OnceLock<Regex> = OnceLock::new();
-    let countdown_re = COUNTDOWN_RE.get_or_init(|| {
-        Regex::new(r"^\d+:\d{2}$").expect("countdown regex is valid")
-    });
+    let countdown_re =
+        COUNTDOWN_RE.get_or_init(|| Regex::new(r"^\d+:\d{2}$").expect("countdown regex is valid"));
 
     const MAX_NODES: usize = 10_000;
     let walker = match automation.get_control_view_walker() {
         Ok(w) => w,
-        Err(_) => return UiaData { urls: Vec::new(), countdown: None, track_info: None },
+        Err(_) => {
+            return UiaData {
+                urls: Vec::new(),
+                countdown: None,
+                track_info: None,
+            }
+        }
     };
 
     let mut urls: Vec<String> = Vec::new();
@@ -466,9 +473,7 @@ fn collect_pandora_uia_data(
     while let Some(node) = stack.pop() {
         visited += 1;
         if visited > MAX_NODES {
-            eprintln!(
-                "[pandora_desktop] collect_uia_data hit MAX_NODES={MAX_NODES}"
-            );
+            eprintln!("[pandora_desktop] collect_uia_data hit MAX_NODES={MAX_NODES}");
             break;
         }
 
@@ -522,7 +527,11 @@ fn collect_pandora_uia_data(
         _ => None,
     };
 
-    UiaData { urls, countdown, track_info }
+    UiaData {
+        urls,
+        countdown,
+        track_info,
+    }
 }
 
 pub(crate) struct PandoraStateResult {
@@ -766,9 +775,7 @@ mod tests {
     #[test]
     fn classify_rejects_non_pandora_host() {
         assert_eq!(
-            classify_pandora_url(
-                "https://www.spotify.com/artist/nelly/AR6tvkckhd75l2J"
-            ),
+            classify_pandora_url("https://www.spotify.com/artist/nelly/AR6tvkckhd75l2J"),
             None,
         );
     }
@@ -777,9 +784,7 @@ mod tests {
     fn classify_rejects_unknown_two_char_prefix() {
         // ST, US, etc. — not one of the three known kinds.
         assert_eq!(
-            classify_pandora_url(
-                "https://www.pandora.com/artist/nelly/ST123abc"
-            ),
+            classify_pandora_url("https://www.pandora.com/artist/nelly/ST123abc"),
             None,
         );
     }
@@ -800,9 +805,7 @@ mod tests {
     fn classify_rejects_non_alphanumeric_id() {
         // Hyphenated IDs aren't a thing in Pandora's URL space; reject.
         assert_eq!(
-            classify_pandora_url(
-                "https://www.pandora.com/artist/nelly/AR-not-a-real-id"
-            ),
+            classify_pandora_url("https://www.pandora.com/artist/nelly/AR-not-a-real-id"),
             None,
         );
     }

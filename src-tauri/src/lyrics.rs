@@ -422,6 +422,7 @@ pub fn start(
                 // can brand-frame the view. For unreliable_no_bridge (Pandora
                 // with no fresh bridge), keep the historical "unsupported-source"
                 // tag for backwards compatibility with the existing renderer.
+                #[cfg(windows)]
                 let lyrics_source = if is_video_bridge {
                     // Read the bridge source. The bridge was fresh per the
                     // `is_video_bridge` derivation above, so this re-read
@@ -434,6 +435,8 @@ pub fn start(
                 } else {
                     "unsupported-source".into()
                 };
+                #[cfg(not(windows))]
+                let lyrics_source = "unsupported-source".into();
                 apply_outcome(
                     &app,
                     &shared,

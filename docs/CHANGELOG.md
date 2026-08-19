@@ -6,6 +6,12 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.55] - 2026-08-19
+
+### Changed
+- **Hum now has an honest portable build boundary without changing Windows playback.** The shared shell no longer compiles Windows UI Automation, screen capture, or temporary-script dependencies on other operating systems. Lyrics keep the same Windows browser enrichment and fallback behavior, while non-Windows builds use only the shared track snapshot. The `dump_uia` developer utility still works normally on Windows and now reports clearly that it is unsupported elsewhere.
+- **The complete Rust tree now passes the formatting gate.** Older formatting drift across artist information, native window helpers, iTunes, Pandora, promos, SMTC, browser bridges, and YouTube handling was normalized mechanically. Independent review confirmed that these formatting changes do not alter behavior.
+
 ## [0.13.54] - 2026-08-19
 
 ### Changed

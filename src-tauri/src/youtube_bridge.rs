@@ -34,21 +34,24 @@ pub(crate) struct YouTubeAdState {
 /// - "Ad ·"
 /// - "Advertisement"
 /// - "Skip Ad"  // also matches "Skip in", "Skip Ad in"
-pub(crate) fn classify_youtube_state(
-    texts: &[String],
-    timer_text: Option<&str>,
-) -> YouTubeAdState {
+pub(crate) fn classify_youtube_state(texts: &[String], timer_text: Option<&str>) -> YouTubeAdState {
     let markers = ["Sponsored", "Ad ·", "Advertisement", "Skip Ad", "Skip in"];
-    let is_ad = texts.iter().any(|t| {
-        markers.iter().any(|m| t.contains(m))
-    });
+    let is_ad = texts.iter().any(|t| markers.iter().any(|m| t.contains(m)));
 
     if !is_ad {
-        return YouTubeAdState { is_ad: false, position_ms: None, duration_ms: None };
+        return YouTubeAdState {
+            is_ad: false,
+            position_ms: None,
+            duration_ms: None,
+        };
     }
 
     let (position_ms, duration_ms) = timer_text.map(parse_youtube_timer).unwrap_or((None, None));
-    YouTubeAdState { is_ad, position_ms, duration_ms }
+    YouTubeAdState {
+        is_ad,
+        position_ms,
+        duration_ms,
+    }
 }
 
 /// Parse YouTube's timer in the format "M:SS / M:SS" (e.g. "0:05 / 0:30").
@@ -223,8 +226,7 @@ pub(crate) fn parse_youtube_metadata(smtc_title: &str, smtc_artist: &str) -> (St
         let real_title = suffix.trim();
         // Guard against degenerate splits ("A - B", empty halves) eating a
         // title that merely happens to contain " - ".
-        if real_artist.chars().filter(|c| !c.is_whitespace()).count() >= 2
-            && !real_title.is_empty()
+        if real_artist.chars().filter(|c| !c.is_whitespace()).count() >= 2 && !real_title.is_empty()
         {
             return (real_artist.to_string(), real_title.to_string());
         }
@@ -243,8 +245,8 @@ pub(crate) fn parse_youtube_metadata(smtc_title: &str, smtc_artist: &str) -> (St
 /// normalizer doesn't depend on a private lyrics helper.
 fn strip_trailing_feat(title: &str) -> String {
     static FEAT_RE: OnceLock<Regex> = OnceLock::new();
-    let feat_re = FEAT_RE
-        .get_or_init(|| Regex::new(r"(?i)\s+(?:feat\.?|ft\.?|featuring)\s+.+$").unwrap());
+    let feat_re =
+        FEAT_RE.get_or_init(|| Regex::new(r"(?i)\s+(?:feat\.?|ft\.?|featuring)\s+.+$").unwrap());
     feat_re.replace(title, "").trim().to_string()
 }
 
@@ -267,8 +269,7 @@ fn walk_for_ad_markers_and_timer(
 
     const MAX_NODES: usize = 10_000;
 
-    let automation = UIAutomation::new()
-        .map_err(|e| anyhow!("UIAutomation::new failed: {e:?}"))?;
+    let automation = UIAutomation::new().map_err(|e| anyhow!("UIAutomation::new failed: {e:?}"))?;
     // Re-anchor via element_from_handle to wake the Chromium accessibility
     // tree — the same pattern used by PandoraProbe and PandoraDesktopProbe.
     let root = automation
@@ -339,8 +340,7 @@ mod tests {
     #[test]
     fn parse_artist_dash_song_with_lyrics_tag() {
         // The motivating case: 7clouds lyric video.
-        let (artist, title) =
-            parse_youtube_metadata("Fleetwood Mac - Dreams (Lyrics)", "7clouds");
+        let (artist, title) = parse_youtube_metadata("Fleetwood Mac - Dreams (Lyrics)", "7clouds");
         assert_eq!(artist, "Fleetwood Mac");
         assert_eq!(title, "Dreams");
     }

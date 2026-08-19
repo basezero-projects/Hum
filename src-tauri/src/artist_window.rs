@@ -214,7 +214,9 @@ pub fn open_ticket_url(url: String) -> Result<(), String> {
         }
     });
     if !allowed {
-        return Err(format!("URL host '{host}' is not on the ticket link whitelist"));
+        return Err(format!(
+            "URL host '{host}' is not on the ticket link whitelist"
+        ));
     }
     opener::open(&url).map_err(|e| format!("open_ticket_url failed: {e}"))
 }

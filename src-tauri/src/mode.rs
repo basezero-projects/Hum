@@ -92,7 +92,9 @@ pub fn apply_mode(app: &AppHandle, mode: OverlayMode) {
 
     if let Some(items) = app.try_state::<ModeMenuItems>() {
         let _ = items.edit.set_checked(matches!(mode, OverlayMode::Edit));
-        let _ = items.locked.set_checked(matches!(mode, OverlayMode::Locked));
+        let _ = items
+            .locked
+            .set_checked(matches!(mode, OverlayMode::Locked));
         let _ = items.ghost.set_checked(matches!(mode, OverlayMode::Ghost));
     }
 

@@ -1,8 +1,8 @@
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowRect, WM_SIZING, WMSZ_BOTTOM, WMSZ_BOTTOMLEFT, WMSZ_BOTTOMRIGHT, WMSZ_LEFT,
-    WMSZ_RIGHT, WMSZ_TOP, WMSZ_TOPLEFT, WMSZ_TOPRIGHT,
+    GetWindowRect, WMSZ_BOTTOM, WMSZ_BOTTOMLEFT, WMSZ_BOTTOMRIGHT, WMSZ_LEFT, WMSZ_RIGHT, WMSZ_TOP,
+    WMSZ_TOPLEFT, WMSZ_TOPRIGHT, WM_SIZING,
 };
 
 pub fn set_aspect(_ratio: f64) {}
@@ -32,8 +32,7 @@ unsafe extern "system" fn subclass_proc(
                 let rect = unsafe { &mut *(lparam.0 as *mut RECT) };
                 let w = f64::from(rect.right - rect.left);
                 match wparam.0 as u32 {
-                    WMSZ_LEFT | WMSZ_RIGHT
-                    | WMSZ_BOTTOMLEFT | WMSZ_BOTTOMRIGHT => {
+                    WMSZ_LEFT | WMSZ_RIGHT | WMSZ_BOTTOMLEFT | WMSZ_BOTTOMRIGHT => {
                         rect.bottom = rect.top + (w / ratio).round() as i32;
                     }
                     WMSZ_TOP | WMSZ_BOTTOM => {

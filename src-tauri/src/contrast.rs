@@ -155,7 +155,6 @@ fn sample_at(x: i32, y: i32, w: u32, h: u32) -> Result<BgLuminance> {
     let r = (sr / n) as u8;
     let g = (sg / n) as u8;
     let b = (sb / n) as u8;
-    let luminance =
-        (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) / 255.0;
+    let luminance = (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32) / 255.0;
     Ok(BgLuminance { luminance, r, g, b })
 }

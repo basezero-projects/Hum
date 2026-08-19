@@ -25,8 +25,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::RwLock;
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
 use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
-    PROCESS_QUERY_LIMITED_INFORMATION,
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
@@ -358,7 +357,9 @@ fn find_chrome_windows<F: Fn(&str) -> bool>(predicate: F) -> Vec<HWND> {
 /// must check whether the returned window is actually a YouTube tab — the
 /// title match is a fast heuristic; the UIA walk in the probe confirms.
 pub(crate) fn find_chromium_window_with_title_substring(needle: &str) -> Option<HWND> {
-    find_chrome_windows(|title| title.contains(needle)).into_iter().next()
+    find_chrome_windows(|title| title.contains(needle))
+        .into_iter()
+        .next()
 }
 
 /// True when a visible Chromium window's title contains "YouTube" AND the
@@ -489,9 +490,8 @@ fn collect_pandora_web_data(
     use uiautomation::patterns::UIValuePattern;
 
     static COUNTDOWN_RE: OnceLock<Regex> = OnceLock::new();
-    let countdown_re = COUNTDOWN_RE.get_or_init(|| {
-        Regex::new(r"^\d+:\d{2}$").expect("countdown regex is valid")
-    });
+    let countdown_re =
+        COUNTDOWN_RE.get_or_init(|| Regex::new(r"^\d+:\d{2}$").expect("countdown regex is valid"));
 
     const MAX_NODES: usize = 10_000;
     let walker = match automation.get_control_view_walker() {
@@ -585,7 +585,13 @@ fn collect_pandora_web_data(
         }
     }
 
-    PandoraWebData { title_raw, artist_raw, album_raw, urls, countdown }
+    PandoraWebData {
+        title_raw,
+        artist_raw,
+        album_raw,
+        urls,
+        countdown,
+    }
 }
 
 /// Pandora's track-title `Name` property sometimes contains the visible
@@ -644,11 +650,15 @@ impl WebPlayerProbe for PandoraProbe {
         smtc_title.ends_with("Now Playing on Pandora")
     }
 
-    fn read(&self, _smtc_title: &str, _smtc_artist: &str) -> anyhow::Result<Option<WebBridgeTrack>> {
+    fn read(
+        &self,
+        _smtc_title: &str,
+        _smtc_artist: &str,
+    ) -> anyhow::Result<Option<WebBridgeTrack>> {
         use uiautomation::UIAutomation;
 
-        let automation = UIAutomation::new()
-            .map_err(|e| anyhow::anyhow!("UIAutomation::new failed: {e:?}"))?;
+        let automation =
+            UIAutomation::new().map_err(|e| anyhow::anyhow!("UIAutomation::new failed: {e:?}"))?;
 
         // Chrome only exposes the ACTIVE tab's title via the OS window
         // text (GetWindowTextW). If Pandora is in a background tab, the
@@ -768,10 +778,8 @@ pub fn start(app: AppHandle, snapshot: SharedSnapshot, shared: SharedWebBridge) 
                 (snap.title.clone(), snap.artist.clone(), id)
             };
 
-            let active_probe: Option<&'static dyn WebPlayerProbe> = PROBES
-                .iter()
-                .find(|p| p.detects(&title, &app_id))
-                .copied();
+            let active_probe: Option<&'static dyn WebPlayerProbe> =
+                PROBES.iter().find(|p| p.detects(&title, &app_id)).copied();
 
             match active_probe {
                 Some(probe) => {
@@ -888,7 +896,9 @@ pub fn start(app: AppHandle, snapshot: SharedSnapshot, shared: SharedWebBridge) 
                             eprintln!("[web_bridge] probe={name} read error: {e:#}");
                         }
                         Err(join_err) => {
-                            eprintln!("[web_bridge] probe={name} spawn_blocking failed: {join_err:#}");
+                            eprintln!(
+                                "[web_bridge] probe={name} spawn_blocking failed: {join_err:#}"
+                            );
                         }
                     }
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -1060,10 +1070,7 @@ fn strip_browser_suffix(s: &str) -> &str {
 ///
 /// Returns `None` when nothing useful remains (empty, equals the service
 /// name itself, or under 2 chars).
-fn parse_video_show_name(
-    window_title: &str,
-    service: &VideoServiceEntry,
-) -> Option<String> {
+fn parse_video_show_name(window_title: &str, service: &VideoServiceEntry) -> Option<String> {
     let base = strip_browser_suffix(window_title.trim()).trim();
     if base.is_empty() {
         return None;
@@ -1204,7 +1211,11 @@ impl WebPlayerProbe for VideoServiceProbe {
         lookup_video_service(smtc_title).is_some()
     }
 
-    fn read(&self, _smtc_title: &str, _smtc_artist: &str) -> anyhow::Result<Option<WebBridgeTrack>> {
+    fn read(
+        &self,
+        _smtc_title: &str,
+        _smtc_artist: &str,
+    ) -> anyhow::Result<Option<WebBridgeTrack>> {
         // The probe is only invoked when detects() said yes, but we don't
         // get the SMTC title here — re-walk all Chromium windows looking
         // for ANY video service marker in the title. First hit wins.
@@ -1213,16 +1224,15 @@ impl WebPlayerProbe for VideoServiceProbe {
             let hwnds = find_chrome_windows(|t| t.contains(marker));
             for hwnd in hwnds {
                 let title = read_window_title(hwnd);
-                let show = parse_video_show_name(&title, service)
-                    .or_else(|| {
-                        // Window-title parse miss (Netflix locks the
-                        // document.title to just "Netflix" even during
-                        // playback). Walk Chrome's UIA accessibility tree
-                        // looking for the show name in the player UI's
-                        // button labels. Same approach Hum already uses
-                        // for Pandora.
-                        walk_chrome_for_video_show_name(hwnd)
-                    });
+                let show = parse_video_show_name(&title, service).or_else(|| {
+                    // Window-title parse miss (Netflix locks the
+                    // document.title to just "Netflix" even during
+                    // playback). Walk Chrome's UIA accessibility tree
+                    // looking for the show name in the player UI's
+                    // button labels. Same approach Hum already uses
+                    // for Pandora.
+                    walk_chrome_for_video_show_name(hwnd)
+                });
                 let Some(show) = show else { continue };
                 return Ok(Some(WebBridgeTrack {
                     title: show,
@@ -1253,10 +1263,7 @@ mod tests {
     #[test]
     fn pandora_detects_real_chrome_pandora_session() {
         let p = PandoraProbe;
-        assert!(p.detects(
-            "Today's Hits Radio - Now Playing on Pandora",
-            "Chrome.exe",
-        ));
+        assert!(p.detects("Today's Hits Radio - Now Playing on Pandora", "Chrome.exe",));
         assert!(p.detects(
             "Some Other Station - Now Playing on Pandora",
             "Google.Chrome",
@@ -1269,14 +1276,8 @@ mod tests {
         // Even if a desktop Pandora app set the title to match, we
         // don't activate the probe for non-Chrome sources — they
         // expose SMTC correctly and don't need DOM scraping.
-        assert!(!p.detects(
-            "Today's Hits Radio - Now Playing on Pandora",
-            "Spotify.exe",
-        ));
-        assert!(!p.detects(
-            "Today's Hits Radio - Now Playing on Pandora",
-            "",
-        ));
+        assert!(!p.detects("Today's Hits Radio - Now Playing on Pandora", "Spotify.exe",));
+        assert!(!p.detects("Today's Hits Radio - Now Playing on Pandora", "",));
     }
 
     #[test]
@@ -1288,10 +1289,7 @@ mod tests {
             "Chrome.exe",
         ));
         // Spotify Web in Chrome — must NOT match.
-        assert!(!p.detects(
-            "Bohemian Rhapsody · Queen - Spotify",
-            "Chrome.exe",
-        ));
+        assert!(!p.detects("Bohemian Rhapsody · Queen - Spotify", "Chrome.exe",));
         // Empty title in Chrome — must NOT match (idle browser tab).
         assert!(!p.detects("", "Chrome.exe"));
     }
@@ -1302,14 +1300,8 @@ mod tests {
         // A YouTube video about Pandora's Box mythology, or a Spotify
         // album called Pandora. Title doesn't END with the canonical
         // Pandora-tab suffix — must NOT match.
-        assert!(!p.detects(
-            "Pandora's Box - Greek Mythology Explained",
-            "Chrome.exe",
-        ));
-        assert!(!p.detects(
-            "Pandora · Aerosmith - Spotify",
-            "Chrome.exe",
-        ));
+        assert!(!p.detects("Pandora's Box - Greek Mythology Explained", "Chrome.exe",));
+        assert!(!p.detects("Pandora · Aerosmith - Spotify", "Chrome.exe",));
     }
 
     #[test]
@@ -1318,27 +1310,30 @@ mod tests {
         // assertions don't depend on whether a desktop Pandora.exe is
         // currently running (which would flip PandoraDesktopProbe).
         let p = PandoraProbe;
-        assert!(p.detects(
-            "Today's Hits Radio - Now Playing on Pandora",
-            "Chrome.exe",
-        ));
-        assert!(!p.detects(
-            "Rick Astley - Never Gonna Give You Up",
-            "Chrome.exe",
-        ));
+        assert!(p.detects("Today's Hits Radio - Now Playing on Pandora", "Chrome.exe",));
+        assert!(!p.detects("Rick Astley - Never Gonna Give You Up", "Chrome.exe",));
     }
 
     #[test]
     fn dedupe_doubled_handles_exact_doubling() {
         assert_eq!(dedupe_doubled("Be Like That Be Like That"), "Be Like That");
-        assert_eq!(dedupe_doubled("Different Man Different Man"), "Different Man");
+        assert_eq!(
+            dedupe_doubled("Different Man Different Man"),
+            "Different Man"
+        );
     }
 
     #[test]
     fn dedupe_doubled_preserves_non_doubled_strings() {
         assert_eq!(dedupe_doubled("Be Like That"), "Be Like That");
-        assert_eq!(dedupe_doubled("Be Like That (Alex Waldin Remix)"), "Be Like That (Alex Waldin Remix)");
-        assert_eq!(dedupe_doubled("Kane Brown, Swae Lee & Khalid"), "Kane Brown, Swae Lee & Khalid");
+        assert_eq!(
+            dedupe_doubled("Be Like That (Alex Waldin Remix)"),
+            "Be Like That (Alex Waldin Remix)"
+        );
+        assert_eq!(
+            dedupe_doubled("Kane Brown, Swae Lee & Khalid"),
+            "Kane Brown, Swae Lee & Khalid"
+        );
         // Two different halves that happen to be even-length total — don't trim.
         assert_eq!(dedupe_doubled("Hello World"), "Hello World");
     }

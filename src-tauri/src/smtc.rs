@@ -20,8 +20,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 use windows::Foundation::{EventRegistrationToken, TypedEventHandler};
 use windows::Media::Control::{
-    GlobalSystemMediaTransportControlsSession,
-    GlobalSystemMediaTransportControlsSessionManager,
+    GlobalSystemMediaTransportControlsSession, GlobalSystemMediaTransportControlsSessionManager,
     GlobalSystemMediaTransportControlsSessionMediaProperties,
     GlobalSystemMediaTransportControlsSessionPlaybackStatus,
 };
@@ -68,9 +67,15 @@ pub(crate) fn is_spotify_ad(t: &CurrentTrack) -> bool {
 
     // Spotify's own house ads ("Listen to music, ad-free", etc.) use
     // explicit signals in the title/artist slots.
-    if title.eq_ignore_ascii_case("Advertisement") { return true; }
-    if title.eq_ignore_ascii_case("Spotify") { return true; }
-    if artist.eq_ignore_ascii_case("Spotify") && !title.is_empty() { return true; }
+    if title.eq_ignore_ascii_case("Advertisement") {
+        return true;
+    }
+    if title.eq_ignore_ascii_case("Spotify") {
+        return true;
+    }
+    if artist.eq_ignore_ascii_case("Spotify") && !title.is_empty() {
+        return true;
+    }
 
     if title.is_empty() && artist.is_empty() && t.state == PlaybackState::Playing {
         return true;
@@ -87,10 +92,7 @@ pub(crate) fn is_spotify_ad(t: &CurrentTrack) -> bool {
     // False-positive risk: legitimate sub-35s songs (intro tracks, skits,
     // sound effects). Rare on Spotify; acceptable trade-off vs the much more
     // common case of third-party ads going undetected.
-    if t.duration_ms > 0
-        && t.duration_ms < 35_000
-        && t.state == PlaybackState::Playing
-    {
+    if t.duration_ms > 0 && t.duration_ms < 35_000 && t.state == PlaybackState::Playing {
         return true;
     }
 
@@ -289,12 +291,10 @@ async fn run(
     // Manager-level: fires when the foreground media source changes (e.g. user
     // switches from Spotify to YouTube in Chrome).
     let tx_session = tx.clone();
-    let session_token = manager.CurrentSessionChanged(&TypedEventHandler::new(
-        move |_, _| {
-            let _ = tx_session.send(Msg::SessionChanged);
-            Ok(())
-        },
-    ))?;
+    let session_token = manager.CurrentSessionChanged(&TypedEventHandler::new(move |_, _| {
+        let _ = tx_session.send(Msg::SessionChanged);
+        Ok(())
+    }))?;
     let _manager_hook = ManagerHook {
         manager: manager.clone(),
         token: session_token,
@@ -304,7 +304,9 @@ async fn run(
     let mut hooks: Option<SessionHooks> = match attach_session(&manager, &tx) {
         Ok(h) => Some(h),
         Err(e) => {
-            eprintln!("[smtc] startup attach_session failed (probably no active SMTC session): {e:#}");
+            eprintln!(
+                "[smtc] startup attach_session failed (probably no active SMTC session): {e:#}"
+            );
             None
         }
     };
@@ -383,7 +385,13 @@ async fn run(
                                 snap.clone()
                             };
                             emit_blended(&app, &snapshot, "track-changed", emit_snap).await;
-                            spawn_art_fetch(app.clone(), art.clone(), h.session.clone(), title, artist);
+                            spawn_art_fetch(
+                                app.clone(),
+                                art.clone(),
+                                h.session.clone(),
+                                title,
+                                artist,
+                            );
                         }
                         Err(e) => {
                             eprintln!("[smtc] Msg::MediaChanged → read_track failed: {e:#}");
@@ -424,7 +432,8 @@ async fn run(
                                 snap.state = state;
                                 snap.clone()
                             };
-                            emit_blended(&app, &snapshot, "playback-state-changed", emit_snap).await;
+                            emit_blended(&app, &snapshot, "playback-state-changed", emit_snap)
+                                .await;
                         }
                         Err(e) => {
                             eprintln!("[smtc] Msg::PlaybackChanged → read_state failed: {e:#}");
@@ -451,10 +460,11 @@ fn attach_session(
     }))?;
 
     let tx2 = tx.clone();
-    let timeline_token = session.TimelinePropertiesChanged(&TypedEventHandler::new(move |_, _| {
-        let _ = tx2.send(Msg::TimelineChanged);
-        Ok(())
-    }))?;
+    let timeline_token =
+        session.TimelinePropertiesChanged(&TypedEventHandler::new(move |_, _| {
+            let _ = tx2.send(Msg::TimelineChanged);
+            Ok(())
+        }))?;
 
     let tx3 = tx.clone();
     let playback_token = session.PlaybackInfoChanged(&TypedEventHandler::new(move |_, _| {
@@ -479,10 +489,7 @@ async fn emit_full(
     let track = read_track(session).await.ok();
     let timeline = read_timeline(session).ok();
     let state = read_state(session).unwrap_or_default();
-    let source_app_id = session
-        .SourceAppUserModelId()
-        .ok()
-        .map(|s| s.to_string());
+    let source_app_id = session.SourceAppUserModelId().ok().map(|s| s.to_string());
 
     {
         let mut snap = snapshot.write().await;
@@ -519,7 +526,13 @@ async fn emit_full(
     };
 
     if !snap_title.trim().is_empty() {
-        spawn_art_fetch(app.clone(), art.clone(), session.clone(), snap_title, snap_artist);
+        spawn_art_fetch(
+            app.clone(),
+            art.clone(),
+            session.clone(),
+            snap_title,
+            snap_artist,
+        );
     }
 }
 
@@ -556,7 +569,8 @@ fn spawn_art_fetch(
         // keyed to the raw SMTC title the overlay is actually showing.
         // Without the YouTube-window check, a backgrounded YouTube track got
         // NO album art from anyone (smtc skipped, bridge never read).
-        let source_app_id = session.SourceAppUserModelId()
+        let source_app_id = session
+            .SourceAppUserModelId()
             .ok()
             .map(|s| s.to_string())
             .unwrap_or_default();
@@ -580,9 +594,7 @@ fn spawn_art_fetch(
         // (idle session, etc.) — skip the external call.
         let itunes_data_url = if !query_title.trim().is_empty() {
             match build_itunes_http_client() {
-                Ok(client) => {
-                    fetch_art_via_itunes(&client, &query_artist, &query_title).await
-                }
+                Ok(client) => fetch_art_via_itunes(&client, &query_artist, &query_title).await,
                 Err(_) => None,
             }
         } else {
@@ -714,9 +726,7 @@ pub async fn fetch_art_via_itunes(
     // the roles flipped: the title field as the artist, the artist field as the
     // song, validated against the title field. Validation makes this a no-op
     // for normal "Artist - Song" tracks (the title field isn't a real artist).
-    if !title.trim().is_empty()
-        && !artist.trim().is_empty()
-        && !title.eq_ignore_ascii_case(artist)
+    if !title.trim().is_empty() && !artist.trim().is_empty() && !title.eq_ignore_ascii_case(artist)
     {
         if let Some(url) = try_one_variant(client, title, artist, title, "reversed").await {
             return Some(url);
@@ -744,17 +754,13 @@ async fn try_one_variant(
     if let Some(url) =
         fetch_art_itunes_only(client, query_artist, query_title, validation_artist).await
     {
-        eprintln!(
-            "[smtc] art: iTunes hit ({label}) for {validation_artist:?} - {query_title:?}"
-        );
+        eprintln!("[smtc] art: iTunes hit ({label}) for {validation_artist:?} - {query_title:?}");
         return Some(url);
     }
     if let Some(url) =
         fetch_art_deezer_only(client, query_artist, query_title, validation_artist).await
     {
-        eprintln!(
-            "[smtc] art: Deezer hit ({label}) for {validation_artist:?} - {query_title:?}"
-        );
+        eprintln!("[smtc] art: Deezer hit ({label}) for {validation_artist:?} - {query_title:?}");
         return Some(url);
     }
     None
@@ -962,8 +968,18 @@ pub(crate) fn primary_artist_token(rec_artist: &str) -> String {
     // prevents `Sufjan Stevens` from being split on a non-existent `ft`
     // substring inside a real artist name.
     let separators = [
-        " feat.", " feat ", " ft.", " ft ", " featuring ", " & ", " + ", ", ", "; ", " / ",
-        " vs.", " vs ",
+        " feat.",
+        " feat ",
+        " ft.",
+        " ft ",
+        " featuring ",
+        " & ",
+        " + ",
+        ", ",
+        "; ",
+        " / ",
+        " vs.",
+        " vs ",
     ];
     let mut cut = rec_artist.len();
     for sep in separators {
@@ -1054,9 +1070,7 @@ async fn read_track(session: &GlobalSystemMediaTransportControlsSession) -> Resu
     // Same blocking-on-async pattern as RequestAsync — see note in `run`.
     let session_for_blocking = session.clone();
     let (title, artist, album) = tokio::task::spawn_blocking(move || -> Result<_> {
-        let props = session_for_blocking
-            .TryGetMediaPropertiesAsync()?
-            .get()?;
+        let props = session_for_blocking.TryGetMediaPropertiesAsync()?.get()?;
         let title = props.Title().unwrap_or_default().to_string();
         let artist = props.Artist().unwrap_or_default().to_string();
         let album = props.AlbumTitle().unwrap_or_default().to_string();
@@ -1108,14 +1122,23 @@ mod is_spotify_ad_tests {
             title: title.into(),
             artist: artist.into(),
             state,
-            source_app_id: if app_id.is_empty() { None } else { Some(app_id.into()) },
+            source_app_id: if app_id.is_empty() {
+                None
+            } else {
+                Some(app_id.into())
+            },
             ..Default::default()
         }
     }
 
     #[test]
     fn non_spotify_source_never_ad() {
-        let t = snap_with("Advertisement", "Spotify", "Chrome.exe", PlaybackState::Playing);
+        let t = snap_with(
+            "Advertisement",
+            "Spotify",
+            "Chrome.exe",
+            PlaybackState::Playing,
+        );
         assert!(!is_spotify_ad(&t));
     }
 
@@ -1140,7 +1163,12 @@ mod is_spotify_ad_tests {
     #[test]
     fn spotify_artist_field_spotify_with_nonempty_title_matches() {
         // Spotify sometimes sets artist="Spotify" and title=<some ad copy>.
-        let t = snap_with("Try Premium Free", "Spotify", "Spotify.exe", PlaybackState::Playing);
+        let t = snap_with(
+            "Try Premium Free",
+            "Spotify",
+            "Spotify.exe",
+            PlaybackState::Playing,
+        );
         assert!(is_spotify_ad(&t));
     }
 
@@ -1148,7 +1176,12 @@ mod is_spotify_ad_tests {
     fn spotify_real_song_never_ad() {
         // Normal song length (3:42) — explicit so the duration heuristic
         // can't accidentally flag this as an ad if its threshold tightens.
-        let mut t = snap_with("Mr. Brightside", "The Killers", "Spotify.exe", PlaybackState::Playing);
+        let mut t = snap_with(
+            "Mr. Brightside",
+            "The Killers",
+            "Spotify.exe",
+            PlaybackState::Playing,
+        );
         t.duration_ms = 222_000;
         assert!(!is_spotify_ad(&t));
     }
@@ -1156,7 +1189,12 @@ mod is_spotify_ad_tests {
     #[test]
     fn spotify_aumid_format_also_matches() {
         // Spotify also appears as AUMID `SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify`.
-        let t = snap_with("Advertisement", "", "SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify", PlaybackState::Playing);
+        let t = snap_with(
+            "Advertisement",
+            "",
+            "SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify",
+            PlaybackState::Playing,
+        );
         assert!(is_spotify_ad(&t));
     }
 
@@ -1208,7 +1246,12 @@ mod is_spotify_ad_tests {
         // before the full media properties resolve. Don't false-positive on
         // that — the explicit signals above still apply if present, but a
         // zero-duration track alone shouldn't be classified as an ad.
-        let t = snap_with("Some Song", "Some Artist", "Spotify.exe", PlaybackState::Playing);
+        let t = snap_with(
+            "Some Song",
+            "Some Artist",
+            "Spotify.exe",
+            PlaybackState::Playing,
+        );
         assert_eq!(t.duration_ms, 0);
         assert!(!is_spotify_ad(&t));
     }
@@ -1216,7 +1259,12 @@ mod is_spotify_ad_tests {
     #[test]
     fn spotify_duration_at_threshold_not_ad() {
         // Exactly 35s: should NOT match (the comparison is `< 35_000`).
-        let mut t = snap_with("Short Song", "Artist", "Spotify.exe", PlaybackState::Playing);
+        let mut t = snap_with(
+            "Short Song",
+            "Artist",
+            "Spotify.exe",
+            PlaybackState::Playing,
+        );
         t.duration_ms = 35_000;
         assert!(!is_spotify_ad(&t));
     }
@@ -1234,7 +1282,10 @@ mod tests {
         assert_eq!(primary_artist_token("Lil Wayne feat. T-Pain"), "Lil Wayne");
         assert_eq!(primary_artist_token("Lil Wayne ft. Drake"), "Lil Wayne");
         assert_eq!(primary_artist_token("Lil Wayne Feat T-Pain"), "Lil Wayne");
-        assert_eq!(primary_artist_token("Lil Wayne featuring Drake"), "Lil Wayne");
+        assert_eq!(
+            primary_artist_token("Lil Wayne featuring Drake"),
+            "Lil Wayne"
+        );
         // Other separators.
         assert_eq!(primary_artist_token("Lil Wayne & Drake"), "Lil Wayne");
         assert_eq!(primary_artist_token("Lil Wayne + Drake"), "Lil Wayne");
@@ -1243,10 +1294,7 @@ mod tests {
         assert_eq!(primary_artist_token("Lil Wayne / Drake"), "Lil Wayne");
         // The TRUE primary in a feat. arrangement must be the leading
         // artist — this is the v0.10.26 bug case.
-        assert_eq!(
-            primary_artist_token("T-Pain feat. Lil Wayne"),
-            "T-Pain"
-        );
+        assert_eq!(primary_artist_token("T-Pain feat. Lil Wayne"), "T-Pain");
         // Empty.
         assert_eq!(primary_artist_token(""), "");
         // Whitespace only.
@@ -1260,7 +1308,10 @@ mod tests {
         // Case-insensitive.
         assert!(primary_artist_matches("LIL WAYNE", "lil wayne"));
         // Feat. credit — primary is still Lil Wayne, validation passes.
-        assert!(primary_artist_matches("Lil Wayne feat. T-Pain", "Lil Wayne"));
+        assert!(primary_artist_matches(
+            "Lil Wayne feat. T-Pain",
+            "Lil Wayne"
+        ));
         assert!(primary_artist_matches("Lil Wayne & Drake", "Lil Wayne"));
         // Bidirectional substring — SMTC reports "Beatles", iTunes returns
         // "The Beatles".
@@ -1279,7 +1330,10 @@ mod tests {
         assert!(!primary_artist_matches("T-Pain", "Lil Wayne"));
         // T-Pain feat. Lil Wayne does NOT satisfy a Lil Wayne validation —
         // primary is T-Pain.
-        assert!(!primary_artist_matches("T-Pain feat. Lil Wayne", "Lil Wayne"));
+        assert!(!primary_artist_matches(
+            "T-Pain feat. Lil Wayne",
+            "Lil Wayne"
+        ));
         // Completely unrelated.
         assert!(!primary_artist_matches("Drake", "Kendrick Lamar"));
         // Empty inputs — bail out rather than spuriously match.
@@ -1299,7 +1353,11 @@ mod tests {
         ];
         let chosen = pick_artist_matched(
             results.iter(),
-            |r| r.get("artistName").and_then(|a| a.as_str()).map(String::from),
+            |r| {
+                r.get("artistName")
+                    .and_then(|a| a.as_str())
+                    .map(String::from)
+            },
             "",
         );
         assert_eq!(chosen.and_then(|r| r.get("id")?.as_i64()), Some(1));
@@ -1316,7 +1374,11 @@ mod tests {
         ];
         let chosen = pick_artist_matched(
             results.iter(),
-            |r| r.get("artistName").and_then(|a| a.as_str()).map(String::from),
+            |r| {
+                r.get("artistName")
+                    .and_then(|a| a.as_str())
+                    .map(String::from)
+            },
             "Lil Wayne",
         );
         assert_eq!(chosen.and_then(|r| r.get("id")?.as_i64()), Some(2));
@@ -1331,7 +1393,11 @@ mod tests {
             .collect();
         let chosen = pick_artist_matched(
             results.iter(),
-            |r| r.get("artistName").and_then(|a| a.as_str()).map(String::from),
+            |r| {
+                r.get("artistName")
+                    .and_then(|a| a.as_str())
+                    .map(String::from)
+            },
             "Lil Wayne",
         );
         assert!(chosen.is_none());

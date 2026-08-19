@@ -39,6 +39,7 @@ mod aspect_lock;
 
 mod artist_info;
 mod artist_window;
+#[cfg(windows)]
 mod contrast;
 mod lyrics;
 mod mode;
@@ -263,6 +264,7 @@ pub fn run() {
                     as std::sync::Arc<tokio::sync::RwLock<Option<String>>>,
             );
 
+            #[cfg(windows)]
             contrast::start(app.handle().clone());
 
             // Streamer / OBS browser-source HTTP server. Managed via the

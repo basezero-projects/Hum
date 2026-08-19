@@ -65,7 +65,14 @@ pub fn start(
         // tracking silently dead for the rest of the session. The backoff also
         // bounds the retry rate if PowerShell can't start at all.
         loop {
-            match run(app.clone(), snapshot.clone(), art.clone(), smtc_playing.clone()).await {
+            match run(
+                app.clone(),
+                snapshot.clone(),
+                art.clone(),
+                smtc_playing.clone(),
+            )
+            .await
+            {
                 Ok(()) => eprintln!("[itunes] poller exited; respawning in 5s"),
                 Err(e) => eprintln!("[itunes] worker exited: {e:#}; respawning in 5s"),
             }
@@ -99,7 +106,9 @@ async fn run(
     tmp.as_file_mut()
         .write_all(SCRIPT.as_bytes())
         .context("write itunes poll script")?;
-    tmp.as_file_mut().flush().context("flush itunes poll script")?;
+    tmp.as_file_mut()
+        .flush()
+        .context("flush itunes poll script")?;
     let script_path = tmp.into_temp_path();
     let script_path_str: String = script_path.to_string_lossy().into_owned();
 

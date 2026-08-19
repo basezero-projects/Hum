@@ -1,14 +1,23 @@
 [package]
 name = "hum"
-version = "0.13.54"
+version = "0.13.55"
 description = "Real-time synced lyrics overlay for any Windows media source"
 authors = ["SYVR Studios"]
 edition = "2021"
 default-run = "hum"
+autobins = false
 
 [lib]
 name = "hum_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "hum"
+path = "src/main.rs"
+
+[[bin]]
+name = "dump_uia"
+path = "src/bin/dump_uia.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -24,23 +33,22 @@ thiserror = "1"
 tokio = { version = "1", features = ["sync", "macros", "rt", "rt-multi-thread", "process", "io-util", "time"] }
 reqwest = { version = "0.13", features = ["json", "cookies"] }
 base64 = "0.22"
-tempfile = "3"
 regex = "1"
 urlencoding = "2"
 opener = "0.7"
 rand = "0.9"
 tauri-plugin-opener = "2"
-xcap = "0.9.4"
 tauri-plugin-window-state = "2.4.1"
 axum = { version = "0.8.9", features = ["tokio"] }
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-autostart = "2"
-uiautomation = "0.25"
 lru = "0.18"
 async-stream = "0.3"
 
 [target.'cfg(windows)'.dependencies]
+tempfile = "3"
+uiautomation = "0.25"
 windows = { version = "0.58", features = [
   "Media",
   "Media_Control",
@@ -59,6 +67,7 @@ windows = { version = "0.58", features = [
   "Win32_System_JobObjects",
   "Win32_Security",
 ] }
+xcap = "0.9.4"
 
 [profile.release]
 codegen-units = 1

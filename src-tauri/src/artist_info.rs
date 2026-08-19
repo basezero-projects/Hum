@@ -54,22 +54,29 @@ pub enum TicketStatus {
 /// to ASCII before stripping.
 pub(crate) fn slug_for_artist(name: &str) -> String {
     // Diacritic → ASCII mapping for common Latin Extended chars.
-    let mapped: String = name.chars().map(|c| match c {
-        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'À' | 'Á' | 'Â' | 'Ã' | 'Ä' | 'Å' => 'a',
-        'è' | 'é' | 'ê' | 'ë' | 'È' | 'É' | 'Ê' | 'Ë' => 'e',
-        'ì' | 'í' | 'î' | 'ï' | 'Ì' | 'Í' | 'Î' | 'Ï' => 'i',
-        'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'Ò' | 'Ó' | 'Ô' | 'Õ' | 'Ö' | 'Ø' => 'o',
-        'ù' | 'ú' | 'û' | 'ü' | 'Ù' | 'Ú' | 'Û' | 'Ü' => 'u',
-        'ý' | 'ÿ' | 'Ý' | 'Ÿ' => 'y',
-        'ñ' | 'Ñ' => 'n',
-        'ç' | 'Ç' => 'c',
-        'ß' => 's',
-        'æ' | 'Æ' => 'a',
-        'œ' | 'Œ' => 'o',
-        'ð' | 'Ð' => 'd',
-        'þ' | 'Þ' => 't',
-        other => other,
-    }).collect();
+    let mapped: String = name
+        .chars()
+        .map(|c| match c {
+            'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'À' | 'Á' | 'Â' | 'Ã' | 'Ä' | 'Å' => {
+                'a'
+            }
+            'è' | 'é' | 'ê' | 'ë' | 'È' | 'É' | 'Ê' | 'Ë' => 'e',
+            'ì' | 'í' | 'î' | 'ï' | 'Ì' | 'Í' | 'Î' | 'Ï' => 'i',
+            'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'Ò' | 'Ó' | 'Ô' | 'Õ' | 'Ö' | 'Ø' => {
+                'o'
+            }
+            'ù' | 'ú' | 'û' | 'ü' | 'Ù' | 'Ú' | 'Û' | 'Ü' => 'u',
+            'ý' | 'ÿ' | 'Ý' | 'Ÿ' => 'y',
+            'ñ' | 'Ñ' => 'n',
+            'ç' | 'Ç' => 'c',
+            'ß' => 's',
+            'æ' | 'Æ' => 'a',
+            'œ' | 'Œ' => 'o',
+            'ð' | 'Ð' => 'd',
+            'þ' | 'Þ' => 't',
+            other => other,
+        })
+        .collect();
 
     let lower = mapped.to_lowercase();
 
@@ -124,18 +131,39 @@ pub async fn fetch_artist_info(artist: &str) -> Result<ArtistInfo> {
 /// contain at least one of these substrings (case-insensitive) for the page
 /// to be accepted as a music artist bio.
 const MUSIC_KEYWORDS: &[&str] = &[
-    "musician", "singer", "rapper", "songwriter", "band", "group",
-    "dj", "producer", "composer", "musical", "music", "vocalist",
-    "guitarist", "drummer", "bassist", "pianist",
-    "rock", "pop", "hip hop", "hip-hop", "country", "jazz", "metal",
-    "indie", "electronic", "r&b", "soul", "folk",
+    "musician",
+    "singer",
+    "rapper",
+    "songwriter",
+    "band",
+    "group",
+    "dj",
+    "producer",
+    "composer",
+    "musical",
+    "music",
+    "vocalist",
+    "guitarist",
+    "drummer",
+    "bassist",
+    "pianist",
+    "rock",
+    "pop",
+    "hip hop",
+    "hip-hop",
+    "country",
+    "jazz",
+    "metal",
+    "indie",
+    "electronic",
+    "r&b",
+    "soul",
+    "folk",
 ];
 
 /// Disambiguator suffixes tried in order when the direct lookup fails the
 /// music-relevance gate or returns a non-standard page type.
-const WIKIPEDIA_SUFFIXES: &[&str] = &[
-    "musician", "singer", "rapper", "band", "rock band", "group",
-];
+const WIKIPEDIA_SUFFIXES: &[&str] = &["musician", "singer", "rapper", "band", "rock band", "group"];
 
 /// Truncate bio text to the last sentence boundary before 1500 chars.
 /// Mirrors the existing Last.fm truncation logic.
@@ -195,7 +223,10 @@ fn parse_wikipedia_summary(body: &serde_json::Value) -> Option<ArtistBio> {
     if text.is_empty() {
         return None;
     }
-    Some(ArtistBio { text, wikipedia_url })
+    Some(ArtistBio {
+        text,
+        wikipedia_url,
+    })
 }
 
 /// Fetch artist bio from the Wikipedia REST API.
@@ -249,8 +280,7 @@ pub(crate) async fn fetch_wikipedia_bio(
 /// Free tier: 5 req/sec, 5K req/day. Rate-limit identifier, not an auth secret —
 /// embedded in the binary per Ticketmaster's documented intended use.
 const TICKETMASTER_API_KEY: &str = "GQbGNt5UBoE0RdMMCDB9IAplTcjEeA6A";
-const TICKETMASTER_DISCOVERY_BASE: &str =
-    "https://app.ticketmaster.com/discovery/v2/events.json";
+const TICKETMASTER_DISCOVERY_BASE: &str = "https://app.ticketmaster.com/discovery/v2/events.json";
 
 /// Impact (impact.com) affiliate URL prefix template. Wes signs up at
 /// https://impact.com, joins the Ticketmaster brand, and gets a tracking
@@ -440,10 +470,13 @@ fn days_from_epoch(year: i64, month: i64, day: i64) -> Option<i64> {
     // Days in each month (non-leap).
     let days_in_month = [0i64, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-    let mut days: i64 = (year - 1970) * 365 + (year - 1969) / 4 - (year - 1901) / 100 + (year - 1601) / 400;
+    let mut days: i64 =
+        (year - 1970) * 365 + (year - 1969) / 4 - (year - 1901) / 100 + (year - 1601) / 400;
     for m in 1..month {
         days += days_in_month[m as usize];
-        if m == 2 && is_leap { days += 1; }
+        if m == 2 && is_leap {
+            days += 1;
+        }
     }
     days += day - 1;
     Some(days)
@@ -569,7 +602,10 @@ fn now_unix_ms() -> i64 {
 }
 
 fn cache_dir(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join("cache").join("artist"))
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("cache").join("artist"))
 }
 
 fn cache_file_path(app: &AppHandle, slug: &str) -> Option<PathBuf> {
@@ -653,9 +689,7 @@ pub async fn sweep_disk_cache(app: &AppHandle) {
             removed += 1;
         }
     }
-    eprintln!(
-        "[artist_info] disk cache sweep: removed {removed} oldest of {total}"
-    );
+    eprintln!("[artist_info] disk cache sweep: removed {removed} oldest of {total}");
 }
 
 // ── In-flight dedup + managed state ────────────────────────────────────────
@@ -750,7 +784,9 @@ impl ArtistInfoCache {
         // shows the "Couldn't load artist info / Retry" state rather than
         // panicking on the unwrap below.
         let Some(notify) = notify else {
-            return Err(anyhow::anyhow!("upstream fetch failed; cache empty after wait"));
+            return Err(anyhow::anyhow!(
+                "upstream fetch failed; cache empty after wait"
+            ));
         };
         let client = build_artist_info_http_client()?;
 
@@ -902,7 +938,13 @@ mod tests {
 
     // ── Ticketmaster parser tests ──────────────────────────────────────────
 
-    fn make_tm_event(attraction: &str, local_date: &str, local_time: Option<&str>, status: &str, url: &str) -> serde_json::Value {
+    fn make_tm_event(
+        attraction: &str,
+        local_date: &str,
+        local_time: Option<&str>,
+        status: &str,
+        url: &str,
+    ) -> serde_json::Value {
         serde_json::json!({
             "name": format!("{} at Venue", attraction),
             "url": url,
@@ -927,14 +969,26 @@ mod tests {
 
     #[test]
     fn tm_parse_accepts_case_insensitive_match() {
-        let event = make_tm_event("Shaggy", "2026-03-05", Some("20:00:00"), "onsale", "https://www.ticketmaster.com/event/abc");
+        let event = make_tm_event(
+            "Shaggy",
+            "2026-03-05",
+            Some("20:00:00"),
+            "onsale",
+            "https://www.ticketmaster.com/event/abc",
+        );
         let result = parse_ticketmaster_event(&event, "shaggy");
         assert!(result.is_some(), "should match case-insensitively");
     }
 
     #[test]
     fn tm_parse_rejects_non_matching_artist() {
-        let event = make_tm_event("Shaggy", "2026-03-05", Some("20:00:00"), "onsale", "https://www.ticketmaster.com/event/abc");
+        let event = make_tm_event(
+            "Shaggy",
+            "2026-03-05",
+            Some("20:00:00"),
+            "onsale",
+            "https://www.ticketmaster.com/event/abc",
+        );
         let result = parse_ticketmaster_event(&event, "Bob Marley");
         assert!(result.is_none(), "should reject mismatched artist");
     }
@@ -996,28 +1050,52 @@ mod tests {
 
     #[test]
     fn tm_status_onsale_available() {
-        let event = make_tm_event("Shaggy", "2026-03-05", Some("20:00:00"), "onsale", "https://www.ticketmaster.com/event/abc");
+        let event = make_tm_event(
+            "Shaggy",
+            "2026-03-05",
+            Some("20:00:00"),
+            "onsale",
+            "https://www.ticketmaster.com/event/abc",
+        );
         let result = parse_ticketmaster_event(&event, "Shaggy").unwrap();
         assert_eq!(result.status, TicketStatus::Available);
     }
 
     #[test]
     fn tm_status_cancelled_soldsout() {
-        let event = make_tm_event("Shaggy", "2026-03-05", Some("20:00:00"), "cancelled", "https://www.ticketmaster.com/event/abc");
+        let event = make_tm_event(
+            "Shaggy",
+            "2026-03-05",
+            Some("20:00:00"),
+            "cancelled",
+            "https://www.ticketmaster.com/event/abc",
+        );
         let result = parse_ticketmaster_event(&event, "Shaggy").unwrap();
         assert_eq!(result.status, TicketStatus::SoldOut);
     }
 
     #[test]
     fn tm_status_offsale_soldsout() {
-        let event = make_tm_event("Shaggy", "2026-03-05", Some("20:00:00"), "offsale", "https://www.ticketmaster.com/event/abc");
+        let event = make_tm_event(
+            "Shaggy",
+            "2026-03-05",
+            Some("20:00:00"),
+            "offsale",
+            "https://www.ticketmaster.com/event/abc",
+        );
         let result = parse_ticketmaster_event(&event, "Shaggy").unwrap();
         assert_eq!(result.status, TicketStatus::SoldOut);
     }
 
     #[test]
     fn tm_status_postponed_soldsout() {
-        let event = make_tm_event("Shaggy", "2026-03-05", Some("20:00:00"), "postponed", "https://www.ticketmaster.com/event/abc");
+        let event = make_tm_event(
+            "Shaggy",
+            "2026-03-05",
+            Some("20:00:00"),
+            "postponed",
+            "https://www.ticketmaster.com/event/abc",
+        );
         let result = parse_ticketmaster_event(&event, "Shaggy").unwrap();
         assert_eq!(result.status, TicketStatus::SoldOut);
     }
@@ -1053,7 +1131,10 @@ mod tests {
         let result = parse_wikipedia_summary(&body);
         assert!(result.is_some(), "should parse a valid music summary");
         let bio = result.unwrap();
-        assert_eq!(bio.wikipedia_url, "https://en.wikipedia.org/wiki/Shaggy_(musician)");
+        assert_eq!(
+            bio.wikipedia_url,
+            "https://en.wikipedia.org/wiki/Shaggy_(musician)"
+        );
         assert!(bio.text.contains("Shaggy"));
     }
 
@@ -1152,14 +1233,20 @@ mod tests {
 
         let truncated = truncate_bio(full_extract.clone());
         // Must be ≤ 1500 chars.
-        assert!(truncated.len() <= 1500, "truncated bio should be ≤ 1500 chars");
+        assert!(
+            truncated.len() <= 1500,
+            "truncated bio should be ≤ 1500 chars"
+        );
         // Must end at a sentence boundary (last char is '.').
         assert!(
             truncated.ends_with('.'),
             "truncated bio should end at a sentence boundary"
         );
         // Must not contain the padding characters.
-        assert!(!truncated.contains('C'), "truncated bio should not include padding past cutoff");
+        assert!(
+            !truncated.contains('C'),
+            "truncated bio should not include padding past cutoff"
+        );
     }
 
     #[test]

@@ -6,8 +6,12 @@
 
 use serde::{Deserialize, Serialize};
 
-fn default_weight() -> u32 { 1 }
-fn default_active() -> bool { true }
+fn default_weight() -> u32 {
+    1
+}
+fn default_active() -> bool {
+    true
+}
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct Promo {
@@ -62,9 +66,12 @@ pub struct PromosFile {
 pub fn pick_next_promo<'a>(pool: &'a [Promo], last_shown_id: Option<&str>) -> Option<&'a Promo> {
     use rand::Rng;
     let active: Vec<&Promo> = pool.iter().filter(|p| p.active).collect();
-    if active.is_empty() { return None; }
+    if active.is_empty() {
+        return None;
+    }
 
-    let after_cooldown: Vec<&Promo> = active.iter()
+    let after_cooldown: Vec<&Promo> = active
+        .iter()
         .copied()
         .filter(|p| last_shown_id.is_none_or(|id| p.id != id))
         .collect();
@@ -83,7 +90,9 @@ pub fn pick_next_promo<'a>(pool: &'a [Promo], last_shown_id: Option<&str>) -> Op
     let mut roll: u32 = rand::rng().random_range(0..total_weight);
     for p in candidates {
         let w = p.weight.max(1);
-        if roll < w { return Some(p); }
+        if roll < w {
+            return Some(p);
+        }
         roll -= w;
     }
     candidates.first().copied()
@@ -98,7 +107,10 @@ pub fn pick_next_promo<'a>(pool: &'a [Promo], last_shown_id: Option<&str>) -> Op
 /// ship with the app and are trusted, so they skip this.
 fn sanitize_promos(promos: &mut [Promo]) {
     for p in promos.iter_mut() {
-        if p.accent_color.as_deref().is_some_and(|c| !is_valid_hex_color(c)) {
+        if p.accent_color
+            .as_deref()
+            .is_some_and(|c| !is_valid_hex_color(c))
+        {
             p.accent_color = None;
         }
         // The click-through URL opens in the user's browser via the opener
@@ -109,10 +121,16 @@ fn sanitize_promos(promos: &mut [Promo]) {
         }
         // Images auto-load (no user action) into <img src> — restrict to
         // https on a SYVR host to block off-site fingerprinting / CSP bypass.
-        if p.image_url.as_deref().is_some_and(|u| !is_https_syvr_host(u)) {
+        if p.image_url
+            .as_deref()
+            .is_some_and(|u| !is_https_syvr_host(u))
+        {
             p.image_url = None;
         }
-        if p.icon_url.as_deref().is_some_and(|u| !is_https_syvr_host(u)) {
+        if p.icon_url
+            .as_deref()
+            .is_some_and(|u| !is_https_syvr_host(u))
+        {
             p.icon_url = None;
         }
     }
@@ -128,7 +146,9 @@ fn is_valid_hex_color(s: &str) -> bool {
 }
 
 fn is_https_url(s: &str) -> bool {
-    reqwest::Url::parse(s).map(|u| u.scheme() == "https").unwrap_or(false)
+    reqwest::Url::parse(s)
+        .map(|u| u.scheme() == "https")
+        .unwrap_or(false)
 }
 
 fn is_https_syvr_host(s: &str) -> bool {
@@ -283,7 +303,9 @@ impl SyvrRemoteSource {
 }
 
 impl PromoSource for SyvrRemoteSource {
-    fn name(&self) -> &'static str { "syvr-remote" }
+    fn name(&self) -> &'static str {
+        "syvr-remote"
+    }
 
     /// **WARNING:** Uses `block_on` internally — calling from inside a
     /// Tokio runtime panics. Use [`Self::promos_async`] from async contexts.
@@ -294,9 +316,7 @@ impl PromoSource for SyvrRemoteSource {
         // Block briefly on the async read. The pool is small, contention
         // is negligible, and pick_next_promo is called once per ad break
         // (not in a hot loop).
-        tauri::async_runtime::block_on(async {
-            self.pool.read().await.clone()
-        })
+        tauri::async_runtime::block_on(async { self.pool.read().await.clone() })
     }
 }
 
@@ -321,19 +341,21 @@ pub fn bundled_defaults() -> Vec<Promo> {
     const RAW: &str = include_str!("../resources/default_promos.json");
     serde_json::from_str::<PromosFile>(RAW)
         .map(|f| f.promos)
-        .unwrap_or_else(|_| vec![Promo {
-            id: "syvr-studios".into(),
-            product_name: "SYVR Studios".into(),
-            tagline: "Tools and apps from the makers of Hum.".into(),
-            url: "https://syvrstudios.com".into(),
-            icon_url: None,
-            weight: 1,
-            active: true,
-            cta_text: None,
-            accent_color: None,
-            image_url: None,
-            alt: None,
-        }])
+        .unwrap_or_else(|_| {
+            vec![Promo {
+                id: "syvr-studios".into(),
+                product_name: "SYVR Studios".into(),
+                tagline: "Tools and apps from the makers of Hum.".into(),
+                url: "https://syvrstudios.com".into(),
+                icon_url: None,
+                weight: 1,
+                active: true,
+                cta_text: None,
+                accent_color: None,
+                image_url: None,
+                alt: None,
+            }]
+        })
 }
 
 #[cfg(test)]
@@ -399,7 +421,11 @@ mod tests {
         let mut rare = 0;
         for _ in 0..10_000 {
             let picked = pick_next_promo(&pool, None).unwrap();
-            if picked.id == "common" { common += 1; } else { rare += 1; }
+            if picked.id == "common" {
+                common += 1;
+            } else {
+                rare += 1;
+            }
         }
         // 90/10 distribution within ±3% slack.
         assert!(common > rare * 7, "common={common} rare={rare}");
@@ -410,17 +436,27 @@ mod tests {
         let raw = include_str!("../resources/default_promos.json");
         let parsed: PromosFile = serde_json::from_str(raw).expect("default_promos.json must parse");
         assert_eq!(parsed.version, 1);
-        assert!(!parsed.promos.is_empty(), "bundled defaults cannot be empty");
+        assert!(
+            !parsed.promos.is_empty(),
+            "bundled defaults cannot be empty"
+        );
         for p in &parsed.promos {
             assert!(!p.id.is_empty(), "every default promo needs an id");
-            assert!(p.url.starts_with("https://"), "default promo url must be https: {}", p.url);
+            assert!(
+                p.url.starts_with("https://"),
+                "default promo url must be https: {}",
+                p.url
+            );
         }
     }
 
     #[test]
     fn bundled_defaults_helper_returns_non_empty() {
         let pool = super::bundled_defaults();
-        assert!(!pool.is_empty(), "bundled_defaults() must never return empty");
+        assert!(
+            !pool.is_empty(),
+            "bundled_defaults() must never return empty"
+        );
         assert!(pool.iter().all(|p| !p.id.is_empty()));
     }
 }
