@@ -1,6 +1,8 @@
 # Hum Pro Tier — Monetization Plan
 
-**Status:** Strategy locked. Implementation deferred until Wes greenlights build.
+> Superseded on 2026-08-19. Hum is now planned as a one-time paid product with no free-plus-Pro split. Current commercial work is tracked in `docs/ROADMAP.md` under HUM-10.
+
+**Status:** Superseded. Kept only as a record of the earlier direction.
 **Decision date:** 2026-05-22
 **Current version at plan time:** v0.13.0
 

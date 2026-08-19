@@ -1,5 +1,7 @@
 # Hum Web Demo — Build Plan
 
+> Superseded on 2026-08-19 by the dedicated Hum product website and the 1.0 roadmap. Kept only as a record of the earlier syvr.dev demo concept.
+
 Interactive demo page for syvr.dev where visitors can play any song and see Hum's real-time synced lyrics overlay working live in their browser.
 
 ## Stack

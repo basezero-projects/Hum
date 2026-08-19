@@ -6,6 +6,13 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.53] - 2026-08-19
+
+### Changed
+- **Hum now has one tracked path to 1.0.** `docs/ROADMAP.md` defines the eight release phases, their dependency order, and the product requirements that apply throughout the work. Each phase has its own contract under `docs/roadmap/1.0/` with scope, acceptance criteria, test coverage, and completion evidence. The final release decision is tracked in `docs/verification/1.0-release-checklist.md`.
+- **Future macOS and Linux work no longer requires a speculative rewrite.** ADR-0001 records the decision to keep Tauri 2, preserve the shared React and Rust product core, and place media capture plus native window behavior behind platform adapters. Windows remains the 1.0 target. Linux MPRIS is the first planned portability proof after the shared boundary exists, while macOS support waits for an honest supported-player strategy.
+- **Project documentation matches the current product again.** The README now describes Hum v0.13.53, NetEase word timing, LRCLib and NetEase fallbacks, listening profiles, current layouts, OBS setup, source limitations, and pre-1.0 install status. The former free-plus-Pro monetization plan and syvr.dev web demo plan are clearly marked as superseded.
+
 ## [0.13.52] - 2026-08-18
 
 ### Added

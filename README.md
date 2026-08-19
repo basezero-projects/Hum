@@ -1,96 +1,115 @@
 # Hum
 
-Real-time synced lyrics overlay for Windows streamers and music listeners. It reads whatever is playing via Windows SMTC — Spotify, Chrome, YouTube Music, iTunes, anything — fetches time-synced lyrics from LRCLib, and renders them as a transparent always-on-top window. Text color auto-adjusts to stay readable over any background. Streamers get a dedicated OBS/browser-source mode that serves lyrics as a local HTTP page.
+Hum is a Windows lyric overlay for listeners and streamers. It follows the active media session, resolves synchronized lyrics, and keeps the current line visible above the apps the listener already uses. The desktop overlay supports compact ribbon and square presentations, while the local OBS server provides a clean browser source for creators.
 
-**Current version:** v0.13.0 — shipping
+Current development version: v0.13.53
 
-> Renamed from "Lyric Overlay" → "Hum" in v0.10.2 (2026-05-21). Identifier and install path moved from `com.syvr.lyric-overlay` → `com.syvr.hum`. Existing settings on disk are not migrated automatically — re-set your preferences in the new Settings window on first launch.
+Hum is preparing for a paid 1.0 release. The current scope, phase order, and release gates live in [docs/ROADMAP.md](docs/ROADMAP.md).
 
----
+## Current capabilities
 
-## Source compatibility
+- Word timing from NetEase YRC when the recording has a strict title, artist, and duration match
+- LRCLib and NetEase line timing fallbacks
+- Plain lyrics and explicit instrumental, unavailable, error, and unsupported states
+- Ribbon layouts for three-line, single-line, and Full page lyrics
+- A square focused-lyrics presentation inspired by Apple Music
+- Edit, Locked, and Ghost interaction modes
+- Wired, Speakers, and Bluetooth delay profiles
+- Temporary timing nudges and expert calibration
+- Album artwork, artwork-derived surfaces, native Windows backdrops, and automatic contrast
+- Optional translated lyrics when provider data includes them
+- Artist biographies, photos, and upcoming Ticketmaster dates
+- A loopback-only OBS browser source with desktop timing parity
+- Tray controls, global shortcuts, autostart, and persistent settings
 
-Hum reads "now playing" data from three layers, fallthrough in priority order:
+## Playback sources
 
-| Source | How Hum reads it | Status |
+Hum uses the active Windows System Media Transport Controls session when a player publishes one. It also has source-specific adapters where Windows media metadata is incomplete.
+
+| Source | Current path | Notes |
 |---|---|---|
-| **iTunes desktop app** | COM bridge (`itunes.rs`) | ✅ Confirmed working |
-| **Spotify desktop app** | Windows SMTC | ✅ Confirmed working |
-| **Spotify web (Chrome / Edge / etc.)** | Windows SMTC | ✅ Confirmed working |
-| **YouTube web (Chrome / Edge / etc.)** | Windows SMTC | ✅ Confirmed working |
-| **Pandora web (Chrome / Edge / etc.)** | Chrome UIA bridge → reads Pandora's React DOM for the now-playing widget | ✅ Confirmed working |
-| **Pandora desktop app (Microsoft Store)** | Direct UIA tree walk + WASAPI peak-meter for pause state | ⚠️ Semi-working: track + artist + pause detection work, but playback position is estimated from "when Hum first saw the track" — Hum can't read Pandora's seek bar so lyrics scroll from 0:00, and joining mid-track or seeking inside Pandora desn't re-sync |
-| Anything else that publishes to SMTC | Windows SMTC | 🤷 Untested but should work — every SMTC-publishing player follows the same path |
+| Spotify desktop | Windows SMTC | Primary tested desktop source |
+| Spotify web | Windows SMTC | Works through supported Chromium browsers |
+| YouTube Music and music videos | Windows SMTC plus title normalization | Background browser tabs can limit source-specific enrichment |
+| iTunes desktop | COM adapter | Used because classic iTunes does not publish a normal SMTC session |
+| Pandora web | Chromium UI Automation bridge | Adds Pandora-specific metadata and ad state |
+| Pandora desktop | UI Automation plus playback-state estimation | Seeking and joining mid-track remain less reliable than SMTC sources |
+| Other Windows players | Windows SMTC | Compatibility depends on the metadata and timeline the player publishes |
 
----
+Recognized source labels include Spotify, Pandora, iTunes, Apple Music, YouTube Music, TIDAL, Amazon Music, Deezer, VLC, foobar2000, MusicBee, Winamp, Windows Media, and common browsers.
 
-## Features
+## Timing controls
 
-- **Synced lyrics** — 3-line karaoke-style scroll with per-word sweep highlighting, fetched from LRCLib with a duration-filtered search fallback
-- **Player-agnostic** — see the source-compatibility table above
-- **Auto-contrast text** — composites blurred album art + tint + user bg + screen pixels behind the overlay, computes a luminance × (1 − saturation) lightness score with hysteresis, and only flips to dark text when the surface is genuinely white-ish (not just bright-and-tinted)
-- **OBS streamer mode** — exposes lyrics as a local browser source (`axum` HTTP server) so they render cleanly as an OBS browser capture without capture-card bleed
-- **Overlay modes** — edit (drag/resize), locked (click-through), ghost (semi-transparent passthrough)
-- **Album art** — pulled from SMTC, iTunes COM, or the iTunes Search art fallback; shown beside the lyrics column; used to tint the overlay background
-- **Artist info panel** — click the album art to open a side panel with the artist's Wikipedia bio (auto-fetched, disambiguator-aware), photo from TheAudioDB, and upcoming Ticketmaster tour dates with affiliate-routed ticket links
-- **Global hotkeys** — `Ctrl+Alt+L` to lock/unlock overlay; `Ctrl+Alt+[` / `Ctrl+Alt+]` to nudge lyric timing offset live
-- **Settings window** — source selection (SMTC / iTunes), text alignment, offset, background opacity, font size scaling, blurred-album-art background toggle, artist-info-panel toggle
-- **Auto-updater** — checks GitHub Releases on launch; installs in passive mode without interrupting playback
+Settings > Lyrics timing separates three different corrections:
 
----
+- Listening mode compensates for the active audio path. Wired defaults to 0 ms, Speakers to 250 ms, and Bluetooth to 350 ms.
+- Expert calibration adjusts every listening mode.
+- `Ctrl+Alt+[` and `Ctrl+Alt+]` temporarily move the current song in 250 ms steps.
 
-## Install
+Desktop and OBS use the same saved timing calculation. Temporary song nudges currently apply only to the desktop overlay.
 
-Download the latest `.exe` installer from [GitHub Releases](https://github.com/basezero-projects/Hum/releases/latest). Installs per-user (no admin required). The app auto-updates on subsequent launches.
+## Overlay controls
 
----
+- Edit mode allows dragging and resizing.
+- Locked mode keeps the overlay interactive but prevents accidental movement.
+- Ghost mode makes the overlay click-through.
+- `Ctrl+Alt+L` cycles the interaction mode.
+- `Ctrl+Alt+B` toggles the blurred artwork background.
+- `Ctrl+Alt+T` toggles transparent lyrics-only mode.
+- `Ctrl+Alt+H` toggles the media information column.
 
-## Usage
+The tray can show or hide Hum, change the interaction mode, switch listening mode, open Settings, check for updates, and quit.
 
-1. Launch Hum. The overlay window appears in the top-left area; the dev console is hidden by default.
-2. Play something in Spotify, Chrome, YouTube Music, or iTunes.
-3. Lyrics appear and scroll in sync. Resize or drag the overlay to position it.
-4. `Ctrl+Alt+L` — toggle locked mode (click-through) / edit mode.
-5. `Ctrl+Alt+[` / `Ctrl+Alt+]` — nudge lyrics earlier or later if sync is off.
-6. Right-click the tray icon to open Settings or quit.
+## OBS browser source
 
-**OBS streamer mode:** Enable in Settings → Sources → Streamer mode. Add a Browser Source in OBS pointed at `http://localhost:<port>` (shown in Settings). The browser source renders lyrics as a clean overlay layer.
+Enable OBS / Streamer in Settings, then copy the local URL into an OBS Browser Source. The default address is `http://localhost:38247/overlay` unless the port has been changed.
 
----
+The server binds to the local computer and exposes lyric state, settings, artwork, service assets, server-sent events, and health information. It does not require Spotify credentials or a cloud relay.
 
-## Tech stack
+## Install status
+
+Development installers are published through [GitHub Releases](https://github.com/basezero-projects/Hum/releases). Hum is not at its commercial 1.0 release gate yet. License activation, signed update verification, onboarding, and the final customer installer are tracked in HUM-10 and HUM-70 of the roadmap.
+
+## Technology
 
 | Layer | Choice |
 |---|---|
-| Frontend | React 19 + Vite 7 + TypeScript 5.9 + Tailwind 4 |
+| Interface | React 19, Vite 7, TypeScript 5.9 |
 | Desktop shell | Tauri 2 |
-| SMTC bridge | `windows` crate 0.58 (`Media_Control` + `Foundation`) |
-| iTunes bridge | COM via `itunes.rs` |
-| Pandora web bridge | UIA via `uiautomation` crate 0.25, walks Chrome's accessibility tree (`web_bridge.rs`) |
-| Pandora desktop bridge | UIA tree walk + WASAPI peak meter for pause detection (`pandora_desktop.rs`) |
-| Lyrics source | LRCLib (`/api/get` + `/api/search` fallback) |
-| Streamer server | `axum` 0.8 (local HTTP) |
-| Settings store | `tauri-plugin-store` |
-| Hotkeys | `tauri-plugin-global-shortcut` |
-| Auto-updater | `tauri-plugin-updater` → GitHub Releases |
+| Windows media sessions | `Windows.Media.Control` through the Rust `windows` crate |
+| Windows source adapters | COM, UI Automation, and WASAPI where needed |
+| Lyrics | LRCLib and NetEase YRC |
+| OBS server | Axum on loopback with server-sent events |
+| Persistence | Tauri store plus versioned application caches |
+| Shortcuts and startup | Official Tauri plugins |
 
----
+Hum stays on Tauri for 1.0 and future ports. Platform-specific media capture will move behind Rust interfaces before macOS or Linux work begins. The decision is recorded in [ADR-0001](docs/decisions/ADR-0001-keep-tauri-and-add-platform-adapters.md).
 
 ## Development
 
 ```bash
 pnpm install
-pnpm tauri dev       # opens overlay + dev console
-pnpm typecheck       # tsc --noEmit
-cd src-tauri && cargo check
-cd src-tauri && cargo clippy
+pnpm tauri dev
+pnpm typecheck
+pnpm build
+cd src-tauri
+cargo check
+cargo clippy --all-targets -- -D warnings
+cargo test
 ```
 
-To build a release installer:
+The Windows NSIS installer is built with:
 
 ```bash
 pnpm tauri build
-# outputs: src-tauri/target/release/bundle/nsis/Hum_0.13.0_x64-setup.exe
 ```
 
-> Push policy: desktop app — never push without Wes asking.
+Desktop app push policy: commit completed work locally, but do not push unless Wes asks.
+
+## Planning and project records
+
+- [1.0 roadmap](docs/ROADMAP.md)
+- [Architecture decisions](docs/decisions/INDEX.md)
+- [1.0 release checklist](docs/verification/1.0-release-checklist.md)
+- [Changelog](docs/CHANGELOG.md)
+- [Known defects](BUGS.md)
