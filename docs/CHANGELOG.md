@@ -6,6 +6,16 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.63] - 2026-08-19
+
+### Added
+- **Hum can now protect a paid license for the current Windows user.** Release builds store the full license key, Polar activation ID, and verification timestamps in a dedicated DPAPI-protected `license.bin` file under Hum's app data directory. License material never enters `settings.json`, URLs, status payloads, or diagnostic messages. There is no activation screen or lyric gate yet. Those customer-facing controls arrive in HUM-10C.
+- **The license service now supports Polar activation, validation, and device release.** It uses Polar's public desktop endpoints without a provider secret, enforces Hum's three-device and 1.x product rules, validates due licenses at startup, preserves the 30-day offline grace period during service failures, and keeps revoked licenses revoked while offline.
+
+### Changed
+- **License operations now protect both local state and remote device slots.** Startup, activation, validation, and deactivation run one at a time. Hum saves a successful activation before publishing it, releases the remote slot if local storage fails, and deletes the local record only after Polar confirms deactivation.
+- **Development and incomplete release configurations fail safely.** Development builds use the explicit development entitlement without reading protected storage or contacting Polar. A release build without the public Polar organization ID still launches and uses the offline license path instead of crashing.
+
 ## [0.13.62] - 2026-08-19
 
 ### Added

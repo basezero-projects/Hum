@@ -46,6 +46,7 @@ use audio_output::{
     shutdown_managed_runtime, AudioOutputBackend, AudioOutputBackendContext, AudioOutputPublisher,
     ManagedAudioOutputRuntime, SharedAudioOutputState,
 };
+use license::LicenseService;
 use lyrics::{CurrentLyrics, SharedLyrics};
 use media::{AlbumArtPayload, CurrentTrack, SharedAlbumArt, SharedSnapshot};
 #[cfg(windows)]
@@ -230,6 +231,34 @@ pub fn run() {
             // Apps via OS settings while the file still says launch_on_startup = true).
             settings::sync_autostart(app.handle(), loaded_settings.launch_on_startup);
             app.manage::<SharedSettings>(Arc::new(RwLock::new(loaded_settings)));
+
+            #[cfg(any(debug_assertions, not(windows)))]
+            let license_service = Arc::new(LicenseService::development());
+            #[cfg(all(not(debug_assertions), windows))]
+            let license_service = {
+                let path = app
+                    .path()
+                    .app_data_dir()
+                    .map_err(std::io::Error::other)?
+                    .join("license.bin");
+                let store = Arc::new(platform::windows::WindowsLicenseStore::new(path));
+                let provider =
+                    option_env!("HUM_POLAR_ORGANIZATION_ID").and_then(|organization_id| {
+                        license::PolarLicenseProvider::new(organization_id).ok()
+                    });
+                let service = match provider {
+                    Some(provider) => LicenseService::release(store, Arc::new(provider)),
+                    None => LicenseService::release_offline(store),
+                };
+                Arc::new(service)
+            };
+            app.manage(license_service.clone());
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = license_service.bootstrap(current_unix_ms()).await {
+                    eprintln!("license bootstrap failed: {error}");
+                }
+            });
+
             let artist_cache = ArtistInfoCache::new(app.handle().clone());
             app.manage(artist_cache);
 
@@ -463,6 +492,14 @@ pub fn run() {
         #[cfg(not(windows))]
         let _ = (app_handle, event);
     });
+}
+
+fn current_unix_ms() -> i64 {
+    let milliseconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    i64::try_from(milliseconds).unwrap_or(i64::MAX)
 }
 
 struct ListeningModeMenuItems {

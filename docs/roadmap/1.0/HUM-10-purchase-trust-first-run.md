@@ -76,9 +76,9 @@ The durable reasoning is recorded in [ADR-0002](../../decisions/ADR-0002-use-pol
 
 ## Slice map
 
-- HUM-10A: license policy and provider-neutral entitlement state engine
-- HUM-10B: Windows-protected license storage and Polar activation client
-- HUM-10C: activation, restore, deactivation, and checkout handoff UI
+- HUM-10A: license policy and provider-neutral entitlement state engine, complete in v0.13.62
+- HUM-10B: Windows-protected license storage and Polar activation client, complete in v0.13.63
+- HUM-10C: activation, restore, deactivation, and checkout handoff UI, next
 - HUM-10D: first-run setup for placement, listening output, appearance, and controls
 - HUM-10E: signed installer, signed updater, and complete update-state UI
 - HUM-10F: About, support, privacy, diagnostics, and production menu cleanup

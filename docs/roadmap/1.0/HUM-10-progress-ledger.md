@@ -4,11 +4,11 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 
 ## Current cursor
 
-- Slice: HUM-10B, protected storage and Polar client
+- Slice: HUM-10C, activation and restore experience
 - Step: Survey and plan lock
-- Next action: map Windows DPAPI storage, Polar client seams, startup ownership, and failure behavior
-- Blocker: None for implementation. Live production verification still requires a Polar organization and Hum product.
-- Last updated: 2026-08-19 12:32 MDT
+- Next action: map the release entitlement gate, activation window, checkout handoff, restore, deactivation, and frontend command contracts
+- Blocker: None for local implementation. Live provider proof still requires a Polar organization and Hum product.
+- Last updated: 2026-08-19 13:00 MDT
 
 ## Locked product policy
 
@@ -45,7 +45,20 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 - Acceptance criteria: no HUM-10 phase criterion claimed by this foundation alone
 - Known deferrals: protected storage, Polar network calls, activation UI, overlay gating, and production provider setup remain in HUM-10B onward
 
+### HUM-10B, protected storage and Polar client
+
+- Status: Complete
+- Version: 0.13.63
+- Commit: closeout commit titled `Protect Hum license activations`
+- Remote: push to `origin/main` during closeout
+- Validation: frozen install, frontend typecheck and build, 229 Rust tests, debug and release all-target checks, Clippy with warnings denied in both profiles, full Rust formatting, and diff validation
+- Review: red-first repairs covered activation ID redaction, malformed grant rollback, concurrent operation serialization, release startup without provider configuration, and release-only ownership compilation
+- Acceptance criteria: the protected backend supports HUM-10-AC1 through AC3, but none are checked until HUM-10C exposes and enforces the customer workflow
+- Known deferrals: activation UI, checkout, restore presentation, entitlement enforcement, and live Polar proof remain in HUM-10C onward
+
 ## Execution log
 
 - 2026-08-19 12:05 MDT: HUM-10 started. The purchase and license policy was locked, ADR-0002 was accepted, and HUM-10A entered implementation.
 - 2026-08-19 12:32 MDT: HUM-10A passed 202 Rust tests and the full gate after a red-first countdown correction. The slice closed in v0.13.62 and the cursor advanced to HUM-10B survey.
+- 2026-08-19 12:44 MDT: HUM-10B locked an eleven-file production boundary for the versioned secret record, storage and provider interfaces, Polar client, license service, Windows DPAPI adapter, startup ownership, and existing Windows API feature additions.
+- 2026-08-19 13:00 MDT: HUM-10B passed 229 Rust tests and the complete debug and release gate after four red-first review repairs. The slice closed in v0.13.63 and the cursor advanced to HUM-10C survey.
