@@ -2,11 +2,9 @@
 //! Window label: "artist-info"
 //! URL: "artist-panel/index.html" (Vite multi-page entry added in Task 11)
 
+use crate::window_effects::{SystemWindowEffects, WindowEffects};
 use anyhow::{anyhow, Result};
 use tauri::{AppHandle, Listener, Manager, WebviewUrl, WebviewWindowBuilder};
-
-#[cfg(windows)]
-use windows::Win32::Foundation::HWND;
 
 /// Open the artist-info panel window.
 /// If a window with label "artist-info" already exists, focus it instead.
@@ -49,20 +47,17 @@ pub async fn open_artist_panel(app: AppHandle) -> Result<()> {
 
     // Mirror the overlay's window_backdrop setting onto this peer window so
     // the visual matches (Mica / Acrylic / Tabbed Mica / None). v0.10.23
-    // backdrop machinery in `crate::backdrop` does the DWM call; we just
-    // read the current kind from the persisted Settings state.
-    #[cfg(windows)]
+    // WindowEffects owns the native DWM call. This call site reads the
+    // configured kind directly from the persisted Settings state.
     {
         let settings_state = app.state::<crate::settings::SharedSettings>();
         // open_artist_panel is async + driven by the tokio runtime, so use the
         // async read — blocking_read() here can stall a runtime worker under
         // lock contention.
         let kind = settings_state.inner().read().await.window_backdrop;
-        if let Ok(raw_hwnd) = window.hwnd() {
-            let hwnd = HWND(raw_hwnd.0);
-            if let Err(e) = crate::backdrop::apply_backdrop(hwnd, kind) {
-                eprintln!("[artist_window] apply_backdrop failed: {e:#}");
-            }
+        let window_effects = SystemWindowEffects;
+        if let Err(error) = window_effects.apply_backdrop(&window, kind) {
+            eprintln!("[artist_window] apply_backdrop failed: {error}");
         }
     }
 

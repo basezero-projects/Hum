@@ -6,6 +6,14 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.57] - 2026-08-19
+
+### Changed
+- **Hum's Windows window effects now sit behind portable, tested interfaces.** Acrylic, Mica, Tabbed Mica, transparent mode, aspect-locked resizing, Ghost-mode update interaction, and auto-contrast keep the same Windows behavior while native calls move behind dedicated window, pointer, and screen-sampling adapters.
+- **Native geometry and capture behavior are now protected by regression tests.** Tests lock all resize-edge calculations, the physical 360 by 48 update-banner click zone, hidden and failed pointer-query behavior, the two auto-contrast sample regions, below-then-above fallback, luminance capture inputs, and backdrop wire values.
+- **OBS receives the same backdrop value on every operating system.** The streamer settings projection now serializes the portable backdrop enum through one target-neutral path, preventing the non-Windows type mismatch found during independent review.
+- **The unused aspect command was removed.** The command never changed the native aspect lock and had no frontend caller. Actual resizing still derives the ratio from the current window rectangle on each Windows sizing message.
+
 ## [0.13.56] - 2026-08-19
 
 ### Changed

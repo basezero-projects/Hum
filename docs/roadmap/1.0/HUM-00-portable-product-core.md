@@ -54,7 +54,7 @@ React, lyrics, timing, caches, artwork, settings, and OBS can travel to another 
 - [ ] HUM-00-AC7: Existing Windows player priority, timing, tray, overlay, and OBS behavior pass regression tests.
 - [ ] HUM-00-AC8: `docs/systems/media-and-timing.md` describes the implemented boundary and event flow.
 - [ ] HUM-00-AC9: Audio-output discovery publishes platform-neutral devices and active-output changes through its own interface.
-- [ ] HUM-00-AC10: Backdrop effects, aspect behavior, screen sampling, and click-through exceptions are isolated behind native window interfaces.
+- [x] HUM-00-AC10: Backdrop effects, aspect behavior, screen sampling, and click-through exceptions are isolated behind native window interfaces. Completed in v0.13.57.
 - [ ] HUM-00-AC11: Shared models and modules contain no Windows types or unconditional Windows dependencies.
 - [ ] HUM-00-AC12: Windows, macOS, and Linux CI jobs compile the shared shell and run its smoke tests.
 
@@ -74,6 +74,7 @@ React, lyrics, timing, caches, artwork, settings, and OBS can travel to another 
 - [HUM-00A shared media model](../../superpowers/plans/2026-08-19-hum-00a-shared-media-model.md), Complete in v0.13.54
 - [HUM-00B build boundary](../../superpowers/plans/2026-08-19-hum-00b-build-boundary.md), Complete in v0.13.55
 - [HUM-00C media backend and publisher](../../superpowers/plans/2026-08-19-hum-00c-media-backend-publisher.md), Complete in v0.13.56
+- [HUM-00D native window interfaces](../../superpowers/plans/2026-08-19-hum-00d-native-window-interfaces.md), Complete in v0.13.57
 - [HUM-00 progress ledger](HUM-00-progress-ledger.md), current execution cursor and completion record
 
 ## Completion record

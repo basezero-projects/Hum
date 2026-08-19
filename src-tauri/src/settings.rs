@@ -7,9 +7,9 @@ use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_store::StoreExt;
 use tokio::sync::RwLock;
 
-#[cfg(windows)]
-use crate::backdrop::BackdropKind;
 use crate::mode::OverlayMode;
+use crate::window_effects::backdrop::BackdropKind;
+use crate::window_effects::{SystemWindowEffects, WindowEffects};
 
 const SETTINGS_STORE_FILE: &str = "settings.json";
 const SETTINGS_STORE_KEY: &str = "settings";
@@ -74,10 +74,7 @@ pub struct Settings {
     pub show_artist_info_panel: bool,
     /// Windows 11 DWM backdrop applied to the overlay window.
     /// Persisted as snake_case string: "acrylic" | "mica" | "tabbed_mica" | "none".
-    #[cfg(windows)]
     pub window_backdrop: BackdropKind,
-    #[cfg(not(windows))]
-    pub window_backdrop: String,
     /// When true, the overlay shows a rotating SYVR Studios product promo card
     /// in the lyric area during ad breaks (Spotify, Pandora, YouTube). When false,
     /// a neutral "Ad break" text is shown instead. Default true.
@@ -112,7 +109,6 @@ fn default_true() -> bool {
 /// The DWM backdrop that should actually be applied to the overlay window for
 /// a given settings state: None while transparent mode is on (so the window is
 /// truly see-through), otherwise the user's configured backdrop.
-#[cfg(windows)]
 pub fn effective_backdrop(s: &Settings) -> BackdropKind {
     if s.bg_hidden {
         BackdropKind::None
@@ -157,10 +153,7 @@ impl Default for Settings {
             // can change in Settings if it conflicts with anything local.
             streamer_port: 38247,
             show_artist_info_panel: true,
-            #[cfg(windows)]
             window_backdrop: BackdropKind::Acrylic,
-            #[cfg(not(windows))]
-            window_backdrop: String::from("acrylic"),
             ad_break_promos_enabled: true,
             launch_on_startup: false,
             bg_hidden: false,
@@ -285,7 +278,6 @@ pub async fn update_settings(
     state: tauri::State<'_, SharedSettings>,
     patch: Value,
 ) -> Result<Settings, String> {
-    #[cfg(windows)]
     // bg_hidden also drives the effective backdrop (None vs configured), so a
     // change to either must re-apply it.
     let backdrop_changed =
@@ -321,21 +313,12 @@ pub async fn update_settings(
     // plugin. Errors are non-fatal (e.g. user without write access to the
     // registry); we log and move on so the settings save itself still succeeds.
     sync_autostart(&app, merged.launch_on_startup);
-    #[cfg(windows)]
     if backdrop_changed {
         if let Some(overlay) = app.get_webview_window("overlay") {
-            match overlay.hwnd() {
-                Ok(raw_hwnd) => {
-                    let hwnd = windows::Win32::Foundation::HWND(raw_hwnd.0);
-                    if let Err(e) =
-                        crate::backdrop::apply_backdrop(hwnd, effective_backdrop(&merged))
-                    {
-                        eprintln!("backdrop: re-apply on settings change failed: {e:?}");
-                    }
-                }
-                Err(e) => {
-                    eprintln!("backdrop: overlay.hwnd() failed on settings change: {e:?}");
-                }
+            let window_effects = SystemWindowEffects;
+            if let Err(error) = window_effects.apply_backdrop(&overlay, effective_backdrop(&merged))
+            {
+                eprintln!("backdrop: re-apply on settings change failed: {error}");
             }
         }
     }
@@ -424,16 +407,6 @@ fn sanitize(s: &mut Settings) {
     if s.streamer_port < 1024 {
         s.streamer_port = defaults.streamer_port;
     }
-    #[cfg(not(windows))]
-    {
-        let v = s.window_backdrop.trim().to_ascii_lowercase();
-        s.window_backdrop = match v.as_str() {
-            "none" | "mica" | "acrylic" | "tabbed_mica" => v,
-            _ => "acrylic".to_string(),
-        };
-    }
-    // On Windows: BackdropKind's serde rejects unknown variants, and serde(default)
-    // on the struct falls back to BackdropKind::default() == Acrylic. No runtime check needed.
 }
 
 fn is_valid_hex_color(s: &str) -> bool {
@@ -546,10 +519,8 @@ mod tests {
         assert_eq!(effective_timing_offset_ms(&settings), -250);
     }
 
-    #[cfg(windows)]
     #[test]
     fn window_backdrop_round_trips_through_serde() {
-        use crate::backdrop::BackdropKind;
         let s = Settings {
             window_backdrop: BackdropKind::Mica,
             ..Default::default()
@@ -559,11 +530,16 @@ mod tests {
         assert_eq!(parsed.window_backdrop, BackdropKind::Mica);
     }
 
-    #[cfg(windows)]
     #[test]
     fn missing_window_backdrop_defaults_to_acrylic() {
-        use crate::backdrop::BackdropKind;
         let json = r#"{}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.window_backdrop, BackdropKind::Acrylic);
+    }
+
+    #[test]
+    fn unknown_persisted_window_backdrop_defaults_to_acrylic() {
+        let json = r#"{"window_backdrop":"future_backdrop"}"#;
         let s: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(s.window_backdrop, BackdropKind::Acrylic);
     }

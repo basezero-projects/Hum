@@ -50,6 +50,7 @@ use tokio::sync::oneshot;
 use crate::lyrics::{CurrentLyrics, SharedLyrics};
 use crate::media::{CurrentTrack, PlaybackState, SharedAlbumArt, SharedSnapshot};
 use crate::settings::SharedSettings;
+use crate::window_effects::backdrop::BackdropKind;
 
 #[derive(Clone)]
 struct AppState {
@@ -283,6 +284,13 @@ struct OverlaySettings {
     profile_delay_ms: i32,
 }
 
+fn projected_backdrop(kind: BackdropKind) -> String {
+    serde_json::to_value(kind)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "acrylic".to_string())
+}
+
 async fn get_settings_overlay(State(s): State<AppState>) -> impl IntoResponse {
     let cfg = s.settings.read().await;
     let body = OverlaySettings {
@@ -301,19 +309,7 @@ async fn get_settings_overlay(State(s): State<AppState>) -> impl IntoResponse {
         blur_album_art_background: cfg.blur_album_art_background,
         bg_hidden: cfg.bg_hidden,
         show_media: cfg.show_media,
-        window_backdrop: {
-            #[cfg(windows)]
-            {
-                serde_json::to_value(&cfg.window_backdrop)
-                    .ok()
-                    .and_then(|v| v.as_str().map(str::to_owned))
-                    .unwrap_or_else(|| "acrylic".to_owned())
-            }
-            #[cfg(not(windows))]
-            {
-                cfg.window_backdrop.clone()
-            }
-        },
+        window_backdrop: projected_backdrop(cfg.window_backdrop),
         anticipate_ms: cfg.anticipate_ms,
         effective_offset_ms: crate::settings::effective_timing_offset_ms(&cfg),
         listening_mode: cfg.listening_mode.clone(),
@@ -770,5 +766,18 @@ mod tests {
         let first = response_with_word(300);
         let second = response_with_word(450);
         assert_ne!(change_fingerprint(&first), change_fingerprint(&second));
+    }
+
+    #[test]
+    fn obs_backdrop_projection_matches_portable_wire_values() {
+        let cases = [
+            (BackdropKind::None, "none"),
+            (BackdropKind::Mica, "mica"),
+            (BackdropKind::Acrylic, "acrylic"),
+            (BackdropKind::TabbedMica, "tabbed_mica"),
+        ];
+        for (kind, expected) in cases {
+            assert_eq!(projected_backdrop(kind), expected);
+        }
     }
 }

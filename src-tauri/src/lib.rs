@@ -24,12 +24,6 @@ mod pandora_desktop;
 #[cfg(windows)]
 mod youtube_bridge;
 
-#[cfg(windows)]
-mod backdrop;
-
-#[cfg(windows)]
-mod aspect_lock;
-
 mod artist_info;
 mod artist_window;
 #[cfg(windows)]
@@ -40,6 +34,7 @@ mod platform;
 mod promos;
 mod settings;
 mod streamer;
+pub mod window_effects;
 
 use artist_info::{clear_artist_info_cache, get_artist_info, ArtistInfoCache};
 use artist_window::{close_artist_panel_cmd, open_artist_panel_cmd, open_ticket_url};
@@ -54,6 +49,7 @@ use mode::{
 use settings::{
     get_settings, open_settings_window, reset_settings, update_settings, SharedSettings,
 };
+use window_effects::{SystemWindowEffects, WindowEffects};
 
 #[tauri::command]
 async fn get_current_track(
@@ -109,18 +105,6 @@ fn set_update_indicator(
     };
     item.set_text(new_text).map_err(|e| e.to_string())?;
     Ok(())
-}
-
-/// Frontend pushes the overlay's content-derived width:height ratio here
-/// whenever the layout changes (font size, layout mode, media column
-/// toggle). The WM_SIZING subclass (aspect_lock.rs) enforces it during
-/// user drags so the window always resizes uniformly.
-#[tauri::command]
-fn set_overlay_aspect(ratio: f64) {
-    #[cfg(windows)]
-    aspect_lock::set_aspect(ratio);
-    #[cfg(not(windows))]
-    let _ = ratio;
 }
 
 /// Managed state — handle to the dynamic-label "Check for updates" /
@@ -272,32 +256,18 @@ pub fn run() {
             );
             build_tray(&app_handle, initial_mode, &initial_listening_mode)?;
 
-            // Apply the persisted DWM backdrop before first paint so the OS
-            // compositor effect is in place when the overlay window renders.
-            #[cfg(windows)]
-            {
-                if let Some(overlay) = app.get_webview_window("overlay") {
-                    match overlay.hwnd() {
-                        Ok(raw_hwnd) => {
-                            // Tauri may bundle a different windows-crate version internally;
-                            // bridge via raw isize. Mirrors web_bridge.rs::PandoraProbe::read().
-                            let hwnd = windows::Win32::Foundation::HWND(raw_hwnd.0);
-                            // Effective backdrop: None if transparent mode was
-                            // persisted on, otherwise the configured backdrop.
-                            let kind = settings::effective_backdrop(
-                                &app.state::<SharedSettings>().inner().blocking_read(),
-                            );
-                            if let Err(e) = backdrop::apply_backdrop(hwnd, kind) {
-                                eprintln!("backdrop: apply_backdrop on startup failed: {e:?}");
-                            }
-                            // Aspect-ratio lock: corrects WM_SIZING drag
-                            // rects so the overlay always resizes uniformly.
-                            aspect_lock::install(hwnd);
-                        }
-                        Err(e) => {
-                            eprintln!("backdrop: overlay.hwnd() failed: {e:?}");
-                        }
-                    }
+            // Apply the effective backdrop before installing the aspect
+            // subclass so first paint and resize behavior keep their order.
+            if let Some(overlay) = app.get_webview_window("overlay") {
+                let window_effects = SystemWindowEffects;
+                let kind = settings::effective_backdrop(
+                    &app.state::<SharedSettings>().inner().blocking_read(),
+                );
+                if let Err(error) = window_effects.apply_backdrop(&overlay, kind) {
+                    eprintln!("backdrop: apply_backdrop on startup failed: {error}");
+                }
+                if let Err(error) = window_effects.install_aspect(&overlay) {
+                    eprintln!("[aspect_lock] {error}");
                 }
             }
 
@@ -368,9 +338,10 @@ pub fn run() {
                 {
                     use std::time::Duration;
                     use tokio::time::sleep;
-                    use windows::Win32::Foundation::POINT;
-                    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
-                    const BANNER_ZONE_W: i32 = 360;
+                    use window_effects::pointer::{
+                        should_ignore_cursor_events, NativePoint, SystemPointerLocator,
+                    };
+                    let pointer_locator = SystemPointerLocator;
                     loop {
                         sleep(Duration::from_millis(80)).await;
                         let mode = OverlayMode::from_u8(mode_state_clone.load(Ordering::Acquire));
@@ -386,35 +357,15 @@ pub fn run() {
                             Err(_) => continue,
                         };
                         let visible = banner_visible.load(Ordering::Acquire);
-                        let in_zone = if visible {
-                            let mut pt = POINT { x: 0, y: 0 };
-                            // SAFETY: GetCursorPos writes to the POINT we
-                            // own on the stack; no aliasing.
-                            if unsafe { GetCursorPos(&mut pt) }.is_ok() {
-                                // Banner now sits at the very top of the
-                                // overlay's content area (the outer-stack
-                                // column lays it out above the art+lyrics
-                                // row). Click hole = top-left, ~360px wide
-                                // by 48px tall, which covers the
-                                // container's 12px top padding + ~24px of
-                                // banner content + a few px of buffer.
-                                const BANNER_ZONE_H: i32 = 48;
-                                let left = pos.x;
-                                let top = pos.y;
-                                pt.x >= left
-                                    && pt.x < left + BANNER_ZONE_W
-                                    && pt.y >= top
-                                    && pt.y < top + BANNER_ZONE_H
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
+                        let ignore_cursor_events = should_ignore_cursor_events(
+                            &pointer_locator,
+                            visible,
+                            NativePoint { x: pos.x, y: pos.y },
+                        );
                         // ignore_cursor_events = true → click passes through.
                         // We want the banner zone to receive clicks, so flip
                         // to false when cursor is over it.
-                        let _ = overlay.set_ignore_cursor_events(!in_zone);
+                        let _ = overlay.set_ignore_cursor_events(ignore_cursor_events);
                     }
                 }
                 #[cfg(not(windows))]
@@ -443,7 +394,6 @@ pub fn run() {
             open_artist_panel_cmd,
             close_artist_panel_cmd,
             open_ticket_url,
-            set_overlay_aspect,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -679,7 +629,6 @@ fn build_global_shortcut_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
                         let snapshot = s.clone();
                         drop(s);
                         settings::save_to_store(&app2, &snapshot);
-                        #[cfg(windows)]
                         reapply_effective_backdrop(&app2, &snapshot);
                         let _ = app2.emit("settings-changed", &snapshot);
                     });
@@ -705,14 +654,12 @@ fn build_global_shortcut_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
 
 /// Apply the backdrop that matches the current settings (None in transparent
 /// mode, otherwise the configured backdrop) to the overlay window.
-#[cfg(windows)]
 fn reapply_effective_backdrop(app: &tauri::AppHandle, s: &settings::Settings) {
     if let Some(overlay) = app.get_webview_window("overlay") {
-        if let Ok(raw) = overlay.hwnd() {
-            let hwnd = windows::Win32::Foundation::HWND(raw.0);
-            if let Err(e) = backdrop::apply_backdrop(hwnd, settings::effective_backdrop(s)) {
-                eprintln!("backdrop: re-apply on transparent toggle failed: {e:?}");
-            }
+        let window_effects = SystemWindowEffects;
+        if let Err(error) = window_effects.apply_backdrop(&overlay, settings::effective_backdrop(s))
+        {
+            eprintln!("backdrop: re-apply on transparent toggle failed: {error}");
         }
     }
 }

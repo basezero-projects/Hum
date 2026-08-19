@@ -4,9 +4,9 @@ This file is the durable execution cursor for HUM-00. Update it at every slice b
 
 ## Current cursor
 
-- Slice: HUM-00D, Native window interfaces
-- Step: D1, lock the executable plan
-- Next action: map backdrop, aspect, Ghost pointer, and screen-sampling behavior into bounded interfaces
+- Slice: HUM-00E, Platform information and React
+- Step: E1, lock the executable plan
+- Next action: map native capabilities, resolved settings paths, and every React control or copy branch they drive
 - Blocker: None
 - Last updated: 2026-08-19 08:44 MDT
 
@@ -38,12 +38,23 @@ This file is the durable execution cursor for HUM-00. Update it at every slice b
 
 - Status: Complete
 - Version: 0.13.56
-- Commit: closeout commit titled `Add media backend publisher boundary`; hash will be recorded from Git at HUM-00D plan lock
-- Remote: push is the final closeout action before HUM-00D implementation
+- Commit: `ff791b2` (`Add media backend publisher boundary`)
+- Remote: pushed to `origin/main`
 - Validation: frontend typecheck and build passed; Cargo all-target check passed; Clippy passed with warnings denied; 136 Rust tests passed; full-tree Rust formatting passed; diff check passed
 - Review: independent review found two test-quality gaps, both were fixed red-first, and the follow-up review approved the production-backed ordering and artwork cache tests
 - Acceptance criteria: HUM-00-AC2 and HUM-00-AC3 complete
 - Known deferrals: native Windows playback smoke coverage and native non-Windows build proof remain assigned to later HUM-00 validation
+
+### HUM-00D, Native window interfaces
+
+- Status: Complete
+- Version: 0.13.57
+- Commit: closeout commit titled `Isolate native window effects`; hash will be recorded from Git at HUM-00E plan lock
+- Remote: push is the final closeout action before HUM-00E implementation
+- Validation: frontend typecheck and build passed; Cargo all-target check passed; Clippy passed with warnings denied; 151 Rust tests passed; full-tree Rust formatting passed; diff check passed
+- Review: independent review found four behavioral and portability issues, then one follow-up trigger regression; all five were fixed red-first and received final approval
+- Acceptance criteria: HUM-00-AC10 complete
+- Known deferrals: Reset all settings still does not reapply the default native backdrop immediately and is recorded in `BUGS.md`
 
 ## Execution log
 
@@ -56,3 +67,6 @@ This file is the durable execution cursor for HUM-00. Update it at every slice b
 - 2026-08-19 08:46 MDT: HUM-00B committed as `a407895`, pushed to `origin/main`, and HUM-00C plan lock began.
 - 2026-08-19 08:52 MDT: HUM-00C writer, authority, startup, and consumer paths were mapped. The executable 14-file plan was locked with source ownership and event ordering as immutable contracts.
 - 2026-08-19 09:09 MDT: HUM-00C passed 136 Rust tests and the full gate after red-first review fixes. The ledger advanced to HUM-00D plan lock pending the closeout commit and push.
+- 2026-08-19 09:12 MDT: HUM-00C committed as `ff791b2`, pushed to `origin/main`, and HUM-00D plan lock began.
+- 2026-08-19 09:18 MDT: HUM-00D native call sites, geometry, cadence, settings triggers, and failure behavior were mapped. The executable 11-file plan was locked.
+- 2026-08-19 09:35 MDT: HUM-00D passed 151 Rust tests and the full gate after five red-first review fixes. The ledger advanced to HUM-00E plan lock pending the closeout commit and push.
