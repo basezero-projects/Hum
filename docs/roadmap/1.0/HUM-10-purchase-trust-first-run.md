@@ -1,6 +1,6 @@
 # HUM-10: Purchase, trust, and first run
 
-Status: Proposed
+Status: In progress
 Target release: 0.15.x
 Depends on: HUM-00
 Blocks: HUM-70
@@ -41,6 +41,19 @@ Hum currently has no license flow or onboarding. Update signing is incomplete, f
 - No secret or customer data belongs in logs or plain-text settings.
 - The updater must reject unsigned artifacts.
 
+## License and purchase policy
+
+- Hum costs $19 once. There is no subscription.
+- Polar is the hosted checkout, Merchant of Record, license-key issuer, and customer portal.
+- One license covers three Windows devices owned or controlled by the buyer. Customers can free an activation from Polar's portal without contacting support.
+- The purchase includes Hum 1.x updates. A future major version may have a separate upgrade price, but the purchased 1.x build remains usable.
+- Full refunds are available for 30 days. A full refund revokes the license benefit.
+- Hum validates an active license every 30 days when a connection is available. A failed network check starts another 30 days of full offline use. The app warns before that grace period ends.
+- License keys, activation IDs, and verification timestamps live in Windows-protected storage. They never enter the settings file, URLs, logs, or diagnostics.
+- Release builds require a license. Development builds use an explicit development entitlement so normal app work does not consume a customer activation.
+
+The durable reasoning is recorded in [ADR-0002](../../decisions/ADR-0002-use-polar-and-protected-offline-license-state.md).
+
 ## Acceptance criteria
 
 - [ ] HUM-10-AC1: A purchase can activate Hum through a clear in-app flow.
@@ -63,7 +76,14 @@ Hum currently has no license flow or onboarding. Update signing is incomplete, f
 
 ## Slice map
 
-No implementation plan written yet.
+- HUM-10A: license policy and provider-neutral entitlement state engine
+- HUM-10B: Windows-protected license storage and Polar activation client
+- HUM-10C: activation, restore, deactivation, and checkout handoff UI
+- HUM-10D: first-run setup for placement, listening output, appearance, and controls
+- HUM-10E: signed installer, signed updater, and complete update-state UI
+- HUM-10F: About, support, privacy, diagnostics, and production menu cleanup
+- HUM-10G: paid-product promo defaults and purchase-site checkout completion
+- HUM-10H: clean-install, recovery, scaling, and prior-version update proof
 
 ## Completion record
 

@@ -33,8 +33,8 @@ The reasoning and constraints are recorded in [ADR-0001](decisions/ADR-0001-keep
 
 | ID | Phase | User outcome | Status | Depends on | Contract |
 |---|---|---|---|---|---|
-| HUM-00 | Portable product core | Windows behavior stays intact while platform assumptions are isolated | In progress | None | [Contract](roadmap/1.0/HUM-00-portable-product-core.md) |
-| HUM-10 | Purchase, trust, and first run | A customer can buy, activate, install, learn, update, and get help | Proposed | HUM-00 | [Contract](roadmap/1.0/HUM-10-purchase-trust-first-run.md) |
+| HUM-00 | Portable product core | Windows behavior stays intact while platform assumptions are isolated | Complete | None | [Contract](roadmap/1.0/HUM-00-portable-product-core.md) |
+| HUM-10 | Purchase, trust, and first run | A customer can buy, activate, install, learn, update, and get help | In progress | HUM-00 | [Contract](roadmap/1.0/HUM-10-purchase-trust-first-run.md) |
 | HUM-20 | Lyrics Control Center | A user can inspect, replace, import, correct, and save lyrics | Proposed | HUM-00 | [Contract](roadmap/1.0/HUM-20-lyrics-control-center.md) |
 | HUM-30 | Automatic audio profiles | Hum follows the active output device and applies its saved delay | Proposed | HUM-00 | [Contract](roadmap/1.0/HUM-30-automatic-audio-profiles.md) |
 | HUM-40 | Premium presentation | Presets and direct lyric controls make every layout feel finished | Proposed | HUM-20, HUM-30 | [Contract](roadmap/1.0/HUM-40-premium-presentation.md) |

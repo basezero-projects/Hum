@@ -6,6 +6,15 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.62] - 2026-08-19
+
+### Added
+- **Hum now has one tested license policy for the paid Windows release.** The $19 purchase covers three personal devices and all Hum 1.x updates. A verified license checks in every 30 days and keeps working for another 30 days if the network or license service is unavailable. There is no license screen yet. This release provides the shared state engine that the activation experience will use.
+- **License status is safe to show in future Settings and activation screens.** The new UI payload distinguishes verified, verification due, offline grace, invalid, revoked, device limit, clock error, and service unavailable states. It exposes only a redacted key suffix and timing information. Full keys, activation IDs, order details, and customer data never enter the payload.
+
+### Changed
+- **The 1.0 roadmap now records the purchase rules before checkout work begins.** Hum will use Polar for hosted checkout, tax handling, license delivery, refunds, and customer device management. The policy sets a 30-day refund window and keeps protected license material outside `settings.json`.
+
 ## [0.13.61] - 2026-08-19
 
 ### Fixed

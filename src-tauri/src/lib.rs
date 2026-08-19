@@ -29,6 +29,7 @@ mod artist_window;
 mod audio_output;
 #[cfg(windows)]
 mod contrast;
+pub mod license;
 mod lyrics;
 mod mode;
 mod platform;
