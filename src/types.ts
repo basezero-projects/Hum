@@ -60,6 +60,13 @@ export type AudioOutputState = {
   outputs: AudioOutputDevice[];
   active: AudioOutputDevice | null;
 };
+
+export type OnboardingState = {
+  version: number;
+  current_version: number;
+  completed: boolean;
+  recommended_listening_mode: ListeningMode | null;
+};
 export type WindowBackdrop = "acrylic" | "mica" | "tabbed_mica" | "none";
 
 export type LayoutMode = "three_line" | "single_line" | "full_page";
@@ -68,6 +75,7 @@ export type TextAlign = "left" | "center" | "right";
 
 export type Settings = {
   last_mode: OverlayMode;
+  onboarding_version: number;
   anticipate_ms: number;
   listening_mode: ListeningMode;
   wired_delay_ms: number;

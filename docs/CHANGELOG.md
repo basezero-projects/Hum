@@ -6,6 +6,24 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.65] - 2026-08-19
+
+### Added
+- **A clean install now opens a four-step Hum setup.** The new black, ivory, and gold Setup window keeps the real lyrics overlay visible while it walks through placement, listening output, appearance, and controls. The Place it step switches the overlay to Edit mode so it can be dragged and resized on the desktop.
+- **Listening setup now starts from the active Windows output.** Hum identifies the current output when Windows provides it, maps wired and Bluetooth devices directly, treats HDMI as Speakers, and applies the matching saved delay. Wired, Speakers, and Bluetooth cards show their individual delay values, with a slider for final correction.
+- **New customers can choose a useful appearance before opening Settings.** Setup offers Ribbon or Square plus Album atmosphere, Clean panel, and Lyrics only starting points. Each choice updates the live overlay immediately, and every underlying option remains available in Settings.
+- **Core overlay controls are explained before setup ends.** The last step describes Edit, Locked, and Ghost modes alongside the mode, timing, and album-blur shortcuts. Finish and Skip both save setup completion, leave the overlay in Locked mode, and close the guide.
+
+### Changed
+- **License state and first-run state now share one window policy.** An unlicensed state shows Activation only. A licensed first run shows Setup with the live overlay. Later launches show the overlay without Setup. The tray's new `Run setup...` item reopens the guide without clearing preferences.
+- **Reset Settings no longer brings the first-run guide back.** Setup completion uses a versioned saved marker that survives a preference reset. Future setup versions also remain valid instead of being moved backward.
+- **Hum now uses the balanced hummingbird everywhere.** The approved bird and lowercase h mark replaces the old waveform in Setup, Activation, the overlay and OBS watermarks, tray modes, the Windows title bar, the taskbar, and installed app icons. Its overlay watermark also keeps a readable ribbon-sized footprint when the window is resized.
+
+### Fixed
+- **Lyrics keep working when LRCLib is unavailable.** Hum now gives each song a clean NetEase provider session and accepts an exact title and artist match when a browser video's intro or outro makes its duration longer than the studio recording. Missing artist metadata still requires a close duration match, which protects against loose title-only results.
+- **Reopening Setup now starts at Place it with active controls.** The persistent Tauri window clears its hidden busy state whenever the tray opens it again. A customer can finish, reopen, review, and finish again without finding a disabled last step.
+- **Setup completion can no longer be lost during Reset Settings.** The reset path preserves the completion marker while holding the settings write lock, so simultaneous writes cannot restore an incomplete value.
+
 ## [0.13.64] - 2026-08-19
 
 ### Added

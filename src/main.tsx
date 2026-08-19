@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import DevConsole from "./DevConsole";
 import Activation from "./Activation";
 import Overlay from "./Overlay";
+import Setup from "./Setup";
 import Settings from "./Settings";
 import "./index.css";
 
@@ -12,12 +13,14 @@ import "./index.css";
 // `overlay` = the transparent always-on-top lyrics window.
 // `settings` = the user-facing settings window opened from the tray.
 // `activation` = the purchase, activation, and license recovery window.
+// `setup` = the guided first-run placement and personalization window.
 function pickComponent(): () => React.ReactElement {
   try {
     const label = getCurrentWindow().label;
     if (label === "overlay") return Overlay;
     if (label === "settings") return Settings;
     if (label === "activation") return Activation;
+    if (label === "setup") return Setup;
   } catch {
     // Not running inside Tauri (e.g. plain `vite` dev) — default to dev console.
   }

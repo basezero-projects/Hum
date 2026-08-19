@@ -59,7 +59,7 @@ The durable reasoning is recorded in [ADR-0002](../../decisions/ADR-0002-use-pol
 - [x] HUM-10-AC1: A purchase can activate Hum through a clear in-app flow.
 - [x] HUM-10-AC2: A valid customer can restore a license after reinstalling or changing computers within the license policy.
 - [x] HUM-10-AC3: An offline customer sees their verification state and a useful recovery message before access changes.
-- [ ] HUM-10-AC4: A clean install guides the user through overlay placement, listening mode, appearance, and core controls.
+- [x] HUM-10-AC4: A clean install guides the user through overlay placement, listening mode, appearance, and core controls.
 - [ ] HUM-10-AC5: The installer and update artifacts have valid signatures, and an update is tested from the previous release.
 - [ ] HUM-10-AC6: Manual update checks report current, available, downloading, installing, and failed states.
 - [ ] HUM-10-AC7: Production builds hide the dev console and contain no demo-only update path.
@@ -79,7 +79,7 @@ The durable reasoning is recorded in [ADR-0002](../../decisions/ADR-0002-use-pol
 - HUM-10A: license policy and provider-neutral entitlement state engine, complete in v0.13.62
 - HUM-10B: Windows-protected license storage and Polar activation client, complete in v0.13.63
 - HUM-10C: activation, restore, deactivation, and checkout handoff UI, complete in v0.13.64
-- HUM-10D: first-run setup for placement, listening output, appearance, and controls
+- HUM-10D: first-run setup for placement, listening output, appearance, and controls, complete in v0.13.65
 - HUM-10E: signed installer, signed updater, and complete update-state UI
 - HUM-10F: About, support, privacy, diagnostics, and production menu cleanup
 - HUM-10G: paid-product promo defaults and purchase-site checkout completion

@@ -32,6 +32,7 @@ mod contrast;
 pub mod license;
 mod lyrics;
 mod mode;
+mod onboarding;
 mod platform;
 mod promos;
 mod settings;
@@ -46,7 +47,7 @@ use audio_output::{
     shutdown_managed_runtime, AudioOutputBackend, AudioOutputBackendContext, AudioOutputPublisher,
     ManagedAudioOutputRuntime, SharedAudioOutputState,
 };
-use license::{apply_license_windows, current_unix_ms, LicenseService};
+use license::{current_unix_ms, LicenseService};
 use lyrics::{CurrentLyrics, SharedLyrics};
 use media::{AlbumArtPayload, CurrentTrack, SharedAlbumArt, SharedSnapshot};
 #[cfg(windows)]
@@ -54,6 +55,9 @@ use media::{MediaBackend, MediaBackendContext};
 use mode::{
     apply_mode, cycle_overlay_mode, get_overlay_mode, icon_for, set_overlay_mode, ModeMenuItems,
     OverlayMode, SharedMode, TRAY_ID,
+};
+use onboarding::{
+    apply_customer_windows, complete_onboarding, get_onboarding_state, open_onboarding_session,
 };
 use platform::info::get_platform_info;
 use settings::{
@@ -223,6 +227,7 @@ pub fn run() {
             let loaded_settings = settings::load_from_store(app.handle());
             let initial_mode = loaded_settings.last_mode;
             let initial_listening_mode = loaded_settings.listening_mode.clone();
+            let initial_onboarding_version = loaded_settings.onboarding_version;
             // Capture streamer fields before move so we can apply after manage.
             let streamer_enabled_at_start = loaded_settings.streamer_enabled;
             let streamer_port_at_start = loaded_settings.streamer_port;
@@ -262,7 +267,7 @@ pub fn run() {
                         license_service.state().await
                     }
                 };
-                apply_license_windows(&app_for_license, &state);
+                apply_customer_windows(&app_for_license, state.status, initial_onboarding_version);
                 let _ = app_for_license.emit("license-state-changed", &state);
             });
 
@@ -389,7 +394,7 @@ pub fn run() {
             // window survives and the pending write fires. The overlay has no
             // decorations (no X) and artist-info is created-on-demand + meant to
             // be destroyed, so neither needs this.
-            for label in ["main", "settings", "activation"] {
+            for label in ["main", "settings", "activation", "setup"] {
                 if let Some(win) = app.get_webview_window(label) {
                     let win_for_event = win.clone();
                     win.on_window_event(move |event| {
@@ -492,6 +497,9 @@ pub fn run() {
             license::commands::open_license_window,
             license::commands::open_license_checkout,
             license::commands::open_license_portal,
+            get_onboarding_state,
+            onboarding::open_onboarding_window,
+            complete_onboarding,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -549,7 +557,15 @@ fn toggle_overlay_from_tray(app: &tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let state = service.state().await;
         if !state.licensed {
-            let _ = license::commands::open_license_window(app);
+            apply_customer_windows(&app, state.status, 0);
+            return;
+        }
+        let onboarding_version = match app.try_state::<SharedSettings>() {
+            Some(settings) => settings.read().await.onboarding_version,
+            None => 0,
+        };
+        if !onboarding::onboarding_completed(onboarding_version) {
+            apply_customer_windows(&app, state.status, onboarding_version);
             return;
         }
         if let Some(window) = app.get_webview_window("overlay") {
@@ -600,6 +616,7 @@ fn build_tray(
         .build()?;
 
     let settings_item = MenuItemBuilder::with_id("settings", "Settings…").build(app)?;
+    let setup_item = MenuItemBuilder::with_id("setup", "Run setup...").build(app)?;
     let license_item = MenuItemBuilder::with_id("license", "License…").build(app)?;
     let check_updates_item =
         MenuItemBuilder::with_id("check-updates", "Check for updates").build(app)?;
@@ -614,6 +631,7 @@ fn build_tray(
         .item(&listening_submenu)
         .separator()
         .item(&license_item)
+        .item(&setup_item)
         .item(&settings_item)
         .item(&check_updates_item)
         .item(&toggle_console)
@@ -662,6 +680,20 @@ fn build_tray(
                 if let Err(e) = settings::open_settings_window(app.clone()) {
                     eprintln!("[tray] open settings failed: {e}");
                 }
+            }
+            "setup" => {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let Some(service) = app.try_state::<Arc<LicenseService>>() else {
+                        return;
+                    };
+                    let state = service.state().await;
+                    if state.licensed {
+                        let _ = open_onboarding_session(&app, state.status);
+                    } else {
+                        apply_customer_windows(&app, state.status, 0);
+                    }
+                });
             }
             "license" => {
                 if let Err(error) = license::commands::open_license_window(app.clone()) {

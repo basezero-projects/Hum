@@ -4,11 +4,12 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 
 ## Current cursor
 
-- Slice: HUM-10D, first-run setup
+- Slice: HUM-10E, signed updates and update states
 - Step: Survey and plan lock
-- Next action: map the clean-install path for overlay placement, listening output, appearance, and core controls before implementing the guided setup
+- Next action: map the current updater configuration, signing inputs, release workflow, and manual update surfaces before locking the signed-update slice
 - Blocker: None for local implementation. Live purchase proof still requires a Polar organization and Hum product.
-- Last updated: 2026-08-19 13:33 MDT
+- Last updated: 2026-08-19 14:32 MDT
+- Last completed plan: `docs/superpowers/plans/2026-08-19-hum-10d-first-run-setup.md`
 
 ## Locked product policy
 
@@ -68,6 +69,18 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 - Acceptance criteria: HUM-10-AC1 through HUM-10-AC3 are complete for the local paid-product workflow
 - Known deferrals: the production Polar organization, Hum product, hosted checkout, receipt delivery, customer portal, and real purchase proof remain in HUM-10G and HUM-10H
 
+### HUM-10D, first-run setup
+
+- Status: Complete
+- Version: 0.13.65
+- Commit: closeout commit titled `Polish Hum's first run and restore lyrics`
+- Remote: push to `origin/main` during closeout
+- Validation: frozen frontend install, typecheck, and production build passed; 244 Rust tests passed with one network test intentionally ignored; debug and release all-target checks passed; debug and release Clippy passed with warnings denied; full Rust formatting and diff validation passed; the ignored live NetEase smoke test passed separately against two exact songs
+- Review: red-first tests protected the customer-window plan, route recommendation, wire contract, backward-compatible setup version, reset-safe completion, exact song matching across video-duration differences, and title-only duration safety. Native replay found and repaired a persistent hidden-window busy state plus a provider-session failure that prevented fallback lyrics after LRCLib failed.
+- Visual proof: all four steps fit at 940 by 700 and 760 by 620 without page overflow. Finish saved version one and Locked mode, reopen returned to Place it in Edit mode with active controls, and Reset Settings kept completion. Native lyrics rendered through NetEase, and the approved hummingbird appeared in Setup, the overlay, and the Windows title bar.
+- Acceptance criteria: HUM-10-AC4 is complete for the local first-run workflow
+- Known deferrals: the four-scale Windows matrix remains in HUM-10H
+
 ## Execution log
 
 - 2026-08-19 12:05 MDT: HUM-10 started. The purchase and license policy was locked, ADR-0002 was accepted, and HUM-10A entered implementation.
@@ -76,3 +89,5 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 - 2026-08-19 13:00 MDT: HUM-10B passed 229 Rust tests and the complete debug and release gate after four red-first review repairs. The slice closed in v0.13.63 and the cursor advanced to HUM-10C survey.
 - 2026-08-19 13:12 MDT: HUM-10C locked a nine-file production boundary for safe license commands, native window gating, tray recovery, strict Polar links, and a dedicated activation experience.
 - 2026-08-19 13:33 MDT: HUM-10C passed 234 Rust tests, the complete debug and release gate, and native release-window QA after four review and visual repairs. The slice closed in v0.13.64 and the cursor advanced to HUM-10D survey.
+- 2026-08-19 13:47 MDT: HUM-10D locked a ten-file production boundary for versioned completion state, one shared customer-window plan, a predeclared Setup window, live audio and appearance choices, core-control guidance, tray recovery, and reset-safe persistence.
+- 2026-08-19 14:32 MDT: HUM-10D passed 244 Rust tests, the complete debug and release gate, a live two-song NetEase smoke test, and native setup, lyrics, overlay-brand, and title-bar QA. The slice repaired provider fallback lyrics and replaced the remaining waveform assets with the approved hummingbird before v0.13.65 shipped. The cursor advanced to HUM-10E survey.

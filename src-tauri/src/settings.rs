@@ -18,6 +18,8 @@ const SETTINGS_STORE_KEY: &str = "settings";
 #[serde(default)]
 pub struct Settings {
     pub last_mode: OverlayMode,
+    #[serde(default)]
+    pub onboarding_version: u8,
 
     pub anticipate_ms: i32,
     /// Active audio-output timing profile. Stored as a string so unknown
@@ -121,6 +123,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             last_mode: OverlayMode::default(),
+            onboarding_version: 0,
             anticipate_ms: 0,
             listening_mode: "wired".to_string(),
             wired_delay_ms: 0,
@@ -435,6 +438,19 @@ fn is_valid_color_string(s: &str) -> bool {
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | ',' | '.' | '(' | ')' | '%' | '/'))
 }
 
+fn reset_defaults(current: &Settings) -> Settings {
+    Settings {
+        onboarding_version: current.onboarding_version,
+        ..Settings::default()
+    }
+}
+
+fn reset_in_place(current: &mut Settings) -> Settings {
+    let defaults = reset_defaults(current);
+    *current = defaults.clone();
+    defaults
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -543,6 +559,41 @@ mod tests {
         let s: Settings = serde_json::from_str(json).unwrap();
         assert_eq!(s.window_backdrop, BackdropKind::Acrylic);
     }
+
+    #[test]
+    fn missing_onboarding_version_defaults_to_zero() {
+        let settings: Settings = serde_json::from_str(r#"{}"#).unwrap();
+        assert_eq!(settings.onboarding_version, 0);
+    }
+
+    #[test]
+    fn reset_defaults_preserve_onboarding_completion() {
+        let current = Settings {
+            onboarding_version: 7,
+            overlay_shape: "square".to_string(),
+            ..Default::default()
+        };
+
+        let reset = reset_defaults(&current);
+
+        assert_eq!(reset.onboarding_version, 7);
+        assert_eq!(reset.overlay_shape, "ribbon");
+    }
+
+    #[test]
+    fn reset_replaces_preferences_without_releasing_the_settings_lock() {
+        let mut current = Settings {
+            onboarding_version: 4,
+            listening_mode: "bluetooth".to_string(),
+            ..Default::default()
+        };
+
+        let saved = reset_in_place(&mut current);
+
+        assert_eq!(current, saved);
+        assert_eq!(current.onboarding_version, 4);
+        assert_eq!(current.listening_mode, "wired");
+    }
 }
 
 #[tauri::command]
@@ -550,11 +601,10 @@ pub async fn reset_settings(
     app: AppHandle<Wry>,
     state: tauri::State<'_, SharedSettings>,
 ) -> Result<Settings, String> {
-    let defaults = Settings::default();
-    {
-        let mut s = state.write().await;
-        *s = defaults.clone();
-    }
+    let defaults = {
+        let mut current = state.write().await;
+        reset_in_place(&mut current)
+    };
     save_to_store(&app, &defaults);
     crate::sync_listening_mode_menu(&app, &defaults.listening_mode);
     let _ = app.emit("settings-changed", &defaults);

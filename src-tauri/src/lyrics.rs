@@ -32,8 +32,11 @@ const LYRICS_CACHE_CAP: usize = 256;
 use crate::media::{CurrentTrack, SharedSnapshot};
 
 const STORE_FILE: &str = "lyrics-cache.json";
-const USER_AGENT: &str =
-    "hum/0.12.0 (Windows desktop overlay; https://github.com/basezero-projects/Hum)";
+const USER_AGENT: &str = concat!(
+    "hum/",
+    env!("CARGO_PKG_VERSION"),
+    " (desktop lyrics overlay; https://github.com/basezero-projects/Hum)"
+);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WordSpan {
@@ -553,8 +556,8 @@ async fn resolve_lyrics(
             track.duration_ms,
         ),
         tokio::time::timeout(
-            std::time::Duration::from_millis(2_500),
-            fetch_netease(client, &cleaned_artist, &cleaned_title, track.duration_ms),
+            std::time::Duration::from_secs(6),
+            fetch_netease(&cleaned_artist, &cleaned_title, track.duration_ms),
         ),
     );
 
@@ -786,16 +789,26 @@ async fn ad_break_outcome(
 // ─── HTTP client ───────────────────────────────────────────────────────────
 
 fn build_client() -> Result<reqwest::Client> {
-    // LRCLib responses can take 8-10s on the wire from this network — give
-    // generous headroom so we don't false-fail on cold queries. NetEase needs
-    // a cookie jar for its NMTID handshake; the jar is harmless for the other
-    // hosts (they don't set cookies).
+    // LRCLib responses can take 8-10s on the wire from this network, so give
+    // generous headroom rather than treating a cold query as a failure.
+    reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("reqwest::Client::build")
+}
+
+fn build_netease_client() -> Result<reqwest::Client> {
+    // NetEase can set session cookies during search that its lyric endpoint
+    // needs moments later. Reusing that jar for the next song can poison the
+    // next search and return an empty result, so every resolution gets one
+    // short-lived client for its own search-plus-lyrics pair.
     reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .timeout(std::time::Duration::from_secs(30))
         .cookie_store(true)
         .build()
-        .context("reqwest::Client::build")
+        .context("reqwest::Client::build for NetEase")
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -1313,11 +1326,11 @@ struct NeteaseLyricBody {
 }
 
 async fn fetch_netease(
-    client: &reqwest::Client,
     artist: &str,
     title: &str,
     duration_ms: u64,
 ) -> Result<(CachedLyrics, String)> {
+    let client = build_netease_client()?;
     let query = format!("{title} {artist}");
     // reqwest's RequestBuilder::form gates on a default feature that's been
     // problematic to enable cleanly; sidestep by manually building the urlen-
@@ -1446,10 +1459,15 @@ fn pick_best_netease(
                     return false;
                 }
             }
-            if requested_duration_ms == 0 {
-                return true;
-            }
-            (s.duration as i64 - requested_duration_ms as i64).abs() <= tolerance_ms
+            // A browser video's reported duration often includes an intro,
+            // credits, or an outro that is not part of the studio recording.
+            // Exact title and artist metadata is strong enough to keep the
+            // nearest provider result in that case. When the artist is empty,
+            // duration remains mandatory because title-only matches are much
+            // easier to confuse with covers or unrelated songs.
+            requested_duration_ms == 0
+                || !artist_l.is_empty()
+                || (s.duration as i64 - requested_duration_ms as i64).abs() <= tolerance_ms
         })
         .collect();
 
@@ -2308,6 +2326,76 @@ mod tests {
         )
         .unwrap();
         assert_eq!(picked.id, 1);
+    }
+
+    #[test]
+    fn netease_picker_keeps_exact_song_when_video_duration_includes_extra_time() {
+        let studio = NeteaseSong {
+            id: 3_795_680,
+            name: "A Thousand Miles".into(),
+            duration: 237_563,
+            artists: vec![NeteaseArtist {
+                name: "Vanessa Carlton".into(),
+            }],
+        };
+        let live = NeteaseSong {
+            id: 460_476_020,
+            name: "A Thousand Miles (Live)".into(),
+            duration: 268_120,
+            artists: vec![NeteaseArtist {
+                name: "Vanessa Carlton".into(),
+            }],
+        };
+
+        let picked = pick_best_netease(
+            vec![live, studio],
+            "Vanessa Carlton",
+            "A Thousand Miles",
+            266_000,
+        )
+        .expect("an exact title and artist should survive video intro or outro time");
+
+        assert_eq!(picked.id, 3_795_680);
+    }
+
+    #[test]
+    fn netease_picker_without_artist_still_requires_duration_match() {
+        let candidate = NeteaseSong {
+            id: 3_795_680,
+            name: "A Thousand Miles".into(),
+            duration: 237_563,
+            artists: vec![NeteaseArtist {
+                name: "Vanessa Carlton".into(),
+            }],
+        };
+
+        let picked = pick_best_netease(vec![candidate], "", "A Thousand Miles", 266_000);
+
+        assert!(picked.is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires the live NetEase service"]
+    async fn live_netease_resolves_exact_song_with_video_duration() {
+        for (artist, title, duration_ms) in [
+            ("Vanessa Carlton", "A Thousand Miles", 266_000),
+            ("Khalid", "Better", 230_101),
+        ] {
+            let (cached, source) = fetch_netease(artist, title, duration_ms)
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("NetEase should resolve {artist} - {title}: {error:#}")
+                });
+
+            assert_eq!(source, "netease");
+            let CachedLyrics::Synced { lines, .. } = cached else {
+                panic!(
+                    "the live provider should return synchronized lyrics for {artist} - {title}"
+                );
+            };
+            assert!(lines.len() > 20);
+            assert!(has_valid_word_timing(&lines));
+        }
     }
 
     #[test]

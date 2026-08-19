@@ -27,6 +27,7 @@ import { fmtMs, loadPlatformInfoWithRetry } from "./types";
 
 const DEFAULT_SETTINGS: Settings = {
   last_mode: "edit",
+  onboarding_version: 0,
   anticipate_ms: 0,
   listening_mode: "wired",
   wired_delay_ms: 0,
@@ -835,8 +836,8 @@ export default function Overlay() {
   // the streamer pulls Hum onto stream (OBS browser source, window capture,
   // display capture). Always visible for now; the eventual Pro tier will
   // toggle this from Settings (free tier keeps the mark, Pro hides it).
-  // PNG with luminance-as-alpha so the white logo paints cleanly over any
-  // background without a hard-edged box.
+  // Transparent PNG so the white logo paints cleanly over any background
+  // without a hard-edged box.
   const watermark = (
     <img
       // Match the lyric color: when auto-contrast flips the text dark over a
@@ -855,7 +856,10 @@ export default function Overlay() {
         left:
           settings.show_media || layoutMode === "full_page" ? "50%" : "85%",
         transform: "translate(-50%, -50%)",
-        height: "85%",
+        // Ribbon windows can be resized unusually tall while in Edit mode.
+        // Cap the mark at its intended ribbon scale so the taller bird shape
+        // never turns into a full-window graphic.
+        height: "min(85%, 110px)",
         width: "auto",
         zIndex: 1,
         opacity: 0.18,

@@ -2,43 +2,13 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, Manager};
 
-use super::{LicenseService, LicenseState, LicenseStatus};
+use crate::onboarding::apply_customer_windows;
+use crate::settings::SharedSettings;
+
+use super::{LicenseService, LicenseState};
 
 const MAX_CUSTOMER_KEY_LENGTH: usize = 256;
 const POLAR_HOSTS: &[&str] = &["buy.polar.sh", "polar.sh", "www.polar.sh"];
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum LicenseWindowAction {
-    Overlay,
-    Activation,
-}
-
-pub(crate) fn license_window_action(status: LicenseStatus) -> LicenseWindowAction {
-    if status.is_licensed() {
-        LicenseWindowAction::Overlay
-    } else {
-        LicenseWindowAction::Activation
-    }
-}
-
-pub(crate) fn apply_license_windows(app: &AppHandle, state: &LicenseState) {
-    match license_window_action(state.status) {
-        LicenseWindowAction::Overlay => {
-            if let Some(window) = app.get_webview_window("activation") {
-                let _ = window.hide();
-            }
-            if let Some(window) = app.get_webview_window("overlay") {
-                let _ = window.show();
-            }
-        }
-        LicenseWindowAction::Activation => {
-            if let Some(window) = app.get_webview_window("overlay") {
-                let _ = window.hide();
-            }
-            let _ = show_license_window(app);
-        }
-    }
-}
 
 pub(crate) fn current_unix_ms() -> i64 {
     let milliseconds = std::time::SystemTime::now()
@@ -59,6 +29,7 @@ pub async fn get_license_state(
 pub async fn activate_license(
     app: AppHandle,
     service: tauri::State<'_, Arc<LicenseService>>,
+    settings: tauri::State<'_, SharedSettings>,
     license_key: String,
 ) -> Result<LicenseState, String> {
     let license_key = validate_customer_key(&license_key)?;
@@ -66,7 +37,7 @@ pub async fn activate_license(
         .activate(license_key, current_unix_ms())
         .await
         .map_err(|error| error.to_string())?;
-    publish_state(&app, &state);
+    publish_state(&app, &state, &settings).await;
     Ok(state)
 }
 
@@ -74,12 +45,13 @@ pub async fn activate_license(
 pub async fn refresh_license(
     app: AppHandle,
     service: tauri::State<'_, Arc<LicenseService>>,
+    settings: tauri::State<'_, SharedSettings>,
 ) -> Result<LicenseState, String> {
     let state = service
         .bootstrap(current_unix_ms())
         .await
         .map_err(|error| error.to_string())?;
-    publish_state(&app, &state);
+    publish_state(&app, &state, &settings).await;
     Ok(state)
 }
 
@@ -87,6 +59,7 @@ pub async fn refresh_license(
 pub async fn deactivate_license(
     app: AppHandle,
     service: tauri::State<'_, Arc<LicenseService>>,
+    settings: tauri::State<'_, SharedSettings>,
 ) -> Result<LicenseState, String> {
     let state = service
         .deactivate()
@@ -97,7 +70,7 @@ pub async fn deactivate_license(
             "Hum could not release this PC. Check your connection and try again.".to_string(),
         );
     }
-    publish_state(&app, &state);
+    publish_state(&app, &state, &settings).await;
     Ok(state)
 }
 
@@ -119,8 +92,9 @@ pub fn open_license_portal() -> Result<(), String> {
     )
 }
 
-fn publish_state(app: &AppHandle, state: &LicenseState) {
-    apply_license_windows(app, state);
+async fn publish_state(app: &AppHandle, state: &LicenseState, settings: &SharedSettings) {
+    let onboarding_version = settings.read().await.onboarding_version;
+    apply_customer_windows(app, state.status, onboarding_version);
     let _ = app.emit("license-state-changed", state);
 }
 
@@ -185,32 +159,6 @@ fn open_configured_polar_url(value: Option<&str>, label: &str) -> Result<(), Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::license::LicenseStatus;
-
-    #[test]
-    fn only_licensed_statuses_choose_the_overlay() {
-        for (status, expected) in [
-            (LicenseStatus::Development, LicenseWindowAction::Overlay),
-            (LicenseStatus::Verified, LicenseWindowAction::Overlay),
-            (LicenseStatus::VerificationDue, LicenseWindowAction::Overlay),
-            (LicenseStatus::OfflineGrace, LicenseWindowAction::Overlay),
-            (LicenseStatus::Unlicensed, LicenseWindowAction::Activation),
-            (
-                LicenseStatus::VerificationRequired,
-                LicenseWindowAction::Activation,
-            ),
-            (LicenseStatus::Invalid, LicenseWindowAction::Activation),
-            (LicenseStatus::Revoked, LicenseWindowAction::Activation),
-            (LicenseStatus::DeviceLimit, LicenseWindowAction::Activation),
-            (LicenseStatus::ClockError, LicenseWindowAction::Activation),
-            (
-                LicenseStatus::ServiceUnavailable,
-                LicenseWindowAction::Activation,
-            ),
-        ] {
-            assert_eq!(license_window_action(status), expected);
-        }
-    }
 
     #[test]
     fn customer_keys_are_trimmed_and_invalid_values_are_redacted() {
