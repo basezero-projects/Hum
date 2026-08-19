@@ -164,12 +164,12 @@
     60%  { opacity: 1; }
     100% { transform: translateY(0); opacity: 1; }
   }
-  /* Karaoke per-word gradient — each .word span is a slice of a two-stop
+  /* Karaoke per-word gradient. Each .word span is a slice of a two-stop
      gradient sized 200% wide, scrolled by background-position. Lit (text
      color) on the left half, dim (text-dim) on the right half. Future
      words sit at 100% 0% (dim half visible), past words at 0% 0% (lit
-     half visible), the current word transitions 100% → 0% over its
-     duration. background-clip:text restricts the gradient to glyph
+     half visible), and the current word follows playback position from
+     100% to 0%. background-clip:text restricts the gradient to glyph
      shapes so the words look like solid color blocks, not painted
      rectangles. */
   .word {
@@ -185,9 +185,6 @@
     -webkit-background-clip: text;
     color: transparent;
     -webkit-text-fill-color: transparent;
-    transition-property: background-position;
-    transition-timing-function: linear;
-    transition-duration: 0ms;
   }
   .word.future { background-position: 100% 0%; }
   .word.current,
@@ -505,6 +502,7 @@
 
   // Track last-applied values so we only write DOM when something changed.
   let lastCfgJson = "";
+  let timingOffsetMs = 0;
 
   function hexToRgba(hex, opacityPct) {
     const h = hex.replace(/^#/, "");
@@ -520,6 +518,9 @@
     const cfgJson = JSON.stringify(cfg);
     if (cfgJson === lastCfgJson) return;
     lastCfgJson = cfgJson;
+    if (typeof cfg.effective_offset_ms === "number") {
+      timingOffsetMs = cfg.effective_offset_ms;
+    }
 
     const root = document.documentElement;
     const $colEl   = document.getElementById("col");
@@ -628,6 +629,7 @@
   let karaokeWordsRef = [];
   let karaokeLineEndMs = 0;
   let karaokeLastIdx = -2;
+  let karaokeLastProgress = -1;
 
   // ── Helpers ──────────────────────────────────────────────────────────
   function fmtMs(ms) {
@@ -844,6 +846,9 @@
   function wordDurationMs(words, idx, lineEndMs) {
     const w = words[idx];
     if (!w) return 500;
+    if (Number.isFinite(w.duration_ms) && w.duration_ms > 0) {
+      return w.duration_ms;
+    }
     const nextStart = idx + 1 < words.length ? words[idx + 1].time_ms : lineEndMs;
     return Math.max(80, nextStart - w.time_ms);
   }
@@ -864,38 +869,32 @@
       const span = document.createElement("span");
       span.className = "word future";
       span.textContent = w.text;
-      // Trailing space so the words don't collide; if the source already
-      // included spacing in the text (NetEase does this), the extra
-      // whitespace collapses harmlessly.
-      if (i < words.length - 1) {
-        span.textContent += " ";
-      }
       wrap.appendChild(span);
       karaokeWordSpans.push(span);
     }
     $cur.appendChild(wrap);
   }
 
-  function updateKaraokeIdx(newIdx) {
-    if (newIdx === karaokeLastIdx) return;
+  function updateKaraokeProgress(newIdx, progress) {
+    if (
+      newIdx === karaokeLastIdx &&
+      Math.abs(progress - karaokeLastProgress) < 0.005
+    ) return;
     for (let i = 0; i < karaokeWordSpans.length; i++) {
       const span = karaokeWordSpans[i];
-      // Compute class transition. Setting transition-duration BEFORE
-      // changing the class so the new background-position interpolation
-      // picks up the right duration.
       if (i < newIdx) {
-        span.style.transitionDuration = "0ms";
         span.className = "word past";
+        span.style.backgroundPosition = "0% 0%";
       } else if (i === newIdx) {
-        const dur = wordDurationMs(karaokeWordsRef, i, karaokeLineEndMs);
-        span.style.transitionDuration = dur + "ms";
         span.className = "word current";
+        span.style.backgroundPosition = (100 * (1 - progress)) + "% 0%";
       } else {
-        span.style.transitionDuration = "0ms";
         span.className = "word future";
+        span.style.backgroundPosition = "100% 0%";
       }
     }
     karaokeLastIdx = newIdx;
+    karaokeLastProgress = progress;
   }
 
   function clearKaraoke() {
@@ -904,6 +903,7 @@
     karaokeWordsRef = [];
     karaokeLineEndMs = 0;
     karaokeLastIdx = -2;
+    karaokeLastProgress = -1;
   }
 
   // Maps the server-supplied source_label to the simple lower-case keys
@@ -923,12 +923,12 @@
   // rather than relying on the server-supplied cursor. The server polls
   // at 100ms and can lag the desktop overlay's rAF-based cursor by a
   // full line at boundaries. Client-side keeps them in sync.
-  let anticipateMs = 0;
+  function lookupPosMs(t) {
+    return Math.max(0, interpolatedPosMs(t) + timingOffsetMs);
+  }
   function computeCursor(lines, t) {
     if (!lines || lines.length === 0) return -1;
-    let pos = interpolatedPosMs(t);
-    if (anticipateMs >= 0) pos += anticipateMs;
-    else pos = Math.max(0, pos + anticipateMs);
+    const pos = lookupPosMs(t);
     let found = -1;
     for (let i = 0; i < lines.length; i++) {
       if (lines[i].time_ms <= pos) found = i;
@@ -942,7 +942,11 @@
     lastState = s;
     const t = s.track || {};
     const lyr = s.lyrics || {};
-    if (typeof s.anticipate_ms === "number") anticipateMs = s.anticipate_ms;
+    if (typeof s.effective_offset_ms === "number") {
+      timingOffsetMs = s.effective_offset_ms;
+    } else if (typeof s.anticipate_ms === "number") {
+      timingOffsetMs = s.anticipate_ms;
+    }
     const cursor = computeCursor(
       Array.isArray(lyr.lines) ? lyr.lines : [],
       t
@@ -1093,8 +1097,7 @@
       const next = cursor + 1 < lines.length ? lines[cursor + 1] : null;
       setLine($prev, prev ? prev.text : "", false);
       // Karaoke vs flat-text branch for the current line. Karaoke
-      // requires per-word timings (SimpMusic's enhanced LRC, NetEase
-      // word-level data). Lines without `.words` fall back to the
+      // requires valid NetEase YRC timings. Lines without `.words` fall back to the
       // existing flat-text render.
       const curHasWords = cur && Array.isArray(cur.words) && cur.words.length > 0;
       const lineKey = cur ? `${cursor}|${cur.time_ms}|${cur.text}` : "";
@@ -1107,6 +1110,7 @@
           // is no next line.
           karaokeLineEndMs = next ? next.time_ms : (cur.time_ms + 5000);
           karaokeLastIdx = -2;
+          karaokeLastProgress = -1;
           buildKaraokeSpans(cur.words, cursorChanged);
         }
       } else {
@@ -1231,7 +1235,7 @@
     // bails when the index hasn't changed, so per-frame cost is just
     // the loop — no DOM writes on stable frames.
     if (karaokeWordSpans.length > 0 && karaokeWordsRef.length > 0) {
-      const pos = interpolatedPosMs(t);
+      const pos = lookupPosMs(t);
       let idx = -1;
       for (let i = 0; i < karaokeWordsRef.length; i++) {
         if (karaokeWordsRef[i].time_ms <= pos) {
@@ -1240,7 +1244,14 @@
           break;
         }
       }
-      updateKaraokeIdx(idx);
+      const word = idx >= 0 ? karaokeWordsRef[idx] : null;
+      const duration = idx >= 0
+        ? wordDurationMs(karaokeWordsRef, idx, karaokeLineEndMs)
+        : 1;
+      const progress = word
+        ? Math.max(0, Math.min(1, (pos - word.time_ms) / duration))
+        : 0;
+      updateKaraokeProgress(idx, progress);
     }
   }
   tick();

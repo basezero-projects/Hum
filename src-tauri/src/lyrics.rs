@@ -42,6 +42,8 @@ const USER_AGENT: &str =
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WordSpan {
     pub time_ms: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u32>,
     pub text: String,
 }
 
@@ -49,9 +51,9 @@ pub struct WordSpan {
 pub struct LyricLine {
     pub time_ms: u32,
     pub text: String,
-    /// Word-level timing inside this line (when the source provides enhanced
-    /// LRC like SimpMusic's `richSyncLyrics`). None for line-level-only sources
-    /// like LRCLib. Frontend uses this for karaoke-style highlighting.
+    /// Word-level timing inside this line when NetEase provides YRC. None for
+    /// line-level-only sources like LRCLib. The frontend uses this for
+    /// karaoke-style highlighting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub words: Option<Vec<WordSpan>>,
 }
@@ -83,7 +85,7 @@ pub enum CachedLyrics {
 pub struct CurrentLyrics {
     pub track_key: String,
     pub status: Status,
-    /// "memory" | "store" | "lrclib" | "lrclib-search" | "simpmusic" | "netease" | "all-sources" | "error"
+    /// "memory" | "store" | "lrclib" | "lrclib-search" | "netease" | "all-sources" | "error"
     pub source: Option<String>,
     pub line_count: usize,
     pub lines: Vec<LyricLine>,
@@ -91,8 +93,8 @@ pub struct CurrentLyrics {
     /// Per-line translations (when available — NetEase Chinese tlyric).
     pub translation: Option<Vec<LyricLine>>,
     /// Per-source failure strings, populated only when `status == Error`. Each
-    /// entry is prefixed with the source name (`"lrclib: ..."`, `"simpmusic:
-    /// ..."`, `"netease: ..."`) so the dev console can show what went wrong.
+    /// entry is prefixed with the source name (`"lrclib: ..."`,
+    /// `"netease: ..."`) so the dev console can show what went wrong.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub errors: Vec<String>,
     pub track: TrackEcho,
@@ -205,14 +207,17 @@ pub fn start(
             // skip all network resolution and emit Status::Ad. The overlay
             // renders the SYVR promo card instead of lyrics.
             if snap.ad_active {
-                let source: tauri::State<'_, std::sync::Arc<crate::promos::SyvrRemoteSource>> = app.state();
-                let last: tauri::State<'_, std::sync::Arc<tokio::sync::RwLock<Option<String>>>> = app.state();
+                let source: tauri::State<'_, std::sync::Arc<crate::promos::SyvrRemoteSource>> =
+                    app.state();
+                let last: tauri::State<'_, std::sync::Arc<tokio::sync::RwLock<Option<String>>>> =
+                    app.state();
                 let promos_enabled = {
                     let settings: tauri::State<'_, crate::settings::SharedSettings> = app.state();
                     let enabled = settings.read().await.ad_break_promos_enabled;
                     enabled
                 };
-                let outcome = ad_break_outcome(&snap, source.inner(), last.inner(), promos_enabled).await;
+                let outcome =
+                    ad_break_outcome(&snap, source.inner(), last.inner(), promos_enabled).await;
                 let key = outcome.track_key.clone();
                 if key != last_key {
                     last_key = key;
@@ -231,7 +236,14 @@ pub fn start(
             // sees only the browser tab title; the bridge fills in the real
             // song via UIA.
             #[cfg(windows)]
-            let (effective_title, effective_artist, effective_album, bridge_fresh, unreliable_no_bridge, is_video_bridge) = {
+            let (
+                effective_title,
+                effective_artist,
+                effective_album,
+                bridge_fresh,
+                unreliable_no_bridge,
+                is_video_bridge,
+            ) = {
                 let bridge_track = {
                     let b = web_bridge.read().await;
                     b.clone()
@@ -240,9 +252,9 @@ pub fn start(
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as i64)
                     .unwrap_or(0);
-                let fresh = bridge_track
-                    .as_ref()
-                    .is_some_and(|t| now_unix_ms - t.last_seen_unix_ms < 5_000 && !t.title.trim().is_empty());
+                let fresh = bridge_track.as_ref().is_some_and(|t| {
+                    now_unix_ms - t.last_seen_unix_ms < 5_000 && !t.title.trim().is_empty()
+                });
 
                 let (title, artist, album) = if fresh {
                     let t = bridge_track.as_ref().unwrap();
@@ -276,21 +288,34 @@ pub fn start(
                 // Unsupported with the fresh title intact so the frontend
                 // can render the brand-framed view.
                 let is_video = fresh
-                    && bridge_track
-                        .as_ref()
-                        .is_some_and(|t| matches!(
+                    && bridge_track.as_ref().is_some_and(|t| {
+                        matches!(
                             t.source.as_str(),
-                            "netflix-web" | "twitch-web" | "hulu-web"
-                            | "disneyplus-web" | "prime-web" | "max-web"
-                            | "peacock-web" | "paramount-web" | "appletv-web"
-                            | "crunchyroll-web"
-                        ));
+                            "netflix-web"
+                                | "twitch-web"
+                                | "hulu-web"
+                                | "disneyplus-web"
+                                | "prime-web"
+                                | "max-web"
+                                | "peacock-web"
+                                | "paramount-web"
+                                | "appletv-web"
+                                | "crunchyroll-web"
+                        )
+                    });
 
                 (title, artist, album, fresh, unreliable, is_video)
             };
 
             #[cfg(not(windows))]
-            let (effective_title, effective_artist, effective_album, bridge_fresh, unreliable_no_bridge, is_video_bridge) = (
+            let (
+                effective_title,
+                effective_artist,
+                effective_album,
+                bridge_fresh,
+                unreliable_no_bridge,
+                is_video_bridge,
+            ) = (
                 snap.title.clone(),
                 snap.artist.clone(),
                 snap.album.clone(),
@@ -314,7 +339,7 @@ pub fn start(
             // SMTC (track-changed) ~2s before the bridge publishes the
             // normalized "Artist - Song" split. Resolving the raw title now
             // (channel-as-artist, decorated title) misses /api/get and burns
-            // the whole /api/search + strip-retry + SimpMusic + NetEase chain
+            // the whole /api/search + strip-retry + NetEase chain
             // (~20-30s) right before the bridge's clean data lands and
             // re-resolves. Instead, show Fetching and wait up to the grace
             // window for the bridge — the same `youtube_window_shows_track`
@@ -324,8 +349,7 @@ pub fn start(
             // here, so they resolve immediately with no added latency.
             #[cfg(windows)]
             {
-                const BRIDGE_GRACE: std::time::Duration =
-                    std::time::Duration::from_millis(2500);
+                const BRIDGE_GRACE: std::time::Duration = std::time::Duration::from_millis(2500);
                 let is_chromium_source = {
                     let a = snap.source_app_id.as_deref().unwrap_or("").to_lowercase();
                     a.contains("chrome")
@@ -387,7 +411,7 @@ pub fn start(
 
             if unreliable_no_bridge || is_video_bridge {
                 // Short-circuit: emit Unsupported, do NOT hit any network source.
-                // The resolver's normal LRCLib / SimpMusic / NetEase chain would
+                // The resolver's normal LRCLib / NetEase chain would
                 // burn an HTTP round trip on a non-song query and return NotFound
                 // anyway. Skipping it saves the round trip and renders the
                 // honest "<service> — track info unavailable" message.
@@ -480,12 +504,9 @@ async fn resolve_lyrics(
         };
     }
 
-    // 3. Network — try sources in priority order. LRCLib first (largest +
-    // best metadata match), then SimpMusic (often has rich/word-level), then
-    // NetEase (broad coverage incl. translations). A source returning
-    // NotFound proceeds to the next; a transient error also proceeds (we
-    // still want a chance at a hit), but is recorded so the dev console can
-    // surface it.
+    // 3. Network. LRCLib remains the dependable line-level source. NetEase
+    // runs beside it as a bounded enrichment request and wins only when a
+    // strict metadata match supplies valid YRC word timing.
     //
     // Title noise like "(Official Video)" and "[Lyrics]" is stripped via
     // `clean_title`. Artist noise from YouTube — " - Topic" suffixes on auto-
@@ -497,7 +518,7 @@ async fn resolve_lyrics(
     let cleaned_artist = clean_artist(&track.artist);
 
     // Mashups / bootlegs / fan edits don't exist on any canonical lyric
-    // source (LRCLib, SimpMusic, NetEase) — only their constituent songs
+    // source (LRCLib, NetEase), only their constituent songs
     // do. Falling through to those sources means we end up matching a
     // single song's lyrics against the mashup audio, producing
     // confidently-wrong out-of-sync output (the "Twista x Wetter (SW
@@ -524,54 +545,77 @@ async fn resolve_lyrics(
     // a real fetch failure that warrants `Status::Error`.
     let mut any_clean_notfound = false;
 
-    match fetch_lrclib(client, &cleaned_artist, &cleaned_title, &track.album, track.duration_ms)
-        .await
-    {
+    let (lrclib_result, netease_result) = tokio::join!(
+        fetch_lrclib(
+            client,
+            &cleaned_artist,
+            &cleaned_title,
+            &track.album,
+            track.duration_ms,
+        ),
+        tokio::time::timeout(
+            std::time::Duration::from_millis(2_500),
+            fetch_netease(client, &cleaned_artist, &cleaned_title, track.duration_ms),
+        ),
+    );
+
+    let mut netease_line_fallback: Option<(CachedLyrics, String)> = None;
+    match netease_result {
+        Ok(Ok((cached, source))) if !matches!(cached, CachedLyrics::NotFound) => {
+            let has_words = match &cached {
+                CachedLyrics::Synced { lines, .. } => has_valid_word_timing(lines),
+                _ => false,
+            };
+            if has_words {
+                mem.write().await.put(key.to_string(), cached.clone());
+                return Outcome {
+                    cached,
+                    source,
+                    persist: true,
+                    errors: Vec::new(),
+                };
+            }
+            netease_line_fallback = Some((cached, source));
+        }
+        Ok(Ok(_)) => {
+            any_clean_notfound = true;
+        }
+        Ok(Err(e)) => {
+            eprintln!("[lyrics] netease failed for '{cleaned_title}' / '{cleaned_artist}': {e:#}");
+            errors.push(format!("netease: {e:#}"));
+        }
+        Err(_) => {
+            errors.push("netease: word timing request timed out".to_string());
+        }
+    }
+
+    match lrclib_result {
         Ok((cached, source)) if !matches!(cached, CachedLyrics::NotFound) => {
             mem.write().await.put(key.to_string(), cached.clone());
-            return Outcome { cached, source, persist: true, errors: Vec::new() };
+            return Outcome {
+                cached,
+                source,
+                persist: true,
+                errors: Vec::new(),
+            };
         }
         Ok(_) => {
             any_clean_notfound = true;
         }
         Err(e) => {
-            eprintln!(
-                "[lyrics] lrclib failed for '{cleaned_title}' / '{cleaned_artist}': {e:#}"
-            );
+            eprintln!("[lyrics] lrclib failed for '{cleaned_title}' / '{cleaned_artist}': {e:#}");
             errors.push(format!("lrclib: {e:#}"));
         }
     }
 
-    match fetch_simpmusic(client, &cleaned_artist, &cleaned_title, track.duration_ms).await {
-        Ok((cached, source)) if !matches!(cached, CachedLyrics::NotFound) => {
-            mem.write().await.put(key.to_string(), cached.clone());
-            return Outcome { cached, source, persist: true, errors: Vec::new() };
-        }
-        Ok(_) => {
-            any_clean_notfound = true;
-        }
-        Err(e) => {
-            eprintln!(
-                "[lyrics] simpmusic failed for '{cleaned_title}' / '{cleaned_artist}': {e:#}"
-            );
-            errors.push(format!("simpmusic: {e:#}"));
-        }
-    }
-
-    match fetch_netease(client, &cleaned_artist, &cleaned_title, track.duration_ms).await {
-        Ok((cached, source)) if !matches!(cached, CachedLyrics::NotFound) => {
-            mem.write().await.put(key.to_string(), cached.clone());
-            return Outcome { cached, source, persist: true, errors: Vec::new() };
-        }
-        Ok(_) => {
-            any_clean_notfound = true;
-        }
-        Err(e) => {
-            eprintln!(
-                "[lyrics] netease failed for '{cleaned_title}' / '{cleaned_artist}': {e:#}"
-            );
-            errors.push(format!("netease: {e:#}"));
-        }
+    if let Some((cached, source)) = netease_line_fallback {
+        mem.write().await.put(key.to_string(), cached.clone());
+        return Outcome {
+            cached,
+            source,
+            persist: true,
+            errors: Vec::new(),
+        };
     }
 
     if any_clean_notfound {
@@ -718,7 +762,11 @@ async fn ad_break_outcome(
         None
     };
     CurrentLyrics {
-        track_key: format!("ad|{}|{}", snap.source_app_id.clone().unwrap_or_default(), snap.duration_ms),
+        track_key: format!(
+            "ad|{}|{}",
+            snap.source_app_id.clone().unwrap_or_default(),
+            snap.duration_ms
+        ),
         status: Status::Ad,
         source: None,
         line_count: 0,
@@ -919,15 +967,10 @@ async fn try_get_lrclib(
 /// `try_search_lrclib` wrapper here that did the retry on empty-records
 /// only; moved to `fetch_lrclib` so it also fires when records came back
 /// but pick_best filtered them all out.
-async fn try_search_lrclib_once(
-    client: &reqwest::Client,
-    title: &str,
-) -> Result<Vec<LrcRecord>> {
-    let url = reqwest::Url::parse_with_params(
-        "https://lrclib.net/api/search",
-        &[("track_name", title)],
-    )
-    .context("build /api/search url")?;
+async fn try_search_lrclib_once(client: &reqwest::Client, title: &str) -> Result<Vec<LrcRecord>> {
+    let url =
+        reqwest::Url::parse_with_params("https://lrclib.net/api/search", &[("track_name", title)])
+            .context("build /api/search url")?;
 
     let resp = client.get(url).send().await.context("GET /api/search")?;
     let status = resp.status();
@@ -938,8 +981,7 @@ async fn try_search_lrclib_once(
         anyhow::bail!("/api/search returned {status}");
     }
     let body = resp.text().await.context("read /api/search body")?;
-    let records: Vec<LrcRecord> =
-        serde_json::from_str(&body).context("parse /api/search json")?;
+    let records: Vec<LrcRecord> = serde_json::from_str(&body).context("parse /api/search json")?;
     Ok(records)
 }
 
@@ -963,9 +1005,8 @@ async fn try_search_lrclib_once(
 /// `"T-Pain - Bartender ft. Akon"` → `"Bartender"` now resolve correctly.
 fn strip_youtube_noise(title: &str) -> String {
     static FEAT_RE: OnceLock<Regex> = OnceLock::new();
-    let feat_re = FEAT_RE.get_or_init(|| {
-        Regex::new(r"(?i)\s+(?:feat\.?|ft\.?|featuring)\s+.+$").unwrap()
-    });
+    let feat_re =
+        FEAT_RE.get_or_init(|| Regex::new(r"(?i)\s+(?:feat\.?|ft\.?|featuring)\s+.+$").unwrap());
 
     let mut s = feat_re.replace(title, "").to_string();
 
@@ -1102,8 +1143,10 @@ fn pick_best(
                 // LRCLib uploader did. Score 0-50 based on overlap fraction.
                 let user_tokens: std::collections::HashSet<&str> =
                     title_l.split_whitespace().filter(|t| t.len() > 1).collect();
-                let rec_tokens: std::collections::HashSet<&str> =
-                    rec_title.split_whitespace().filter(|t| t.len() > 1).collect();
+                let rec_tokens: std::collections::HashSet<&str> = rec_title
+                    .split_whitespace()
+                    .filter(|t| t.len() > 1)
+                    .collect();
                 if user_tokens.is_empty() || rec_tokens.is_empty() {
                     -1
                 } else {
@@ -1171,7 +1214,10 @@ fn to_cached_ref(rec: &LrcRecord) -> CachedLyrics {
     if let Some(s) = rec.synced_lyrics.as_deref() {
         let lines = parse_lrc(s);
         if !lines.is_empty() {
-            return CachedLyrics::Synced { lines, translation: None };
+            return CachedLyrics::Synced {
+                lines,
+                translation: None,
+            };
         }
     }
     if let Some(p) = rec.plain_lyrics.as_ref() {
@@ -1189,7 +1235,10 @@ fn to_cached(rec: LrcRecord) -> CachedLyrics {
     if let Some(s) = rec.synced_lyrics.as_deref() {
         let lines = parse_lrc(s);
         if !lines.is_empty() {
-            return CachedLyrics::Synced { lines, translation: None };
+            return CachedLyrics::Synced {
+                lines,
+                translation: None,
+            };
         }
     }
     if let Some(p) = rec.plain_lyrics {
@@ -1201,205 +1250,15 @@ fn to_cached(rec: LrcRecord) -> CachedLyrics {
     CachedLyrics::NotFound
 }
 
-// ─── SimpMusic fallback ────────────────────────────────────────────────────
-//
-// SimpMusic's API is YouTube-videoId-centric. It exposes /v1/search/title
-// which returns a list of records matching the title. We filter client-side
-// by artist similarity and duration ±5s, then prefer richSyncLyrics (word-
-// level enhanced LRC) over plain syncedLyrics (line-level) when both exist.
-// 30 req/min IP rate limit, no auth for read paths.
-
-#[derive(Deserialize, Debug, Clone)]
-struct SimpMusicWrapper {
-    #[serde(default)]
-    data: Vec<SimpMusicRecord>,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-struct SimpMusicRecord {
-    #[serde(rename = "songTitle", default)]
-    song_title: String,
-    #[serde(rename = "artistName", default)]
-    artist_name: String,
-    #[serde(rename = "durationSeconds", default)]
-    duration_seconds: i64,
-    #[serde(rename = "plainLyric", default)]
-    plain_lyric: String,
-    #[serde(rename = "syncedLyrics", default)]
-    synced_lyrics: String,
-    #[serde(rename = "richSyncLyrics", default)]
-    rich_sync_lyrics: String,
-}
-
-async fn fetch_simpmusic(
-    client: &reqwest::Client,
-    artist: &str,
-    title: &str,
-    duration_ms: u64,
-) -> Result<(CachedLyrics, String)> {
-    let url = reqwest::Url::parse_with_params(
-        "https://api-lyrics.simpmusic.org/v1/search/title",
-        &[("title", title), ("limit", "10")],
-    )
-    .context("build simpmusic url")?;
-
-    let resp = client.get(url).send().await.context("GET simpmusic")?;
-    let status = resp.status();
-    if !status.is_success() {
-        if status.is_client_error() {
-            return Ok((CachedLyrics::NotFound, "simpmusic".into()));
-        }
-        anyhow::bail!("simpmusic returned {status}");
-    }
-    let body = resp.text().await.context("read simpmusic body")?;
-    let parsed: SimpMusicWrapper =
-        serde_json::from_str(&body).context("parse simpmusic json")?;
-
-    let chosen = pick_best_simpmusic(parsed.data, title, artist, duration_ms);
-    let Some(rec) = chosen else {
-        return Ok((CachedLyrics::NotFound, "simpmusic".into()));
-    };
-
-    // Prefer rich (word-level) when present + parseable, else line-level.
-    if !rec.rich_sync_lyrics.trim().is_empty() {
-        let lines = parse_enhanced_lrc(&rec.rich_sync_lyrics);
-        if !lines.is_empty() {
-            return Ok((
-                CachedLyrics::Synced { lines, translation: None },
-                "simpmusic".into(),
-            ));
-        }
-    }
-    if !rec.synced_lyrics.trim().is_empty() {
-        let lines = parse_lrc(&rec.synced_lyrics);
-        if !lines.is_empty() {
-            return Ok((
-                CachedLyrics::Synced { lines, translation: None },
-                "simpmusic".into(),
-            ));
-        }
-    }
-    if !rec.plain_lyric.trim().is_empty() {
-        return Ok((CachedLyrics::Plain { text: rec.plain_lyric }, "simpmusic".into()));
-    }
-    Ok((CachedLyrics::NotFound, "simpmusic".into()))
-}
-
-/// Score-based picker mirroring `pick_best` for LRCLib. Previously this
-/// only filtered by artist + ±5s duration and IGNORED the title entirely,
-/// which meant SimpMusic's broad title search returned the first record
-/// within ±5s of the mashup audio's duration — for a "Twista x Wetter
-/// (SW Mashup)" video at 227s, that happened to be Twista's "Wetter" at
-/// 230s, and we surfaced its lyrics confidently misaligned against the
-/// mashup playback. Same scoring shape as LRCLib but with rich-sync as
-/// the highest-priority bonus since SimpMusic's edge is word-level
-/// timing data.
-fn pick_best_simpmusic(
-    records: Vec<SimpMusicRecord>,
-    title: &str,
-    artist: &str,
-    requested_duration_ms: u64,
-) -> Option<SimpMusicRecord> {
-    let title_l = normalize_for_match(title);
-    let artist_l = normalize_for_match(artist);
-    let requested_secs = (requested_duration_ms / 1000) as i64;
-
-    const THRESHOLD: i64 = 80;
-
-    let mut scored: Vec<(i64, SimpMusicRecord)> = records
-        .into_iter()
-        .map(|r| {
-            let rec_title = normalize_for_match(&r.song_title);
-            let rec_artist = normalize_for_match(&r.artist_name);
-
-            // Title score — same shape as LRCLib's pick_best.
-            let title_score: i64 = if rec_title.is_empty() {
-                -1
-            } else if rec_title == title_l {
-                100
-            } else if rec_title.contains(&title_l) || title_l.contains(&rec_title) {
-                let shorter = rec_title.len().min(title_l.len()) as f64;
-                let longer = rec_title.len().max(title_l.len()) as f64;
-                let ratio = if longer > 0.0 { shorter / longer } else { 1.0 };
-                (60.0 + 30.0 * ratio) as i64
-            } else {
-                let user_tokens: std::collections::HashSet<&str> =
-                    title_l.split_whitespace().filter(|t| t.len() > 1).collect();
-                let rec_tokens: std::collections::HashSet<&str> =
-                    rec_title.split_whitespace().filter(|t| t.len() > 1).collect();
-                if user_tokens.is_empty() || rec_tokens.is_empty() {
-                    -1
-                } else {
-                    let shared = user_tokens.intersection(&rec_tokens).count();
-                    let min_set = user_tokens.len().min(rec_tokens.len());
-                    if shared == 0 {
-                        -1
-                    } else {
-                        let frac = shared as f64 / min_set as f64;
-                        (20.0 + 30.0 * frac) as i64
-                    }
-                }
-            };
-
-            if title_score < 0 {
-                return (-1_000, r);
-            }
-
-            let duration_score: i64 = if requested_secs == 0 || r.duration_seconds == 0 {
-                15
-            } else {
-                let diff = (r.duration_seconds - requested_secs).abs();
-                match diff {
-                    0..=5 => 30,
-                    6..=10 => 22,
-                    11..=20 => 12,
-                    21..=30 => 4,
-                    _ => -50,
-                }
-            };
-
-            let artist_score: i64 = if artist_l.is_empty() || rec_artist.is_empty() {
-                0
-            } else if rec_artist == artist_l {
-                20
-            } else if rec_artist.contains(&artist_l) || artist_l.contains(&rec_artist) {
-                10
-            } else {
-                0
-            };
-
-            // SimpMusic-specific lyric-quality bonus: rich (word-level)
-            // beats plain synced beats plain text. Stronger than LRCLib's
-            // synced bonus because SimpMusic's whole reason for being in
-            // the cascade is the rich timing data.
-            let lyric_bonus = if !r.rich_sync_lyrics.trim().is_empty() {
-                25
-            } else if !r.synced_lyrics.trim().is_empty() {
-                20
-            } else if !r.plain_lyric.trim().is_empty() {
-                5
-            } else {
-                0
-            };
-
-            let total = title_score + duration_score + artist_score + lyric_bonus;
-            (total, r)
-        })
-        .filter(|(score, _)| *score >= THRESHOLD)
-        .collect();
-
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
-    scored.into_iter().next().map(|(_, r)| r)
-}
-
 // ─── NetEase fallback ──────────────────────────────────────────────────────
 //
 // NetEase Cloud Music's undocumented public API. Two-step:
 //   1. POST /api/search/get with form body s=query, type=1 (songs) → song id
-//   2. GET /api/song/lyric?id=X&lv=1&kv=1&tv=-1 → { lrc.lyric, tlyric.lyric }
+//   2. GET /api/song/lyric?id=X&lv=1&kv=1&tv=-1&yv=-1
+//      returns line lyrics, translation, and optional YRC word timing.
 //
 // Cookie jar must be enabled (NMTID handshake). Some licensed tracks return
-// empty `lrc.lyric` outside CN — treat that as NotFound.
+// no YRC outside CN. Those tracks stay on LRCLib line timing.
 
 const NETEASE_HEADERS: &[(&str, &str)] = &[
     ("Referer", "https://music.163.com"),
@@ -1445,6 +1304,7 @@ struct NeteaseLyricResp {
     code: i32,
     lrc: Option<NeteaseLyricBody>,
     tlyric: Option<NeteaseLyricBody>,
+    yrc: Option<NeteaseLyricBody>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -1464,8 +1324,8 @@ async fn fetch_netease(
     // problematic to enable cleanly; sidestep by manually building the urlen-
     // coded body via Url::query_pairs_mut (always available, no extra dep).
     let body = {
-        let mut u = reqwest::Url::parse("https://example.invalid/")
-            .context("build form-body url")?;
+        let mut u =
+            reqwest::Url::parse("https://example.invalid/").context("build form-body url")?;
         u.query_pairs_mut()
             .append_pair("s", &query)
             .append_pair("type", "1")
@@ -1507,6 +1367,7 @@ async fn fetch_netease(
             ("lv", "1"),
             ("kv", "1"),
             ("tv", "-1"),
+            ("yv", "-1"),
         ],
     )
     .context("build netease lyric url")?;
@@ -1525,16 +1386,13 @@ async fn fetch_netease(
     let body = resp.text().await.context("read netease lyric body")?;
     let parsed: NeteaseLyricResp =
         serde_json::from_str(&body).context("parse netease lyric json")?;
+    let cached = cached_from_netease_response(parsed);
+    Ok((cached, "netease".into()))
+}
+
+fn cached_from_netease_response(parsed: NeteaseLyricResp) -> CachedLyrics {
     if parsed.code != 200 {
-        return Ok((CachedLyrics::NotFound, "netease".into()));
-    }
-    let lrc = parsed.lrc.map(|l| l.lyric).unwrap_or_default();
-    if lrc.trim().is_empty() {
-        return Ok((CachedLyrics::NotFound, "netease".into()));
-    }
-    let lines = parse_lrc(&lrc);
-    if lines.is_empty() {
-        return Ok((CachedLyrics::NotFound, "netease".into()));
+        return CachedLyrics::NotFound;
     }
     let translation = parsed
         .tlyric
@@ -1542,7 +1400,25 @@ async fn fetch_netease(
         .filter(|t| !t.trim().is_empty())
         .map(|t| parse_lrc(&t))
         .filter(|t| !t.is_empty());
-    Ok((CachedLyrics::Synced { lines, translation }, "netease".into()))
+    let word_lines = parsed
+        .yrc
+        .as_ref()
+        .map(|body| parse_yrc(&body.lyric))
+        .unwrap_or_default();
+    if has_valid_word_timing(&word_lines) {
+        return CachedLyrics::Synced {
+            lines: word_lines,
+            translation,
+        };
+    }
+
+    let lrc = parsed.lrc.map(|body| body.lyric).unwrap_or_default();
+    let lines = parse_lrc(&lrc);
+    if lines.is_empty() {
+        CachedLyrics::NotFound
+    } else {
+        CachedLyrics::Synced { lines, translation }
+    }
 }
 
 fn pick_best_netease(
@@ -1551,30 +1427,22 @@ fn pick_best_netease(
     title: &str,
     requested_duration_ms: u64,
 ) -> Option<NeteaseSong> {
-    let artist_l = artist.trim().to_lowercase();
-    let title_l = title.trim().to_lowercase();
+    let artist_l = normalize_for_match(artist);
+    let title_l = normalize_for_match(title);
     let tolerance_ms: i64 = 5_000;
 
     let mut candidates: Vec<NeteaseSong> = songs
         .into_iter()
         .filter(|s| {
-            let s_title = s.name.trim().to_lowercase();
-            // Equivalent to `!empty && !(contains_a || contains_b)` —
-            // De Morgan's: skip when title is present AND doesn't bidirectional-
-            // substring-match. Empty titles pass through this gate and get
-            // filtered by the artist/duration gates further down.
-            if !(s_title.is_empty() || s_title.contains(&title_l) || title_l.contains(&s_title)) {
+            let s_title = normalize_for_match(&s.name);
+            if title_l.is_empty() || s_title != title_l {
                 return false;
             }
             if !artist_l.is_empty() {
-                let any_artist_match = s
-                    .artists
-                    .iter()
-                    .any(|a| {
-                        let a_l = a.name.trim().to_lowercase();
-                        !a_l.is_empty()
-                            && (a_l.contains(&artist_l) || artist_l.contains(&a_l))
-                    });
+                let any_artist_match = s.artists.iter().any(|a| {
+                    let a_l = normalize_for_match(&a.name);
+                    !a_l.is_empty() && a_l == artist_l
+                });
                 if !any_artist_match {
                     return false;
                 }
@@ -1703,7 +1571,9 @@ pub fn clean_title(title: &str) -> String {
     //    touched these, so the quoted suffix tanked the title score in
     //    `pick_best`'s length-ratio path. Stripping first lets the rest
     //    of the pipeline see the real song title.
-    let cleaned = trailing_quote_stripper().replace(&cleaned, "$1").to_string();
+    let cleaned = trailing_quote_stripper()
+        .replace(&cleaned, "$1")
+        .to_string();
     // 3. Strip parenthetical / bracketed noise tags.
     let cleaned = cleaner().replace_all(&cleaned, "").to_string();
     // 4. Strip trailing pipe-separated tags.
@@ -1718,7 +1588,9 @@ pub fn clean_title(title: &str) -> String {
     //    /api/search query match canonical records, and lets the retry path
     //    (`strip_youtube_noise`) see a clean title before stripping the
     //    leading `"Shaggy - "` channel prefix.
-    let cleaned = bare_trailing_tag_cleaner().replace(&cleaned, "$1").to_string();
+    let cleaned = bare_trailing_tag_cleaner()
+        .replace(&cleaned, "$1")
+        .to_string();
     // 6. Strip leading/trailing decorative symbols + emoji that lyric channels
     //    sprinkle on titles (e.g. "Hanging By A Moment - Lifehouse 🎵", "♪",
     //    "►", "⭐"). Left on, the trailing 🎵 rode through every cleaner and
@@ -1741,7 +1613,7 @@ fn strip_decorative_symbols(s: &str) -> String {
             || (0x2660..=0x2667).contains(&u) // card suits
             || (0x2669..=0x266F).contains(&u) // music notes ♩ ♪ ♫ ♬
             || (0xFE00..=0xFE0F).contains(&u) // variation selectors
-            || u == 0x200D                    // zero-width joiner
+            || u == 0x200D // zero-width joiner
     };
     s.trim_matches(|c: char| is_decoration(c) || c.is_whitespace())
         .to_string()
@@ -1879,6 +1751,109 @@ pub fn clean_artist(artist: &str) -> String {
 
 // ─── LRC parser ────────────────────────────────────────────────────────────
 
+/// Parse NetEase YRC lines of the form
+/// `[lineStart,lineDuration](wordStart,wordDuration,0)word...`.
+/// Token text is copied byte-for-byte so spaces and punctuation stay exactly
+/// where the provider put them. A malformed timing token rejects only its
+/// line, allowing other valid lines in the response to remain usable.
+pub fn parse_yrc(s: &str) -> Vec<LyricLine> {
+    static LINE_RE: OnceLock<Regex> = OnceLock::new();
+    static WORD_RE: OnceLock<Regex> = OnceLock::new();
+    static BROKEN_MARKER_RE: OnceLock<Regex> = OnceLock::new();
+    let line_re = LINE_RE.get_or_init(|| Regex::new(r"^\[(\d+),(\d+)\]").unwrap());
+    let word_re = WORD_RE.get_or_init(|| Regex::new(r"\((\d+),(\d+),0\)").unwrap());
+    let broken_marker_re = BROKEN_MARKER_RE.get_or_init(|| Regex::new(r"\(\d+,").unwrap());
+
+    let mut lines = Vec::new();
+    for raw in s.lines() {
+        let Some(line_cap) = line_re.captures(raw) else {
+            continue;
+        };
+        let Some(line_marker) = line_cap.get(0) else {
+            continue;
+        };
+        let Ok(line_start) = line_cap[1].parse::<u32>() else {
+            continue;
+        };
+        let Ok(line_duration) = line_cap[2].parse::<u32>() else {
+            continue;
+        };
+        if line_duration == 0 {
+            continue;
+        }
+
+        let rest = &raw[line_marker.end()..];
+        let word_caps: Vec<_> = word_re.captures_iter(rest).collect();
+        if word_caps.is_empty() || word_caps[0].get(0).is_none_or(|m| m.start() != 0) {
+            continue;
+        }
+
+        let line_end = line_start.saturating_add(line_duration);
+        let mut words = Vec::with_capacity(word_caps.len());
+        let mut text = String::new();
+        let mut previous_start: Option<u32> = None;
+        let mut valid = true;
+
+        for (index, cap) in word_caps.iter().enumerate() {
+            let marker = cap.get(0).expect("word regex always has a full match");
+            let text_end = word_caps
+                .get(index + 1)
+                .and_then(|next| next.get(0))
+                .map_or(rest.len(), |next| next.start());
+            let token_text = &rest[marker.end()..text_end];
+            let Ok(word_start) = cap[1].parse::<u32>() else {
+                valid = false;
+                break;
+            };
+            let Ok(word_duration) = cap[2].parse::<u32>() else {
+                valid = false;
+                break;
+            };
+
+            if token_text.is_empty()
+                || broken_marker_re.is_match(token_text)
+                || word_duration == 0
+                || word_start < line_start
+                || word_start > line_end.saturating_add(250)
+                || word_start.saturating_add(word_duration) > line_end.saturating_add(1_000)
+                || previous_start.is_some_and(|previous| word_start < previous)
+            {
+                valid = false;
+                break;
+            }
+
+            text.push_str(token_text);
+            words.push(WordSpan {
+                time_ms: word_start,
+                duration_ms: Some(word_duration),
+                text: token_text.to_string(),
+            });
+            previous_start = Some(word_start);
+        }
+
+        if valid && !words.is_empty() {
+            lines.push(LyricLine {
+                time_ms: line_start,
+                text,
+                words: Some(words),
+            });
+        }
+    }
+    lines.sort_by_key(|line| line.time_ms);
+    lines
+}
+
+fn has_valid_word_timing(lines: &[LyricLine]) -> bool {
+    lines.iter().any(|line| {
+        line.words.as_ref().is_some_and(|words| {
+            !words.is_empty()
+                && words.iter().all(|word| {
+                    word.duration_ms.is_some_and(|duration| duration > 0) && !word.text.is_empty()
+                })
+        })
+    })
+}
+
 fn ts_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| Regex::new(r"^\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]").unwrap())
@@ -1902,7 +1877,11 @@ pub fn parse_lrc(s: &str) -> Vec<LyricLine> {
                     _ => n,
                 }
             });
-            times.push(mm.saturating_mul(60_000).saturating_add(ss * 1_000).saturating_add(frac_ms));
+            times.push(
+                mm.saturating_mul(60_000)
+                    .saturating_add(ss * 1_000)
+                    .saturating_add(frac_ms),
+            );
             let consumed = cap[0].len();
             rest = &rest[consumed..];
         }
@@ -1911,114 +1890,27 @@ pub fn parse_lrc(s: &str) -> Vec<LyricLine> {
         }
         let text = rest.trim().to_string();
         for t in times {
-            lines.push(LyricLine { time_ms: t, text: text.clone(), words: None });
+            lines.push(LyricLine {
+                time_ms: t,
+                text: text.clone(),
+                words: None,
+            });
         }
     }
     lines.sort_by_key(|l| l.time_ms);
     lines
-}
-
-// Parses SimpMusic-style enhanced LRC, where each line is a sequence of
-// `<mm:ss.xx>word` segments (optionally prefixed with a `[mm:ss.xx]` line
-// timestamp). Produces line-level entries with attached word-level timing.
-//
-// Example input line:
-//   `[00:08.10]<00:08.10>Fonsi <00:08.33>DY`
-// or
-//   `<00:08.10>Fonsi <00:08.33>DY`
-pub fn parse_enhanced_lrc(s: &str) -> Vec<LyricLine> {
-    let line_re = ts_re();
-    let word_re: &OnceLock<Regex> = {
-        static R: OnceLock<Regex> = OnceLock::new();
-        &R
-    };
-    let word_re = word_re.get_or_init(|| {
-        Regex::new(r"<(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?>").unwrap()
-    });
-
-    let mut lines: Vec<LyricLine> = Vec::new();
-    for raw in s.lines() {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let mut rest = trimmed;
-
-        // Optional leading line-level timestamp
-        let line_time: Option<u32> = if let Some(cap) = line_re.captures(rest) {
-            let mm: u32 = cap[1].parse().unwrap_or(0);
-            let ss: u32 = cap[2].parse().unwrap_or(0);
-            let frac: u32 = cap.get(3).map_or(0, |m| frac_to_ms(m.as_str()));
-            let consumed = cap[0].len();
-            rest = &rest[consumed..];
-            Some(mm.saturating_mul(60_000).saturating_add(ss * 1_000).saturating_add(frac))
-        } else {
-            None
-        };
-
-        // Walk through `<time>word <time>word` segments.
-        let mut words: Vec<WordSpan> = Vec::new();
-        let mut text_acc = String::new();
-        let mut cursor = rest;
-        while let Some(cap) = word_re.captures(cursor) {
-            let m = cap.get(0).unwrap();
-            let start = m.start();
-            let end = m.end();
-            // Any text BEFORE this marker (rare, usually a line-level prefix
-            // word) — append to accumulator at the prior word time, or as
-            // text-only if no prior word exists.
-            if start > 0 {
-                let prefix = &cursor[..start];
-                if !prefix.is_empty() {
-                    text_acc.push_str(prefix);
-                    if let Some(last) = words.last_mut() {
-                        last.text.push_str(prefix);
-                    }
-                }
-            }
-            let mm: u32 = cap[1].parse().unwrap_or(0);
-            let ss: u32 = cap[2].parse().unwrap_or(0);
-            let frac: u32 = cap.get(3).map_or(0, |m| frac_to_ms(m.as_str()));
-            let t = mm.saturating_mul(60_000).saturating_add(ss * 1_000).saturating_add(frac);
-
-            // Word text = chars between this marker and the next `<` (or eol).
-            let after = &cursor[end..];
-            let next_lt = after.find('<').unwrap_or(after.len());
-            let word_text = after[..next_lt].to_string();
-            text_acc.push_str(&word_text);
-            words.push(WordSpan { time_ms: t, text: word_text });
-
-            cursor = &after[next_lt..];
-        }
-
-        if words.is_empty() {
-            continue;
-        }
-        let line_t = line_time.unwrap_or_else(|| words[0].time_ms);
-        lines.push(LyricLine {
-            time_ms: line_t,
-            text: text_acc.trim().to_string(),
-            words: Some(words),
-        });
-    }
-    lines.sort_by_key(|l| l.time_ms);
-    lines
-}
-
-fn frac_to_ms(s: &str) -> u32 {
-    let n: u32 = s.parse().unwrap_or(0);
-    match s.len() {
-        1 => n * 100,
-        2 => n * 10,
-        _ => n,
-    }
 }
 
 // ─── Cache key ─────────────────────────────────────────────────────────────
 
 fn cache_key(artist: &str, title: &str, duration_ms: u64) -> String {
     let dur_secs = duration_ms / 1000;
-    format!("{}\x1f{}\x1f{}", normalize(artist), normalize(title), dur_secs)
+    format!(
+        "word-timing-v2\x1f{}\x1f{}\x1f{}",
+        normalize(artist),
+        normalize(title),
+        dur_secs
+    )
 }
 
 fn normalize(s: &str) -> String {
@@ -2052,8 +1944,12 @@ fn write_store(app: &AppHandle, key: &str, cached: &CachedLyrics) {
     if matches!(cached, CachedLyrics::NotFound | CachedLyrics::Unsupported) {
         return;
     }
-    let Ok(store) = app.store(STORE_FILE) else { return };
-    let Ok(v) = serde_json::to_value(cached) else { return };
+    let Ok(store) = app.store(STORE_FILE) else {
+        return;
+    };
+    let Ok(v) = serde_json::to_value(cached) else {
+        return;
+    };
     store.set(key, v);
     let _ = store.save();
 }
@@ -2070,13 +1966,19 @@ mod tests {
         assert_eq!(clean_title("Apocalypse (Official Video)"), "Apocalypse");
         assert_eq!(clean_title("Apocalypse [Lyrics]"), "Apocalypse");
         assert_eq!(clean_title("Hey Jude (Remastered 2009)"), "Hey Jude");
-        assert_eq!(clean_title("Sweet Caroline (feat. Someone)"), "Sweet Caroline");
+        assert_eq!(
+            clean_title("Sweet Caroline (feat. Someone)"),
+            "Sweet Caroline"
+        );
         assert_eq!(clean_title("Test Song [HD] (4K)"), "Test Song");
         assert_eq!(clean_title("Track Name (Live at Wembley)"), "Track Name");
         assert_eq!(clean_title("Plain Title"), "Plain Title");
 
         // ── decorative emoji / symbol stripping (lyric-channel chrome) ────
-        assert_eq!(clean_title("Hanging By A Moment - Lifehouse (Lyrics) 🎵"), "Hanging By A Moment - Lifehouse");
+        assert_eq!(
+            clean_title("Hanging By A Moment - Lifehouse (Lyrics) 🎵"),
+            "Hanging By A Moment - Lifehouse"
+        );
         assert_eq!(clean_title("Stay 🎶"), "Stay");
         assert_eq!(clean_title("♪ Dreams ♪"), "Dreams");
         assert_eq!(clean_title("► Let Her Go"), "Let Her Go");
@@ -2103,7 +2005,10 @@ mod tests {
         );
         assert_eq!(clean_title("Song (Official 8K Video)"), "Song");
         assert_eq!(clean_title("Track (Official 60fps Music Video)"), "Track");
-        assert_eq!(clean_title("Song (Official Animated 4K Music Video)"), "Song");
+        assert_eq!(
+            clean_title("Song (Official Animated 4K Music Video)"),
+            "Song"
+        );
         assert_eq!(clean_title("X [Official 1080p HD Music Video]"), "X");
         assert_eq!(clean_title("Y (Live 4K UHD Audio)"), "Y");
         assert_eq!(clean_title("Z (Official Animated Visualizer)"), "Z");
@@ -2117,7 +2022,9 @@ mod tests {
         // failure: "Beautiful Things (Lyrics) \"i want you i need you oh
         // god\"" — quoted suffix survived, length ratio tanked the score.
         assert_eq!(
-            clean_title("Benson Boone - Beautiful Things (Lyrics) \"i want you i need you oh god\""),
+            clean_title(
+                "Benson Boone - Beautiful Things (Lyrics) \"i want you i need you oh god\""
+            ),
             "Benson Boone - Beautiful Things"
         );
         assert_eq!(
@@ -2142,7 +2049,10 @@ mod tests {
         // The artist `Macklemore - ` lives in the artist field separately;
         // the title shown here is just the song's quoted name.
         assert_eq!(clean_title("\"Same Love\""), "\"Same Love\"");
-        assert_eq!(clean_title("\u{201C}Same Love\u{201D}"), "\u{201C}Same Love\u{201D}");
+        assert_eq!(
+            clean_title("\u{201C}Same Love\u{201D}"),
+            "\u{201C}Same Love\u{201D}"
+        );
 
         // ── v0.10.21 — combined: cleaner runs AFTER quote-strip ──────────
         //
@@ -2287,42 +2197,124 @@ mod tests {
     }
 
     #[test]
-    fn parses_enhanced_lrc_word_level() {
-        // SimpMusic richSyncLyrics format — `<mm:ss.xx>word` segments
-        let s = "<00:01.00>Hello <00:01.50>world\n<00:03.00>Second <00:03.40>line";
-        let lines = parse_enhanced_lrc(s);
-        assert_eq!(lines.len(), 2);
+    fn parses_yrc_with_source_durations() {
+        let yrc = "[1000,1800](1000,400,0)Hello (1400,300,0)there(1700,1100,0)!";
+        let lines = parse_yrc(yrc);
+        assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].time_ms, 1_000);
-        assert_eq!(lines[0].text, "Hello world");
+        assert_eq!(lines[0].text, "Hello there!");
         let words = lines[0].words.as_ref().unwrap();
-        assert_eq!(words.len(), 2);
-        assert_eq!(words[0].time_ms, 1_000);
-        assert_eq!(words[0].text, "Hello ");
-        assert_eq!(words[1].time_ms, 1_500);
-        assert_eq!(words[1].text, "world");
-        assert_eq!(lines[1].time_ms, 3_000);
-        assert_eq!(lines[1].text, "Second line");
+        assert_eq!(words.len(), 3);
+        assert_eq!(words[0].duration_ms, Some(400));
+        assert_eq!(words[1].time_ms, 1_400);
+        assert_eq!(words[2].text, "!");
+        assert_eq!(words[2].duration_ms, Some(1_100));
     }
 
     #[test]
-    fn parses_enhanced_lrc_with_line_prefix() {
-        // Some sources include a leading [mm:ss.xx] line timestamp before
-        // the per-word `<mm:ss.xx>` markers.
-        let s = "[00:08.10]<00:08.10>Fonsi <00:08.33>DY";
-        let lines = parse_enhanced_lrc(s);
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].time_ms, 8_100);
+    fn yrc_preserves_token_spacing_and_punctuation() {
+        let yrc = "[5000,1400](5000,300,0)Wait(5300,200,0),  (5500,500,0)what(6000,400,0)?";
+        let lines = parse_yrc(yrc);
         let words = lines[0].words.as_ref().unwrap();
-        assert_eq!(words.len(), 2);
-        assert_eq!(words[1].time_ms, 8_330);
+        assert_eq!(words[0].text, "Wait");
+        assert_eq!(words[1].text, ",  ");
+        assert_eq!(words[2].text, "what");
+        assert_eq!(words[3].text, "?");
+        assert_eq!(lines[0].text, "Wait,  what?");
     }
 
     #[test]
-    fn enhanced_lrc_skips_empty_lines() {
-        let s = "\n\n<00:01.00>only line\n\n";
-        let lines = parse_enhanced_lrc(s);
+    fn yrc_skips_malformed_tokens_but_keeps_valid_lines() {
+        let yrc = concat!(
+            "[1000,1000](1000,400,0)Good(1400,bad,0) line\n",
+            "[3000,1000](3000,500,0)Still (3500,500,0)valid",
+        );
+        let lines = parse_yrc(yrc);
         assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].time_ms, 1_000);
+        assert_eq!(lines[0].time_ms, 3_000);
+        assert_eq!(lines[0].text, "Still valid");
+    }
+
+    #[test]
+    fn missing_yrc_keeps_netease_line_lyrics_as_fallback() {
+        let response: NeteaseLyricResp =
+            serde_json::from_str(r#"{"code":200,"lrc":{"lyric":"[00:01.00]Line only"}}"#).unwrap();
+        let cached = cached_from_netease_response(response);
+        let CachedLyrics::Synced { lines, .. } = cached else {
+            panic!("line-timed NetEase lyrics should remain available");
+        };
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "Line only");
+        assert!(lines[0].words.is_none());
+    }
+
+    #[test]
+    fn valid_yrc_is_preferred_over_netease_line_lyrics() {
+        let response: NeteaseLyricResp = serde_json::from_str(
+            r#"{
+                "code": 200,
+                "lrc": {"lyric": "[00:01.00]Line only"},
+                "yrc": {"lyric": "[1000,1000](1000,500,0)Word (1500,500,0)timed"}
+            }"#,
+        )
+        .unwrap();
+        let cached = cached_from_netease_response(response);
+        let CachedLyrics::Synced { lines, .. } = cached else {
+            panic!("word-timed NetEase lyrics should be selected");
+        };
+        assert_eq!(lines[0].text, "Word timed");
+        assert!(has_valid_word_timing(&lines));
+    }
+
+    #[test]
+    fn old_serialized_word_span_remains_compatible() {
+        let word: WordSpan = serde_json::from_str(r#"{"time_ms":1250,"text":"legacy"}"#).unwrap();
+        assert_eq!(word.time_ms, 1_250);
+        assert_eq!(word.duration_ms, None);
+        assert_eq!(word.text, "legacy");
+    }
+
+    #[test]
+    fn netease_picker_requires_exact_normalized_metadata() {
+        let exact = NeteaseSong {
+            id: 1,
+            name: "The Night We Met".into(),
+            duration: 208_000,
+            artists: vec![NeteaseArtist {
+                name: "Lord Huron".into(),
+            }],
+        };
+        let wrong_artist = NeteaseSong {
+            id: 2,
+            name: "The Night We Met".into(),
+            duration: 208_000,
+            artists: vec![NeteaseArtist {
+                name: "Cover Band".into(),
+            }],
+        };
+        let partial_title = NeteaseSong {
+            id: 3,
+            name: "Night We Met Remix".into(),
+            duration: 208_000,
+            artists: vec![NeteaseArtist {
+                name: "Lord Huron".into(),
+            }],
+        };
+
+        let picked = pick_best_netease(
+            vec![wrong_artist, partial_title, exact],
+            "Lord Huron",
+            "The Night We Met",
+            208_000,
+        )
+        .unwrap();
+        assert_eq!(picked.id, 1);
+    }
+
+    #[test]
+    fn lyric_cache_key_is_versioned_for_word_timing_refresh() {
+        let key = cache_key("Artist", "Song", 120_000);
+        assert!(key.starts_with("word-timing-v2\x1f"));
     }
 }
 
@@ -2356,6 +2348,9 @@ mod ad_short_circuit_tests {
         assert_eq!(outcome.status, Status::Ad);
         assert!(outcome.lines.is_empty());
         assert_eq!(outcome.line_count, 0);
-        assert!(outcome.promo.is_some(), "rotation should have picked something");
+        assert!(
+            outcome.promo.is_some(),
+            "rotation should have picked something"
+        );
     }
 }

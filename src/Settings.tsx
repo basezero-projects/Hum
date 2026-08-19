@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
   LayoutMode,
+  ListeningMode,
   OverlayMode,
   OverlayShape,
   Settings,
@@ -37,6 +38,16 @@ export default function SettingsView() {
       writeTimer.current = null;
       invoke<Settings>("update_settings", { patch }).catch(console.error);
     }, 200);
+  }
+
+  function updateImmediately<K extends keyof Settings>(key: K, value: Settings[K]) {
+    if (!s) return;
+    setS({ ...s, [key]: value });
+    if (writeTimer.current) window.clearTimeout(writeTimer.current);
+    const patch = { ...pendingPatch.current, [key]: value };
+    pendingPatch.current = {};
+    writeTimer.current = null;
+    invoke<Settings>("update_settings", { patch }).catch(console.error);
   }
 
   function reset() {
@@ -89,15 +100,44 @@ export default function SettingsView() {
       </Section>
 
       <Section title="Lyrics timing">
+        <Row label="Listening mode">
+          <SegmentedControl
+            ariaLabel="Listening mode"
+            value={s.listening_mode}
+            onChange={(v) =>
+              updateImmediately("listening_mode", v as ListeningMode)
+            }
+            options={[
+              ["wired", "Wired"],
+              ["speakers", "Speakers"],
+              ["bluetooth", "Bluetooth"],
+            ]}
+          />
+        </Row>
+        <Hint>
+          Pick the output you are hearing now. Hum applies its saved delay
+          immediately, so switching from headphones to speakers or Bluetooth
+          does not require retiming each song.
+        </Hint>
         <Slider
-          label="Lyric offset"
+          label={`${listeningModeLabel(s.listening_mode)} delay`}
+          suffix="ms"
+          min={0}
+          max={2000}
+          step={25}
+          value={selectedProfileDelay(s)}
+          onChange={(v) => update(profileDelayKey(s.listening_mode), v)}
+          help="Adjust this profile once to match the audio path. The value is reused whenever you select this listening mode."
+        />
+        <Slider
+          label="Expert calibration"
           suffix="ms"
           min={-2000}
           max={5000}
           step={25}
           value={s.anticipate_ms}
           onChange={(v) => update("anticipate_ms", v)}
-          help="Shifts every lyric relative to the source's reported position. Positive = lyrics show earlier (anticipate the audio); negative = lyrics show later (delay). Most Spotify setups want 0 or slightly negative — Spotify reports its decoder position, which is a few hundred ms ahead of the audio you actually hear. Per-song fine-tuning is Ctrl+Alt+[ / Ctrl+Alt+]."
+          help="Fine-tunes every listening mode. Positive values show lyrics earlier, while negative values show them later. Temporary per-song adjustment is Ctrl+Alt+[ or Ctrl+Alt+]."
         />
         <Slider
           label="Seek-jitter tolerance"
@@ -391,6 +431,24 @@ export default function SettingsView() {
       </footer>
     </div>
   );
+}
+
+function listeningModeLabel(mode: ListeningMode): string {
+  if (mode === "bluetooth") return "Bluetooth";
+  if (mode === "speakers") return "Speakers";
+  return "Wired";
+}
+
+function profileDelayKey(
+  mode: ListeningMode,
+): "wired_delay_ms" | "speakers_delay_ms" | "bluetooth_delay_ms" {
+  if (mode === "bluetooth") return "bluetooth_delay_ms";
+  if (mode === "speakers") return "speakers_delay_ms";
+  return "wired_delay_ms";
+}
+
+function selectedProfileDelay(settings: Settings): number {
+  return settings[profileDelayKey(settings.listening_mode)];
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {

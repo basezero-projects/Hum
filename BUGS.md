@@ -4,6 +4,7 @@ Out-of-scope-to-fix-right-now things noticed during work. Each line should have 
 
 ## Open
 
+- **The full Rust tree is not rustfmt-clean.** `cargo fmt --check` reports formatting changes across older modules outside the timing work. The Rust files changed in v0.13.52 pass a direct rustfmt check, but the repository needs a separate formatting-only cleanup before the full command can become a release gate.
 - **YouTube metadata normalization is foreground-tab-only.** `youtube_bridge::YouTubeProbe::read` (v0.13.42) confirms the playing track via `web_bridge::youtube_window_shows_track`, which matches a browser *window* title — and browsers only set the window title to the *active* tab's `document.title`. So a YouTube song playing in a background tab still shows the raw channel/decorated-title and misses lyrics/art. Same root limitation as the YouTube ad detector. Full fix would need per-tab enumeration (UIA tree or CDP) instead of window-title matching. Acceptable for now since foreground-tab playback is the common case.
 
 ## Resolved (v0.13.46)

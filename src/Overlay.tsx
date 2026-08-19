@@ -14,6 +14,7 @@ import type {
   CurrentLyrics,
   CurrentTrack,
   LayoutMode,
+  ListeningMode,
   LyricLine,
   OverlayMode,
   Promo,
@@ -26,6 +27,10 @@ import { fmtMs } from "./types";
 const DEFAULT_SETTINGS: Settings = {
   last_mode: "edit",
   anticipate_ms: 0,
+  listening_mode: "wired",
+  wired_delay_ms: 0,
+  speakers_delay_ms: 250,
+  bluetooth_delay_ms: 350,
   jitter_tolerance_ms: 2000,
   font_family: "Inter",
   font_size_px: 26,
@@ -53,6 +58,12 @@ const DEFAULT_SETTINGS: Settings = {
   show_media: true,
 };
 
+type TimingBanner = {
+  value?: number;
+  text?: string;
+  until: number;
+};
+
 export default function Overlay() {
   const [track, setTrack] = useState<CurrentTrack | null>(null);
   const [lyrics, setLyrics] = useState<CurrentLyrics | null>(null);
@@ -65,8 +76,9 @@ export default function Overlay() {
   const [settingsHydrated, setSettingsHydrated] = useState(false);
   const [albumArt, setAlbumArt] = useState<{ title: string; artist: string; data_url: string } | null>(null);
   // Per-word karaoke cursor — only relevant when the active line has
-  // .words populated (SimpMusic-sourced tracks). -1 = before-first.
+  // .words populated (NetEase YRC tracks). -1 = before-first.
   const [currentWordIdx, setCurrentWordIdx] = useState<number>(-1);
+  const [currentWordProgress, setCurrentWordProgress] = useState<number>(0);
   // Dominant color extracted from the current album art's data URL — fed
   // into the overlay background when tint_bg_from_album_art is on.
   const [tintColor, setTintColor] = useState<{ r: number; g: number; b: number } | null>(null);
@@ -111,7 +123,7 @@ export default function Overlay() {
   // into the next song. Stored in a ref because the rAF closure reads
   // it; the React state is the brief on-screen banner only.
   const nudgeMsRef = useRef<number>(0);
-  const [nudgeBanner, setNudgeBanner] = useState<{ value: number; until: number } | null>(null);
+  const [nudgeBanner, setNudgeBanner] = useState<TimingBanner | null>(null);
   // Auto-update banner state. `available` shows the gold "v X.Y.Z" pill;
   // `installing` shows the spinner state; `ready` prompts to restart.
   const [updateState, setUpdateState] = useState<
@@ -137,7 +149,9 @@ export default function Overlay() {
   const lyricsRef = useRef<CurrentLyrics | null>(null);
   const indexRef = useRef<number>(-1);
   const wordIdxRef = useRef<number>(-1);
+  const wordProgressRef = useRef<number>(0);
   const settingsRef = useRef<Settings>(DEFAULT_SETTINGS);
+  const settingsHydratedRef = useRef(false);
 
   useEffect(() => {
     function interpolatedPositionMs(): number {
@@ -149,10 +163,14 @@ export default function Overlay() {
     }
 
     function lookupPositionMs(): number {
-      // anticipate_ms = global setting; nudgeMs = per-track live nudge via
-      // Ctrl+Alt+[ / Ctrl+Alt+]. POSITIVE nudge means lyrics show LATER,
-      // so we SUBTRACT from the lookup position (look further back).
-      return interpolatedPositionMs() + settingsRef.current.anticipate_ms - nudgeMsRef.current;
+      const s = settingsRef.current;
+      return Math.max(
+        0,
+        interpolatedPositionMs() +
+          s.anticipate_ms -
+          selectedProfileDelayMs(s) -
+          nudgeMsRef.current,
+      );
     }
 
     function snapCursorToCurrentPosition(lines: LyricLine[]): number {
@@ -187,12 +205,14 @@ export default function Overlay() {
         if (idx !== indexRef.current) {
           indexRef.current = idx;
           wordIdxRef.current = -1;
+          wordProgressRef.current = 0;
           setDisplayIdx(idx);
           setCurrentWordIdx(-1);
+          setCurrentWordProgress(0);
         }
 
-        // Per-word cursor inside the current line. Only when SimpMusic gave
-        // us word-level timing; otherwise per-line highlight is the whole story.
+        // Per-word cursor inside the current line. Only when the source gave
+        // valid word timing; otherwise per-line highlight is the whole story.
         if (idx >= 0) {
           const words = lines[idx].words;
           if (words && words.length > 0) {
@@ -205,6 +225,19 @@ export default function Overlay() {
               wordIdxRef.current = wIdx;
               setCurrentWordIdx(wIdx);
             }
+            const progress =
+              wIdx >= 0
+                ? wordProgressAtPosition(words, wIdx, pos, lines[idx + 1]?.time_ms)
+                : 0;
+            if (Math.abs(progress - wordProgressRef.current) >= 0.01) {
+              wordProgressRef.current = progress;
+              setCurrentWordProgress(progress);
+            }
+          } else if (wordIdxRef.current !== -1 || wordProgressRef.current !== 0) {
+            wordIdxRef.current = -1;
+            wordProgressRef.current = 0;
+            setCurrentWordIdx(-1);
+            setCurrentWordProgress(0);
           }
         }
       }
@@ -258,7 +291,9 @@ export default function Overlay() {
       lyricsRef.current = l;
       setLyrics(l);
       wordIdxRef.current = -1;
+      wordProgressRef.current = 0;
       setCurrentWordIdx(-1);
+      setCurrentWordProgress(0);
       if (l.status === "synced" && l.lines.length > 0) {
         const idx = snapCursorToCurrentPosition(l.lines);
         indexRef.current = idx;
@@ -270,9 +305,21 @@ export default function Overlay() {
     }
 
     function applySettings(s: Settings) {
+      const previous = settingsRef.current;
+      if (
+        settingsHydratedRef.current &&
+        (previous.listening_mode !== s.listening_mode ||
+          selectedProfileDelayMs(previous) !== selectedProfileDelayMs(s))
+      ) {
+        setNudgeBanner({
+          text: `${listeningModeLabel(s.listening_mode)} · ${selectedProfileDelayMs(s)} ms`,
+          until: Date.now() + 1500,
+        });
+      }
       settingsRef.current = s;
       setSettings(s);
       setSettingsHydrated(true);
+      settingsHydratedRef.current = true;
     }
 
     const unlisteners: Array<Promise<() => void>> = [
@@ -871,7 +918,7 @@ export default function Overlay() {
   };
 
   // Karaoke per-word render kicks in only when the current line came from a
-  // source with word-level timing (SimpMusic richSyncLyrics). Falls through
+  // source with valid word-level timing. Falls through
   // to plain text otherwise.
   const nextLineTimeMs: number =
     lyrics?.lines[displayIdx + 1]?.time_ms ??
@@ -879,7 +926,12 @@ export default function Overlay() {
     (cur?.time_ms ?? 0) + 4000;
   const curKaraoke =
     cur && cur.words && cur.words.length > 0
-      ? { words: cur.words, currentWordIdx, nextTimeMs: nextLineTimeMs }
+      ? {
+          words: cur.words,
+          currentWordIdx,
+          currentWordProgress,
+          nextTimeMs: nextLineTimeMs,
+        }
       : undefined;
 
   if (settings.overlay_shape === "square") {
@@ -1180,7 +1232,12 @@ function SquareLyricsView({
   displayIdx: number;
   middleText: string;
   translationText: string | undefined;
-  karaoke?: { words: WordSpan[]; currentWordIdx: number; nextTimeMs: number };
+  karaoke?: {
+    words: WordSpan[];
+    currentWordIdx: number;
+    currentWordProgress: number;
+    nextTimeMs: number;
+  };
   settings: Settings;
   scale: number;
   albumArt: { title: string; artist: string; data_url: string } | null;
@@ -1195,7 +1252,7 @@ function SquareLyricsView({
   isEdit: boolean;
   borderColor: string;
   openArtistPanel?: () => void;
-  nudgeBanner: { value: number; until: number } | null;
+  nudgeBanner: TimingBanner | null;
   updateState:
     | { phase: "idle" }
     | { phase: "available"; version: string; update: Update }
@@ -1685,7 +1742,12 @@ function SquareLyricLine({
   scale: number;
   textShadow: string;
   reducedMotion: boolean;
-  karaoke?: { words: WordSpan[]; currentWordIdx: number; nextTimeMs: number };
+  karaoke?: {
+    words: WordSpan[];
+    currentWordIdx: number;
+    currentWordProgress: number;
+    nextTimeMs: number;
+  };
   translation?: string;
 }) {
   const contentRef = useRef<HTMLDivElement | null>(null);
@@ -1770,23 +1832,23 @@ function SquareLyricLine({
         {useKaraoke
           ? karaoke!.words.map((word, index) => {
               const current = karaoke!.currentWordIdx;
-              const lit = current >= index;
-              const duration = wordDurationMs(karaoke!.words, index, karaoke!.nextTimeMs);
+              const position = wordFillPosition(
+                index,
+                current,
+                karaoke!.currentWordProgress,
+              );
               return (
                 <span
                   key={`${word.time_ms}-${index}`}
                   style={{
                     background: `linear-gradient(to right, ${settings.text_color} 0%, ${settings.text_color} 50%, ${settings.text_color_dim} 50%, ${settings.text_color_dim} 100%)`,
                     backgroundSize: "200% 100%",
-                    backgroundPosition: lit ? "0% 0%" : "100% 0%",
+                    backgroundPosition: `${position}% 0%`,
                     backgroundClip: "text",
                     WebkitBackgroundClip: "text",
                     color: "transparent",
                     WebkitTextFillColor: "transparent",
-                    transition:
-                      !reducedMotion && current === index
-                        ? `background-position ${duration}ms linear`
-                        : "none",
+                    transition: "none",
                   }}
                 >
                   {word.text}
@@ -2693,7 +2755,7 @@ function sourceLabel(appId: string | null, override: string | null): string | nu
 // Brief 1.5s indicator showing the current lyric-offset nudge value when
 // the user presses Ctrl+Alt+[ / Ctrl+Alt+]. Auto-fades out via a timer
 // so it doesn't sit on top of the lyrics permanently.
-function NudgeBanner({ banner }: { banner: { value: number; until: number } | null }) {
+function NudgeBanner({ banner }: { banner: TimingBanner | null }) {
   const [, force] = useState(0);
   useEffect(() => {
     if (!banner) return;
@@ -2703,7 +2765,8 @@ function NudgeBanner({ banner }: { banner: { value: number; until: number } | nu
     return () => clearTimeout(t);
   }, [banner]);
   if (!banner || Date.now() > banner.until) return null;
-  const sign = banner.value >= 0 ? "+" : "";
+  const value = banner.value ?? 0;
+  const sign = value >= 0 ? "+" : "";
   return (
     <div
       style={{
@@ -2720,7 +2783,7 @@ function NudgeBanner({ banner }: { banner: { value: number; until: number } | nu
         letterSpacing: 0.5,
       }}
     >
-      lyric offset {sign}{banner.value} ms
+      {banner.text ?? `lyric offset ${sign}${value} ms`}
     </div>
   );
 }
@@ -3195,7 +3258,12 @@ function LineRow({
   dragRegion: boolean;
   settings: Settings;
   scrollIntoView?: boolean;
-  karaoke?: { words: WordSpan[]; currentWordIdx: number; nextTimeMs: number };
+  karaoke?: {
+    words: WordSpan[];
+    currentWordIdx: number;
+    currentWordProgress: number;
+    nextTimeMs: number;
+  };
   textShadow?: string;
 }) {
   const isCur = kind === "cur";
@@ -3324,9 +3392,11 @@ function LineRow({
         {useKaraoke
           ? karaoke!.words.map((w, i) => {
               const idx = karaoke!.currentWordIdx;
-              const isPast = idx > i;
-              const isCurrent = idx === i;
-              const dur = wordDurationMs(karaoke!.words, i, karaoke!.nextTimeMs);
+              const bgPos = wordFillPosition(
+                i,
+                idx,
+                karaoke!.currentWordProgress,
+              );
               // Karaoke wipe: each word is filled with a two-stop gradient
               // (lit on the left half, dim on the right half) clipped to
               // the text glyphs via background-clip: text. background-
@@ -3335,19 +3405,18 @@ function LineRow({
               //   current → animates 100% → 0% (left-to-right sweep)
               //   future  → 100% 0% (dim half covers the word)
               // Smooth fill instead of the old abrupt dim→lit step.
-              const bgPos = isPast || isCurrent ? "0% 0%" : "100% 0%";
               return (
                 <span
                   key={i}
                   style={{
                     background: `linear-gradient(to right, ${settings.text_color} 0%, ${settings.text_color} 50%, ${settings.text_color_dim} 50%, ${settings.text_color_dim} 100%)`,
                     backgroundSize: "200% 100%",
-                    backgroundPosition: bgPos,
+                    backgroundPosition: `${bgPos}% 0%`,
                     backgroundClip: "text",
                     WebkitBackgroundClip: "text",
                     color: "transparent",
                     WebkitTextFillColor: "transparent",
-                    transition: isCurrent ? `background-position ${dur}ms linear` : "none",
+                    transition: "none",
                   }}
                 >
                   {w.text}
@@ -3366,8 +3435,45 @@ function LineRow({
 function wordDurationMs(words: WordSpan[], idx: number, lineEndMs: number): number {
   const w = words[idx];
   if (!w) return 500;
+  if (typeof w.duration_ms === "number" && w.duration_ms > 0) {
+    return w.duration_ms;
+  }
   const nextStart = idx + 1 < words.length ? words[idx + 1].time_ms : lineEndMs;
   return Math.max(80, nextStart - w.time_ms);
+}
+
+function wordProgressAtPosition(
+  words: WordSpan[],
+  idx: number,
+  positionMs: number,
+  lineEndMs?: number,
+): number {
+  const word = words[idx];
+  if (!word) return 0;
+  const duration = wordDurationMs(words, idx, lineEndMs ?? word.time_ms + 500);
+  return Math.max(0, Math.min(1, (positionMs - word.time_ms) / duration));
+}
+
+function wordFillPosition(
+  wordIndex: number,
+  currentIndex: number,
+  currentProgress: number,
+): number {
+  if (wordIndex < currentIndex) return 0;
+  if (wordIndex > currentIndex) return 100;
+  return 100 * (1 - Math.max(0, Math.min(1, currentProgress)));
+}
+
+function selectedProfileDelayMs(settings: Settings): number {
+  if (settings.listening_mode === "bluetooth") return settings.bluetooth_delay_ms;
+  if (settings.listening_mode === "speakers") return settings.speakers_delay_ms;
+  return settings.wired_delay_ms;
+}
+
+function listeningModeLabel(mode: ListeningMode): string {
+  if (mode === "bluetooth") return "Bluetooth";
+  if (mode === "speakers") return "Speakers";
+  return "Wired";
 }
 
 // Tab titles equal to one of these mean the user is on the service but

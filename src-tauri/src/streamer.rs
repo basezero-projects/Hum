@@ -25,6 +25,7 @@
 //! new server task is spawned. When toggled off, the task's shutdown
 //! signal fires and the port is freed.
 
+use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -83,12 +84,21 @@ struct StateResponse {
     /// Global lyric offset so the browser-source client can compute its
     /// own cursor with the same anticipation as the desktop overlay.
     anticipate_ms: i32,
+    /// Full timing adjustment used for line and word lookup. This includes
+    /// expert anticipation and the selected listening profile delay.
+    effective_offset_ms: i32,
 }
 
 async fn build_state(s: &AppState) -> StateResponse {
     let snap = s.snapshot.read().await.clone();
     let lyrics = s.lyrics.read().await.clone();
-    let anticipate_ms = { s.settings.read().await.anticipate_ms };
+    let (anticipate_ms, effective_offset_ms) = {
+        let settings = s.settings.read().await;
+        (
+            settings.anticipate_ms,
+            crate::settings::effective_timing_offset_ms(&settings),
+        )
+    };
 
     let now_ms = unix_ms_now();
     let pos_ms = if snap.state == crate::smtc::PlaybackState::Playing {
@@ -102,11 +112,7 @@ async fn build_state(s: &AppState) -> StateResponse {
     // earlier; negative = lyrics show later. Saturate at 0 so a large
     // negative offset on a track playing from the start can't underflow
     // the u64 lookup.
-    let lookup_pos_ms = if anticipate_ms >= 0 {
-        pos_ms.saturating_add(anticipate_ms as u64)
-    } else {
-        pos_ms.saturating_sub((-anticipate_ms) as u64)
-    };
+    let lookup_pos_ms = apply_signed_offset(pos_ms, effective_offset_ms);
 
     let mut cursor: i32 = -1;
     if matches!(lyrics.status, crate::lyrics::Status::Synced) {
@@ -137,6 +143,15 @@ async fn build_state(s: &AppState) -> StateResponse {
         art_key,
         source_label,
         anticipate_ms,
+        effective_offset_ms,
+    }
+}
+
+fn apply_signed_offset(position_ms: u64, offset_ms: i32) -> u64 {
+    if offset_ms >= 0 {
+        position_ms.saturating_add(offset_ms as u64)
+    } else {
+        position_ms.saturating_sub(offset_ms.unsigned_abs() as u64)
     }
 }
 
@@ -213,8 +228,20 @@ fn source_label_for(app_id: &str) -> String {
 /// elapsed milliseconds.
 fn change_fingerprint(s: &StateResponse) -> String {
     let lines_hash = s.lyrics.line_count;
+    let mut word_hasher = std::collections::hash_map::DefaultHasher::new();
+    for line in &s.lyrics.lines {
+        line.time_ms.hash(&mut word_hasher);
+        if let Some(words) = &line.words {
+            for word in words {
+                word.time_ms.hash(&mut word_hasher);
+                word.duration_ms.hash(&mut word_hasher);
+                word.text.hash(&mut word_hasher);
+            }
+        }
+    }
+    let word_timing_hash = word_hasher.finish();
     format!(
-        "{}|{}|{}|{}|{:?}|{:?}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{:?}|{:?}|{}|{}|{}|{}|{}|{}",
         s.track.title,
         s.track.artist,
         s.track.album,
@@ -225,6 +252,8 @@ fn change_fingerprint(s: &StateResponse) -> String {
         s.cursor,
         s.art_key,
         s.lyrics.source.as_deref().unwrap_or(""),
+        s.effective_offset_ms,
+        word_timing_hash,
     )
 }
 
@@ -249,6 +278,9 @@ struct OverlaySettings {
     show_media: bool,
     window_backdrop: String,
     anticipate_ms: i32,
+    effective_offset_ms: i32,
+    listening_mode: String,
+    profile_delay_ms: i32,
 }
 
 async fn get_settings_overlay(State(s): State<AppState>) -> impl IntoResponse {
@@ -278,9 +310,14 @@ async fn get_settings_overlay(State(s): State<AppState>) -> impl IntoResponse {
                     .unwrap_or_else(|| "acrylic".to_owned())
             }
             #[cfg(not(windows))]
-            { cfg.window_backdrop.clone() }
+            {
+                cfg.window_backdrop.clone()
+            }
         },
         anticipate_ms: cfg.anticipate_ms,
+        effective_offset_ms: crate::settings::effective_timing_offset_ms(&cfg),
+        listening_mode: cfg.listening_mode.clone(),
+        profile_delay_ms: crate::settings::selected_profile_delay_ms(&cfg),
     };
     (
         StatusCode::OK,
@@ -409,10 +446,8 @@ async fn get_overlay() -> Response {
 async fn get_logo() -> Response {
     let bytes: &[u8] = include_bytes!("../../public/hum-logo.png");
     let mut resp = (StatusCode::OK, bytes.to_vec()).into_response();
-    resp.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("image/png"),
-    );
+    resp.headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static("image/png"));
     resp.headers_mut().insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("public, max-age=31536000, immutable"),
@@ -434,8 +469,14 @@ const SERVICE_LOGOS: &[(&str, &[u8])] = &[
     ("netflix", include_bytes!("../../public/logos/netflix.svg")),
     ("twitch", include_bytes!("../../public/logos/twitch.svg")),
     ("youtube", include_bytes!("../../public/logos/youtube.svg")),
-    ("crunchyroll", include_bytes!("../../public/logos/crunchyroll.svg")),
-    ("paramountplus", include_bytes!("../../public/logos/paramountplus.svg")),
+    (
+        "crunchyroll",
+        include_bytes!("../../public/logos/crunchyroll.svg"),
+    ),
+    (
+        "paramountplus",
+        include_bytes!("../../public/logos/paramountplus.svg"),
+    ),
     ("max", include_bytes!("../../public/logos/max.svg")),
     ("appletv", include_bytes!("../../public/logos/appletv.svg")),
     ("hbomax", include_bytes!("../../public/logos/hbomax.svg")),
@@ -443,16 +484,31 @@ const SERVICE_LOGOS: &[(&str, &[u8])] = &[
     ("pandora", include_bytes!("../../public/logos/pandora.svg")),
     ("spotify", include_bytes!("../../public/logos/spotify.svg")),
     ("itunes", include_bytes!("../../public/logos/itunes.svg")),
-    ("applemusic", include_bytes!("../../public/logos/applemusic.svg")),
-    ("youtubemusic", include_bytes!("../../public/logos/youtubemusic.svg")),
+    (
+        "applemusic",
+        include_bytes!("../../public/logos/applemusic.svg"),
+    ),
+    (
+        "youtubemusic",
+        include_bytes!("../../public/logos/youtubemusic.svg"),
+    ),
     ("tidal", include_bytes!("../../public/logos/tidal.svg")),
     ("deezer", include_bytes!("../../public/logos/deezer.svg")),
-    ("vlcmediaplayer", include_bytes!("../../public/logos/vlcmediaplayer.svg")),
-    ("foobar2000", include_bytes!("../../public/logos/foobar2000.svg")),
+    (
+        "vlcmediaplayer",
+        include_bytes!("../../public/logos/vlcmediaplayer.svg"),
+    ),
+    (
+        "foobar2000",
+        include_bytes!("../../public/logos/foobar2000.svg"),
+    ),
     ("winamp", include_bytes!("../../public/logos/winamp.svg")),
     // Browsers (source-badge fallback for sources where the actual
     // service can't be identified beyond "running in a browser")
-    ("googlechrome", include_bytes!("../../public/logos/googlechrome.svg")),
+    (
+        "googlechrome",
+        include_bytes!("../../public/logos/googlechrome.svg"),
+    ),
     ("firefox", include_bytes!("../../public/logos/firefox.svg")),
     ("brave", include_bytes!("../../public/logos/brave.svg")),
     ("opera", include_bytes!("../../public/logos/opera.svg")),
@@ -564,7 +620,12 @@ pub fn start(app: AppHandle, port: u16) -> Result<ServerHandle> {
         .inner()
         .clone();
 
-    let state = AppState { snapshot, lyrics, art, settings };
+    let state = AppState {
+        snapshot,
+        lyrics,
+        art,
+        settings,
+    };
 
     let app_router: Router = Router::new()
         .route("/state", get(get_state))
@@ -593,11 +654,12 @@ pub fn start(app: AppHandle, port: u16) -> Result<ServerHandle> {
                 return;
             }
         };
-        let server = axum::serve(listener, app_router.into_make_service())
-            .with_graceful_shutdown(async move {
+        let server = axum::serve(listener, app_router.into_make_service()).with_graceful_shutdown(
+            async move {
                 let _ = rx.await;
                 eprintln!("[streamer] shutdown signal received");
-            });
+            },
+        );
         if let Err(e) = server.await {
             eprintln!("[streamer] server exited with error: {e:#}");
         } else {
@@ -662,5 +724,51 @@ pub fn apply_settings(app: &AppHandle, enabled: bool, port: u16) {
         }
         // Already in the desired state (on + same port, or off + stopped).
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lyrics::{LyricLine, Status, WordSpan};
+
+    fn response_with_word(duration_ms: u32) -> StateResponse {
+        let lyrics = CurrentLyrics {
+            status: Status::Synced,
+            line_count: 1,
+            lines: vec![LyricLine {
+                time_ms: 1_000,
+                text: "Hello".into(),
+                words: Some(vec![WordSpan {
+                    time_ms: 1_000,
+                    duration_ms: Some(duration_ms),
+                    text: "Hello".into(),
+                }]),
+            }],
+            ..Default::default()
+        };
+        StateResponse {
+            track: CurrentTrack::default(),
+            lyrics,
+            cursor: 0,
+            server_now_ms: 0,
+            art_key: String::new(),
+            source_label: String::new(),
+            anticipate_ms: 0,
+            effective_offset_ms: 0,
+        }
+    }
+
+    #[test]
+    fn signed_offset_saturates_at_zero() {
+        assert_eq!(apply_signed_offset(100, -250), 0);
+        assert_eq!(apply_signed_offset(100, 250), 350);
+    }
+
+    #[test]
+    fn sse_fingerprint_changes_when_word_timing_changes() {
+        let first = response_with_word(300);
+        let second = response_with_word(450);
+        assert_ne!(change_fingerprint(&first), change_fingerprint(&second));
     }
 }

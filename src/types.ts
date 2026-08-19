@@ -18,6 +18,7 @@ export type CurrentTrack = {
 };
 
 export type OverlayMode = "edit" | "locked" | "ghost";
+export type ListeningMode = "wired" | "speakers" | "bluetooth";
 
 export type LayoutMode = "three_line" | "single_line" | "full_page";
 export type OverlayShape = "ribbon" | "square";
@@ -26,6 +27,10 @@ export type TextAlign = "left" | "center" | "right";
 export type Settings = {
   last_mode: OverlayMode;
   anticipate_ms: number;
+  listening_mode: ListeningMode;
+  wired_delay_ms: number;
+  speakers_delay_ms: number;
+  bluetooth_delay_ms: number;
   jitter_tolerance_ms: number;
   font_family: string;
   font_size_px: number;
@@ -103,7 +108,7 @@ export type Promo = {
   alt: string | null;
 };
 
-export type WordSpan = { time_ms: number; text: string };
+export type WordSpan = { time_ms: number; duration_ms?: number; text: string };
 
 export type LyricLine = {
   time_ms: number;
@@ -125,7 +130,7 @@ export type LyricsStatus =
 export type CurrentLyrics = {
   track_key: string;
   status: LyricsStatus;
-  /** "memory" | "store" | "lrclib" | "lrclib-search" | "simpmusic" | "netease" | "all-sources" | "error" */
+  /** "memory" | "store" | "lrclib" | "lrclib-search" | "netease" | "all-sources" | "error" */
   source: string | null;
   line_count: number;
   lines: LyricLine[];

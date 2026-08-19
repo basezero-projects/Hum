@@ -6,6 +6,17 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.52] - 2026-08-18
+
+### Added
+- **Word-timed lyrics on supported songs.** When NetEase supplies word timestamps, Hum now fills each word at the moment it is sung in the horizontal ribbon, Full page, Square, and OBS views. Pausing freezes the fill in place, seeking moves it to the correct word, and punctuation keeps the spacing supplied by the lyric source. Songs without word timing keep the existing line-timed display.
+- **Saved listening modes for audio delay.** Settings > Lyrics timing now has Wired, Speakers, and Bluetooth choices. Wired starts at 0 ms, Speakers at 250 ms, and Bluetooth at 350 ms. Each mode has its own editable delay from 0 to 2000 ms, so switching audio outputs applies the matching correction immediately. The system tray has the same checked Listening mode menu for quick changes without opening Settings.
+
+### Changed
+- **Timing controls use separate jobs.** The selected listening mode handles audio hardware delay. Expert calibration still adjusts every mode, while Ctrl+Alt+[ and Ctrl+Alt+] remain temporary corrections for the current song. Hum briefly shows the selected mode and delay over the lyrics after a switch.
+- **OBS uses the same timing calculation as the desktop overlay.** The browser source now applies the selected listening delay to both line and word timing and refreshes when richer word data arrives.
+- **Cached line-only lyrics refresh once.** Hum uses a new cache key for this release so songs already stored before word timing support get one fresh chance to receive word timestamps. NetEase must match the cleaned title, artist, and duration before its result can replace the normal LRCLib line timing.
+
 ## [0.13.51] - 2026-08-18
 
 ### Changed

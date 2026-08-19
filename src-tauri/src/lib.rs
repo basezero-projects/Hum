@@ -28,14 +28,14 @@ mod backdrop;
 #[cfg(windows)]
 mod aspect_lock;
 
+mod artist_info;
+mod artist_window;
 mod contrast;
 mod lyrics;
 mod mode;
 mod promos;
 mod settings;
 mod streamer;
-mod artist_info;
-mod artist_window;
 
 #[cfg(windows)]
 use smtc::{AlbumArtPayload, CurrentTrack, SharedAlbumArt, SharedSnapshot};
@@ -63,6 +63,8 @@ mod smtc {
 #[cfg(not(windows))]
 use smtc::{AlbumArtPayload, CurrentTrack, SharedAlbumArt, SharedSnapshot};
 
+use artist_info::{clear_artist_info_cache, get_artist_info, ArtistInfoCache};
+use artist_window::{close_artist_panel_cmd, open_artist_panel_cmd, open_ticket_url};
 use lyrics::{CurrentLyrics, SharedLyrics};
 use mode::{
     apply_mode, cycle_overlay_mode, get_overlay_mode, icon_for, set_overlay_mode, ModeMenuItems,
@@ -71,8 +73,6 @@ use mode::{
 use settings::{
     get_settings, open_settings_window, reset_settings, update_settings, SharedSettings,
 };
-use artist_info::{ArtistInfoCache, clear_artist_info_cache, get_artist_info};
-use artist_window::{close_artist_panel_cmd, open_artist_panel_cmd, open_ticket_url};
 
 #[tauri::command]
 async fn get_current_track(
@@ -151,10 +151,7 @@ struct UpdateMenuItem(MenuItem<tauri::Wry>);
 /// ghost-mode cursor-poll worker knows whether to poke a clickable
 /// hole in the click-through region.
 #[tauri::command]
-fn set_update_banner_visible(
-    app: tauri::AppHandle,
-    visible: bool,
-) -> Result<(), String> {
+fn set_update_banner_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> {
     if let Some(s) = app.try_state::<Arc<AtomicBool>>() {
         s.store(visible, Ordering::Release);
     } else {
@@ -214,6 +211,7 @@ pub fn run() {
             // the user's last choice rather than always Edit.
             let loaded_settings = settings::load_from_store(app.handle());
             let initial_mode = loaded_settings.last_mode;
+            let initial_listening_mode = loaded_settings.listening_mode.clone();
             // Capture streamer fields before move so we can apply after manage.
             let streamer_enabled_at_start = loaded_settings.streamer_enabled;
             let streamer_port_at_start = loaded_settings.streamer_port;
@@ -222,15 +220,15 @@ pub fn run() {
             // Apps via OS settings while the file still says launch_on_startup = true).
             settings::sync_autostart(app.handle(), loaded_settings.launch_on_startup);
             app.manage::<SharedSettings>(Arc::new(RwLock::new(loaded_settings)));
-                let artist_cache = ArtistInfoCache::new(app.handle().clone());
-                app.manage(artist_cache);
+            let artist_cache = ArtistInfoCache::new(app.handle().clone());
+            app.manage(artist_cache);
 
-                // Prune the per-artist disk cache to its size cap in the
-                // background. Runs once per launch; non-blocking on cold start.
-                let handle_for_sweep = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    artist_info::sweep_disk_cache(&handle_for_sweep).await;
-                });
+            // Prune the per-artist disk cache to its size cap in the
+            // background. Runs once per launch; non-blocking on cold start.
+            let handle_for_sweep = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                artist_info::sweep_disk_cache(&handle_for_sweep).await;
+            });
 
             #[cfg(windows)]
             {
@@ -261,7 +259,9 @@ pub fn run() {
             // Promo rotation: bootstrap from disk cache (or bundled fallback)
             // synchronously so the first ad break of the session has something
             // to show, then spawn the background refresh.
-            let cache_dir = app.path().app_config_dir()
+            let cache_dir = app
+                .path()
+                .app_config_dir()
                 .or_else(|_| app.path().app_data_dir())
                 .expect("app config or data dir must resolve");
             let promo_source = std::sync::Arc::new(crate::promos::SyvrRemoteSource::new(cache_dir));
@@ -274,9 +274,10 @@ pub fn run() {
             }
             app.manage(promo_source.clone());
             // Shared "last shown" promo ID for cooldown across ad breaks.
-            app.manage(std::sync::Arc::new(tokio::sync::RwLock::new(
-                Option::<String>::None,
-            )) as std::sync::Arc<tokio::sync::RwLock<Option<String>>>);
+            app.manage(
+                std::sync::Arc::new(tokio::sync::RwLock::new(Option::<String>::None))
+                    as std::sync::Arc<tokio::sync::RwLock<Option<String>>>,
+            );
 
             contrast::start(app.handle().clone());
 
@@ -284,9 +285,9 @@ pub fn run() {
             // StreamerSupervisor in app state; toggled by the
             // `streamer_enabled` setting. Apply initial settings here so
             // a user who had it on at last close gets it back on start.
-            app.manage::<std::sync::Arc<streamer::StreamerSupervisor>>(
-                std::sync::Arc::new(streamer::StreamerSupervisor::new()),
-            );
+            app.manage::<std::sync::Arc<streamer::StreamerSupervisor>>(std::sync::Arc::new(
+                streamer::StreamerSupervisor::new(),
+            ));
 
             // Tray + mode submenu. We hold onto the CheckMenuItem handles via
             // managed state so apply_mode() can keep the checked indicator in
@@ -297,7 +298,7 @@ pub fn run() {
                 streamer_enabled_at_start,
                 streamer_port_at_start,
             );
-            build_tray(&app_handle, initial_mode)?;
+            build_tray(&app_handle, initial_mode, &initial_listening_mode)?;
 
             // Apply the persisted DWM backdrop before first paint so the OS
             // compositor effect is in place when the overlay window renders.
@@ -400,9 +401,7 @@ pub fn run() {
                     const BANNER_ZONE_W: i32 = 360;
                     loop {
                         sleep(Duration::from_millis(80)).await;
-                        let mode = OverlayMode::from_u8(
-                            mode_state_clone.load(Ordering::Acquire),
-                        );
+                        let mode = OverlayMode::from_u8(mode_state_clone.load(Ordering::Acquire));
                         if !matches!(mode, OverlayMode::Ghost) {
                             continue;
                         }
@@ -478,7 +477,44 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-fn build_tray(app: &tauri::AppHandle, initial_mode: OverlayMode) -> tauri::Result<()> {
+struct ListeningModeMenuItems {
+    wired: tauri::menu::CheckMenuItem<tauri::Wry>,
+    speakers: tauri::menu::CheckMenuItem<tauri::Wry>,
+    bluetooth: tauri::menu::CheckMenuItem<tauri::Wry>,
+}
+
+pub(crate) fn sync_listening_mode_menu(app: &tauri::AppHandle, mode: &str) {
+    let Some(items) = app.try_state::<ListeningModeMenuItems>() else {
+        return;
+    };
+    let _ = items.wired.set_checked(mode == "wired");
+    let _ = items.speakers.set_checked(mode == "speakers");
+    let _ = items.bluetooth.set_checked(mode == "bluetooth");
+}
+
+fn set_listening_mode_from_tray(app: &tauri::AppHandle, mode: &'static str) {
+    use tauri::Emitter;
+    let Some(state) = app.try_state::<SharedSettings>() else {
+        return;
+    };
+    let state = state.inner().clone();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut settings = state.write().await;
+        settings.listening_mode = mode.to_string();
+        let snapshot = settings.clone();
+        drop(settings);
+        settings::save_to_store(&app, &snapshot);
+        sync_listening_mode_menu(&app, mode);
+        let _ = app.emit("settings-changed", &snapshot);
+    });
+}
+
+fn build_tray(
+    app: &tauri::AppHandle,
+    initial_mode: OverlayMode,
+    initial_listening_mode: &str,
+) -> tauri::Result<()> {
     let toggle_overlay =
         MenuItemBuilder::with_id("toggle-overlay", "Show / Hide overlay").build(app)?;
     let mode_edit = CheckMenuItemBuilder::with_id("mode-edit", "Edit")
@@ -497,6 +533,21 @@ fn build_tray(app: &tauri::AppHandle, initial_mode: OverlayMode) -> tauri::Resul
         .item(&mode_ghost)
         .build()?;
 
+    let listening_wired = CheckMenuItemBuilder::with_id("listening-wired", "Wired")
+        .checked(initial_listening_mode == "wired")
+        .build(app)?;
+    let listening_speakers = CheckMenuItemBuilder::with_id("listening-speakers", "Speakers")
+        .checked(initial_listening_mode == "speakers")
+        .build(app)?;
+    let listening_bluetooth = CheckMenuItemBuilder::with_id("listening-bluetooth", "Bluetooth")
+        .checked(initial_listening_mode == "bluetooth")
+        .build(app)?;
+    let listening_submenu = SubmenuBuilder::new(app, "Listening mode")
+        .item(&listening_wired)
+        .item(&listening_speakers)
+        .item(&listening_bluetooth)
+        .build()?;
+
     let settings_item = MenuItemBuilder::with_id("settings", "Settings…").build(app)?;
     let check_updates_item =
         MenuItemBuilder::with_id("check-updates", "Check for updates").build(app)?;
@@ -508,6 +559,7 @@ fn build_tray(app: &tauri::AppHandle, initial_mode: OverlayMode) -> tauri::Resul
         .item(&toggle_overlay)
         .separator()
         .item(&mode_submenu)
+        .item(&listening_submenu)
         .separator()
         .item(&settings_item)
         .item(&check_updates_item)
@@ -520,6 +572,11 @@ fn build_tray(app: &tauri::AppHandle, initial_mode: OverlayMode) -> tauri::Resul
         edit: mode_edit,
         locked: mode_locked,
         ghost: mode_ghost,
+    });
+    app.manage(ListeningModeMenuItems {
+        wired: listening_wired,
+        speakers: listening_speakers,
+        bluetooth: listening_bluetooth,
     });
     app.manage(UpdateMenuItem(check_updates_item.clone()));
 
@@ -550,6 +607,9 @@ fn build_tray(app: &tauri::AppHandle, initial_mode: OverlayMode) -> tauri::Resul
             "mode-edit" => apply_mode(app, OverlayMode::Edit),
             "mode-locked" => apply_mode(app, OverlayMode::Locked),
             "mode-ghost" => apply_mode(app, OverlayMode::Ghost),
+            "listening-wired" => set_listening_mode_from_tray(app, "wired"),
+            "listening-speakers" => set_listening_mode_from_tray(app, "speakers"),
+            "listening-bluetooth" => set_listening_mode_from_tray(app, "bluetooth"),
             "settings" => {
                 if let Err(e) = settings::open_settings_window(app.clone()) {
                     eprintln!("[tray] open settings failed: {e}");
@@ -593,7 +653,10 @@ fn build_global_shortcut_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
 
     let cycle_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyL);
     let nudge_back = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::BracketLeft);
-    let nudge_fwd = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::BracketRight);
+    let nudge_fwd = Shortcut::new(
+        Some(Modifiers::CONTROL | Modifiers::ALT),
+        Code::BracketRight,
+    );
     let toggle_blur = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyB);
     let toggle_transparent = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyT);
     let toggle_media = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyH);
@@ -686,7 +749,10 @@ fn register_hotkey(app: &tauri::AppHandle) -> tauri::Result<()> {
     use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
     let cycle_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyL);
     let nudge_back = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::BracketLeft);
-    let nudge_fwd = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::BracketRight);
+    let nudge_fwd = Shortcut::new(
+        Some(Modifiers::CONTROL | Modifiers::ALT),
+        Code::BracketRight,
+    );
     let toggle_blur = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyB);
     let toggle_transparent = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyT);
     let toggle_media = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyH);

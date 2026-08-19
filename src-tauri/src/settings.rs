@@ -7,9 +7,9 @@ use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_store::StoreExt;
 use tokio::sync::RwLock;
 
-use crate::mode::OverlayMode;
 #[cfg(windows)]
 use crate::backdrop::BackdropKind;
+use crate::mode::OverlayMode;
 
 const SETTINGS_STORE_FILE: &str = "settings.json";
 const SETTINGS_STORE_KEY: &str = "settings";
@@ -20,6 +20,13 @@ pub struct Settings {
     pub last_mode: OverlayMode,
 
     pub anticipate_ms: i32,
+    /// Active audio-output timing profile. Stored as a string so unknown
+    /// values from hand-edited or future settings files can be sanitized
+    /// without discarding the rest of the user's settings.
+    pub listening_mode: String,
+    pub wired_delay_ms: i32,
+    pub speakers_delay_ms: i32,
+    pub bluetooth_delay_ms: i32,
     pub jitter_tolerance_ms: i32,
 
     pub font_family: String,
@@ -119,6 +126,10 @@ impl Default for Settings {
         Self {
             last_mode: OverlayMode::default(),
             anticipate_ms: 0,
+            listening_mode: "wired".to_string(),
+            wired_delay_ms: 0,
+            speakers_delay_ms: 250,
+            bluetooth_delay_ms: 350,
             jitter_tolerance_ms: 2000,
             font_family: "Inter".to_string(),
             font_size_px: 26.0,
@@ -159,6 +170,21 @@ impl Default for Settings {
 }
 
 pub type SharedSettings = Arc<RwLock<Settings>>;
+
+pub fn selected_profile_delay_ms(s: &Settings) -> i32 {
+    match s.listening_mode.as_str() {
+        "speakers" => s.speakers_delay_ms,
+        "bluetooth" => s.bluetooth_delay_ms,
+        _ => s.wired_delay_ms,
+    }
+}
+
+/// Offset applied to the interpolated player position before lyric lookup.
+/// Positive anticipation looks ahead, while an output-device delay looks
+/// back because the listener hears that audio later than the player reports.
+pub fn effective_timing_offset_ms(s: &Settings) -> i32 {
+    s.anticipate_ms - selected_profile_delay_ms(s)
+}
 
 pub fn load_from_store(app: &AppHandle) -> Settings {
     let store = match app.store(SETTINGS_STORE_FILE) {
@@ -286,6 +312,7 @@ pub async fn update_settings(
     };
 
     save_to_store(&app, &merged);
+    crate::sync_listening_mode_menu(&app, &merged.listening_mode);
     // React to streamer-enabled / port changes by starting or stopping the
     // local HTTP server. Idempotent if no streamer fields changed.
     crate::streamer::apply_settings(&app, merged.streamer_enabled, merged.streamer_port);
@@ -300,7 +327,9 @@ pub async fn update_settings(
             match overlay.hwnd() {
                 Ok(raw_hwnd) => {
                     let hwnd = windows::Win32::Foundation::HWND(raw_hwnd.0);
-                    if let Err(e) = crate::backdrop::apply_backdrop(hwnd, effective_backdrop(&merged)) {
+                    if let Err(e) =
+                        crate::backdrop::apply_backdrop(hwnd, effective_backdrop(&merged))
+                    {
                         eprintln!("backdrop: re-apply on settings change failed: {e:?}");
                     }
                 }
@@ -328,9 +357,7 @@ fn sanitize(s: &mut Settings) {
     s.font_family = s
         .font_family
         .chars()
-        .filter(|c| {
-            c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '.' | ',' | '_' | '\'')
-        })
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '.' | ',' | '_' | '\''))
         .collect::<String>()
         .trim()
         .to_string();
@@ -366,15 +393,27 @@ fn sanitize(s: &mut Settings) {
     if !matches!(s.text_align.as_str(), "left" | "center" | "right") {
         s.text_align = defaults.text_align.clone();
     }
-    if !matches!(s.layout_mode.as_str(), "three_line" | "single_line" | "full_page") {
+    if !matches!(
+        s.layout_mode.as_str(),
+        "three_line" | "single_line" | "full_page"
+    ) {
         s.layout_mode = defaults.layout_mode.clone();
     }
     if !matches!(s.overlay_shape.as_str(), "ribbon" | "square") {
         s.overlay_shape = defaults.overlay_shape.clone();
     }
+    if !matches!(
+        s.listening_mode.as_str(),
+        "wired" | "speakers" | "bluetooth"
+    ) {
+        s.listening_mode = defaults.listening_mode.clone();
+    }
 
     // Numeric clamps to keep the UI sensible.
     s.anticipate_ms = s.anticipate_ms.clamp(-2_000, 5_000);
+    s.wired_delay_ms = s.wired_delay_ms.clamp(0, 2_000);
+    s.speakers_delay_ms = s.speakers_delay_ms.clamp(0, 2_000);
+    s.bluetooth_delay_ms = s.bluetooth_delay_ms.clamp(0, 2_000);
     s.jitter_tolerance_ms = s.jitter_tolerance_ms.clamp(0, 10_000);
     s.font_size_px = s.font_size_px.clamp(8.0, 96.0);
     s.font_weight = s.font_weight.clamp(100, 900);
@@ -418,10 +457,9 @@ fn is_valid_color_string(s: &str) -> bool {
     if !lower.ends_with(')') {
         return false;
     }
-    lower.chars().all(|c| {
-        c.is_ascii_alphanumeric()
-            || matches!(c, ' ' | ',' | '.' | '(' | ')' | '%' | '/')
-    })
+    lower
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | ',' | '.' | '(' | ')' | '%' | '/'))
 }
 
 #[cfg(test)]
@@ -458,11 +496,64 @@ mod tests {
         assert_eq!(settings.overlay_shape, "square");
     }
 
+    #[test]
+    fn listening_profiles_default_when_missing() {
+        let settings: Settings = serde_json::from_str(r#"{}"#).unwrap();
+        assert_eq!(settings.listening_mode, "wired");
+        assert_eq!(settings.wired_delay_ms, 0);
+        assert_eq!(settings.speakers_delay_ms, 250);
+        assert_eq!(settings.bluetooth_delay_ms, 350);
+    }
+
+    #[test]
+    fn invalid_listening_mode_falls_back_to_wired() {
+        let mut settings = Settings {
+            listening_mode: "car_stereo".to_string(),
+            ..Default::default()
+        };
+
+        sanitize(&mut settings);
+
+        assert_eq!(settings.listening_mode, "wired");
+    }
+
+    #[test]
+    fn listening_profile_delays_are_clamped() {
+        let mut settings = Settings {
+            wired_delay_ms: -1,
+            speakers_delay_ms: 2_001,
+            bluetooth_delay_ms: 9_000,
+            ..Default::default()
+        };
+
+        sanitize(&mut settings);
+
+        assert_eq!(settings.wired_delay_ms, 0);
+        assert_eq!(settings.speakers_delay_ms, 2_000);
+        assert_eq!(settings.bluetooth_delay_ms, 2_000);
+    }
+
+    #[test]
+    fn effective_offset_uses_selected_profile() {
+        let settings = Settings {
+            anticipate_ms: 100,
+            listening_mode: "bluetooth".to_string(),
+            bluetooth_delay_ms: 350,
+            ..Default::default()
+        };
+
+        assert_eq!(selected_profile_delay_ms(&settings), 350);
+        assert_eq!(effective_timing_offset_ms(&settings), -250);
+    }
+
     #[cfg(windows)]
     #[test]
     fn window_backdrop_round_trips_through_serde() {
         use crate::backdrop::BackdropKind;
-        let s = Settings { window_backdrop: BackdropKind::Mica, ..Default::default() };
+        let s = Settings {
+            window_backdrop: BackdropKind::Mica,
+            ..Default::default()
+        };
         let json = serde_json::to_string(&s).unwrap();
         let parsed: Settings = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.window_backdrop, BackdropKind::Mica);
@@ -489,6 +580,7 @@ pub async fn reset_settings(
         *s = defaults.clone();
     }
     save_to_store(&app, &defaults);
+    crate::sync_listening_mode_menu(&app, &defaults.listening_mode);
     let _ = app.emit("settings-changed", &defaults);
     Ok(defaults)
 }
