@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.71] - 2026-08-19
+
+### Fixed
+- **Signed release proofs now use Windows' official signature verifier.** The private Windows workflow verifies both `hum.exe` and the customer installer with the Windows SDK SignTool before it prepares any release files. A nonzero verification result stops the run, and release-contract tests prevent the less reliable PowerShell status check from returning.
+
 ## [0.13.70] - 2026-08-19
 
 ### Fixed

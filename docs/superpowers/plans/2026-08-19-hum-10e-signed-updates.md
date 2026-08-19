@@ -2,7 +2,7 @@
 
 Date: 2026-08-19
 Status: Implementation complete, signed proof pending
-Target version: 0.13.70 repair candidate, final closeout follows signed proof
+Target version: 0.13.71 repair candidate, final closeout follows signed proof
 Related phase: [HUM-10](../../roadmap/1.0/HUM-10-purchase-trust-first-run.md)
 Progress ledger: [HUM-10 ledger](../../roadmap/1.0/HUM-10-progress-ledger.md)
 

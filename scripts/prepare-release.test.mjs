@@ -128,9 +128,11 @@ test("release workflow keeps proof runs private and tag releases signed", async 
   assert.match(workflow, /--signtool "\$signtool" --azure-library "\$dll"/);
   assert.doesNotMatch(workflow, /Copy-Item \$signtool signtool\.exe/);
   assert.match(workflow, /TAURI_SIGNING_PRIVATE_KEY/);
-  assert.match(workflow, /Get-AuthenticodeSignature/);
-  assert.doesNotMatch(workflow, /Invalid Authenticode signature for \$target:/);
-  assert.match(workflow, /Invalid Authenticode signature for \$\{target\}:/);
+  assert.doesNotMatch(workflow, /Get-AuthenticodeSignature/);
+  assert.match(workflow, /"SIGNTOOL_PATH=\$signtool" \| Add-Content \$env:GITHUB_ENV/);
+  assert.match(workflow, /& \$env:SIGNTOOL_PATH verify \/pa \/v \$target/);
+  assert.match(workflow, /if \(\$LASTEXITCODE -ne 0\)/);
+  assert.match(workflow, /SignTool exited \$LASTEXITCODE/);
   assert.match(workflow, /prepare-release\.mjs/);
   assert.match(
     workflow,

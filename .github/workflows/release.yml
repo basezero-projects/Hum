@@ -94,6 +94,7 @@ jobs:
             Sort-Object FullName -Descending |
             Select-Object -First 1 -ExpandProperty FullName
           if (-not $signtool) { throw 'signtool.exe was not found' }
+          "SIGNTOOL_PATH=$signtool" | Add-Content $env:GITHUB_ENV
           @{
             Endpoint = $env:AZURE_CODE_SIGNING_ENDPOINT
             CodeSigningAccountName = $env:AZURE_CODE_SIGNING_NAME
@@ -121,9 +122,9 @@ jobs:
           if ($installer.Count -ne 1) { throw "Expected one installer, found $($installer.Count)" }
           $targets = @('src-tauri/target/release/hum.exe', $installer[0].FullName)
           foreach ($target in $targets) {
-            $signature = Get-AuthenticodeSignature $target
-            if ($signature.Status -ne 'Valid') {
-              throw "Invalid Authenticode signature for ${target}: $($signature.Status)"
+            & $env:SIGNTOOL_PATH verify /pa /v $target
+            if ($LASTEXITCODE -ne 0) {
+              throw "Invalid Authenticode signature for ${target}: SignTool exited $LASTEXITCODE"
             }
           }
 

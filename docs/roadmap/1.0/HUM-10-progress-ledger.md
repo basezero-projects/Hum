@@ -6,9 +6,9 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 
 - Slice: HUM-10E, signed updates and update states
 - Step: Repair candidate closeout and signed workflow proof
-- Next action: pass the full v0.13.70 gate, push the Authenticode verifier repair, dispatch the private signed workflow, and audit its artifacts before the final closeout patch
+- Next action: pass the full v0.13.71 gate, push the SignTool verifier repair, dispatch the private signed workflow, and audit its artifacts before the final closeout patch
 - Blocker: None for local implementation. Live purchase proof still requires a Polar organization and Hum product.
-- Last updated: 2026-08-19 16:37 MDT
+- Last updated: 2026-08-19 17:02 MDT
 - Last completed plan: `docs/superpowers/plans/2026-08-19-hum-10d-first-run-setup.md`
 - Current plan: `docs/superpowers/plans/2026-08-19-hum-10e-signed-updates.md`
 
@@ -99,3 +99,4 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 - 2026-08-19 15:48 MDT: Independent review found that a manual workflow started from a tag could satisfy the original publish condition. Red-first coverage now requires a pushed tag event, and the workflow's generated signing JSON is tested with spaced SDK, Azure library, and metadata paths plus Tauri's `%1` placeholder.
 - 2026-08-19 16:06 MDT: The v0.13.68 proof successfully signed its first target with Azure, then exposed the developer-only UI inspector inside Tauri's release binary scan. A red-first Cargo metadata test now requires Hum as the only binary and keeps `dump_uia` available as an explicit example. The v0.13.69 repair is entering the complete local gate.
 - 2026-08-19 16:37 MDT: The v0.13.69 proof passed the complete gate and signed both production targets, then the separate Authenticode step failed to parse `$target:` in its error message. A red-first workflow contract now requires the explicit `${target}:` boundary. The v0.13.70 repair is entering the complete local gate.
+- 2026-08-19 17:02 MDT: The v0.13.70 proof passed the complete gate and Azure reported successful signatures for Hum and its installer, but PowerShell returned `NotSigned` for `hum.exe`. A red-first workflow contract now requires the Windows SDK SignTool to verify both files with Authenticode policy and rejects every nonzero exit code. The v0.13.71 repair is entering the complete local gate.
