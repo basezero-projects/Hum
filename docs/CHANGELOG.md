@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.69] - 2026-08-19
+
+### Fixed
+- **Signed releases now package only the Hum application.** The `dump_uia` developer inspector is now a Cargo example instead of a release binary, so Tauri and Azure sign Hum itself without trying to package internal UI inspection helpers. Developers can still run the inspector with `cargo run --example dump_uia`.
+
 ## [0.13.68] - 2026-08-19
 
 ### Fixed

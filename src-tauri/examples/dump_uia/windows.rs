@@ -7,10 +7,10 @@
 // `web_bridge::PandoraProbe` (which targets Pandora-in-Chrome).
 //
 // Usage (from src-tauri/):
-//   cargo run --bin dump_uia                  # pretty tree, needle="pandora"
-//   cargo run --bin dump_uia -- --json        # JSON tree
-//   cargo run --bin dump_uia -- spotify       # different needle
-//   cargo run --bin dump_uia -- pandora --raw # raw-view walker (no filtering)
+//   cargo run --example dump_uia                  # pretty tree, needle="pandora"
+//   cargo run --example dump_uia -- --json        # JSON tree
+//   cargo run --example dump_uia -- spotify       # different needle
+//   cargo run --example dump_uia -- pandora --raw # raw-view walker (no filtering)
 //
 // Why this is non-trivial: when we walk down from the desktop root through
 // `walker.get_first_child(...)`, the elements UIA hands back can be cached
@@ -23,8 +23,8 @@
 //   3. Walk with the *control* view (or *raw* view via --raw) from that
 //      freshly-anchored element.
 //
-// NOT wired into the main `hum` binary. Cargo auto-discovers binaries in
-// `src/bin/` so no Cargo.toml change is needed.
+// NOT wired into the main `hum` binary. Cargo exposes this developer utility
+// only as the explicit `dump_uia` example target in Cargo.toml.
 
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
@@ -91,7 +91,7 @@ fn main() -> Result<()> {
     );
     if matched_hwnds.is_empty() {
         eprintln!(
-            "[dump_uia] no matches. Is the target app open and visible? Try a different needle, e.g. `cargo run --bin dump_uia -- spotify`."
+            "[dump_uia] no matches. Is the target app open and visible? Try a different needle, e.g. `cargo run --example dump_uia -- spotify`."
         );
         if json_mode {
             println!("[]");
@@ -151,7 +151,7 @@ fn print_help() {
         "dump_uia: dump the UI Automation tree of top-level windows matching a needle.\n\
         \n\
         Usage:\n  \
-          cargo run --bin dump_uia [-- [<needle>] [--json] [--raw]]\n\
+          cargo run --example dump_uia [-- [<needle>] [--json] [--raw]]\n\
         \n\
         Default needle: \"pandora\" (case-insensitive substring on window title\n\
         or process file name). Use any visible-substring like \"spotify\", \"tidal\",\n\

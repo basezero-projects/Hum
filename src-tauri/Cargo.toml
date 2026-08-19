@@ -1,6 +1,6 @@
 [package]
 name = "hum"
-version = "0.13.68"
+version = "0.13.69"
 description = "Real-time synced lyrics overlay for any Windows media source"
 authors = ["SYVR Studios"]
 edition = "2021"
@@ -15,9 +15,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 name = "hum"
 path = "src/main.rs"
 
-[[bin]]
+[[example]]
 name = "dump_uia"
-path = "src/bin/dump_uia.rs"
+path = "examples/dump_uia.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

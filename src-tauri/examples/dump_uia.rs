@@ -1,5 +1,5 @@
 #[cfg(windows)]
-include!("dump_uia_windows.rs");
+include!("dump_uia/windows.rs");
 
 #[cfg(not(windows))]
 fn main() {

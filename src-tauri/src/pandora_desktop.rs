@@ -9,7 +9,7 @@
 //!
 //! Fix: detect the Pandora.exe process via Win32 window enumeration and
 //! extract the now-playing track + artist directly from the renderer's UI
-//! Automation tree. Selectors were discovered by `cargo run --bin dump_uia`
+//! Automation tree. Selectors were discovered by `cargo run --example dump_uia`
 //! during the v0.11.2 dev-tool slice.
 //!
 //! ## UIA selector strategy

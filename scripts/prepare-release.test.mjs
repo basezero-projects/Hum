@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 
 import * as releaseContract from "./prepare-release.mjs";
 
 const { prepareRelease } = releaseContract;
+const execFileAsync = promisify(execFile);
 
 const VERSION = "1.2.3";
 
@@ -168,4 +172,31 @@ test("Windows signing config preserves exact spaced paths and Tauri placeholder"
       },
     },
   );
+});
+
+test("release metadata ships only Hum and keeps the UI inspector as an example", async () => {
+  const srcTauri = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../src-tauri");
+  const { stdout } = await execFileAsync(
+    "cargo",
+    ["metadata", "--no-deps", "--format-version", "1"],
+    { cwd: srcTauri },
+  );
+  const metadata = JSON.parse(stdout);
+  const hum = metadata.packages.find((entry) => entry.name === "hum");
+  assert.ok(hum);
+  assert.deepEqual(
+    hum.targets.filter((target) => target.kind.includes("bin")).map((target) => target.name),
+    ["hum"],
+  );
+  assert.deepEqual(
+    hum.targets.filter((target) => target.kind.includes("example")).map((target) => target.name),
+    ["dump_uia"],
+  );
+
+  const inspectorSource = await readFile(
+    path.join(srcTauri, "examples", "dump_uia", "windows.rs"),
+    "utf8",
+  );
+  assert.doesNotMatch(inspectorSource, /cargo run --bin dump_uia/);
+  assert.match(inspectorSource, /cargo run --example dump_uia/);
 });
