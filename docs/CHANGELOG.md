@@ -6,6 +6,12 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.54] - 2026-08-19
+
+### Changed
+- **Windows playback behavior stays the same while Hum's shared media state becomes portable.** Track metadata, playback state, timing, source identity, ad state, and album-art payloads now belong to a platform-neutral Rust media module instead of the Windows SMTC reader. Existing Windows sources, overlays, timing calculations, artist information, and OBS output keep the same event names and data shape. Exact JSON contract tests now protect every shared field and playback-state value before later HUM-00 work adds real platform backends.
+- **HUM-00 now has a reviewed design and executable slice plan.** The design separates media sessions, audio-output discovery, native window behavior, platform capabilities, and build proof into bounded slices. HUM-00A covers only the shared media model, so later portability work cannot quietly change source priority or lyric timing during this extraction.
+
 ## [0.13.53] - 2026-08-19
 
 ### Changed

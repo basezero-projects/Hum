@@ -1,6 +1,6 @@
 # HUM-00: Portable product core
 
-Status: Ready
+Status: In progress
 Target release: 0.14.x
 Depends on: None
 Blocks: HUM-10 through HUM-70
@@ -45,7 +45,7 @@ React, lyrics, timing, caches, artwork, settings, and OBS can travel to another 
 
 ## Acceptance criteria
 
-- [ ] HUM-00-AC1: A shared `TrackSnapshot` contains every field used by lyrics, the overlay, artist information, and OBS.
+- [x] HUM-00-AC1: The shared `CurrentTrack` snapshot contains every field used by lyrics, the overlay, artist information, and OBS. Exact wire-contract tests shipped in v0.13.54.
 - [ ] HUM-00-AC2: Windows SMTC, iTunes, browser probes, and Pandora playback detection publish through one backend boundary.
 - [ ] HUM-00-AC3: Lyrics and streamer modules do not import a Windows-specific snapshot type.
 - [ ] HUM-00-AC4: Windows-only crates are declared under Windows target dependencies.
@@ -71,7 +71,7 @@ React, lyrics, timing, caches, artwork, settings, and OBS can travel to another 
 
 ## Slice map
 
-No implementation plan written yet.
+- [HUM-00A shared media model](../../superpowers/plans/2026-08-19-hum-00a-shared-media-model.md), Complete in v0.13.54
 
 ## Completion record
 

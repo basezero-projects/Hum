@@ -16,9 +16,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use base64::Engine;
-use serde::Serialize;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::mpsc;
 use windows::Foundation::{EventRegistrationToken, TypedEventHandler};
 use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSession,
@@ -28,18 +27,9 @@ use windows::Media::Control::{
 };
 use windows::Storage::Streams::DataReader;
 
-#[derive(Clone, Copy, Serialize, Debug, Default, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum PlaybackState {
-    #[default]
-    Unknown,
-    Closed,
-    Opened,
-    Changing,
-    Stopped,
-    Playing,
-    Paused,
-}
+pub use crate::media::{
+    AlbumArtPayload, CurrentTrack, PlaybackState, SharedAlbumArt, SharedSnapshot,
+};
 
 impl From<GlobalSystemMediaTransportControlsSessionPlaybackStatus> for PlaybackState {
     fn from(s: GlobalSystemMediaTransportControlsSessionPlaybackStatus) -> Self {
@@ -55,39 +45,6 @@ impl From<GlobalSystemMediaTransportControlsSessionPlaybackStatus> for PlaybackS
         }
     }
 }
-
-#[derive(Clone, Serialize, Debug, Default)]
-pub struct CurrentTrack {
-    pub title: String,
-    pub artist: String,
-    pub album: String,
-    pub duration_ms: u64,
-    pub position_ms: u64,
-    /// Unix epoch ms when SMTC last reported the position. The frontend uses
-    /// `position_ms + (now - last_update_unix_ms)` to interpolate while playing.
-    pub last_update_unix_ms: i64,
-    pub state: PlaybackState,
-    /// e.g. "Spotify.exe", "308046B0AF4A39CB" (Firefox AUMID), etc. Useful for
-    /// debugging / future per-source behavior.
-    pub source_app_id: Option<String>,
-    /// True when the current source is playing an ad break (Spotify's
-    /// "Advertisement" track, Pandora's ad interlude, YouTube's ad rolls).
-    /// Drives the overlay to render the SYVR promo card in place of lyrics.
-    #[serde(default)]
-    pub ad_active: bool,
-    /// Set by `blend_bridge_into_snapshot` when a web-bridge probe is the
-    /// source of truth for the title/artist/album fields — e.g. "netflix-web"
-    /// when NetflixProbe scraped the show name from the Chrome window title,
-    /// "pandora-web" when PandoraProbe scraped the now-playing widget. Lets
-    /// `lyrics.rs` short-circuit to Unsupported for known video services
-    /// (don't burn an HTTP round trip looking up lyrics for a show), and
-    /// lets the frontend brand-frame the unsupported view with the right
-    /// service identity (Netflix red around "WATCHING NETFLIX", etc.).
-    #[serde(default)]
-    pub bridge_source: Option<String>,
-}
-
-pub type SharedSnapshot = Arc<RwLock<CurrentTrack>>;
 
 /// Heuristic detector for Spotify ad breaks via SMTC metadata patterns.
 ///
@@ -139,18 +96,6 @@ pub(crate) fn is_spotify_ad(t: &CurrentTrack) -> bool {
 
     false
 }
-
-/// Last emitted album-art payload, kept so the frontend can `invoke`
-/// `get_current_album_art` on mount and pick up the art that fired BEFORE
-/// its `listen("album-art-loaded", …)` subscription completed. Without
-/// this, a fresh app launch with Chrome/Spotify already playing shows
-/// lyrics but no artwork until the user switches tracks (which fires
-/// `MediaPropertiesChanged` and re-emits the event with the listener now
-/// attached). The cache is overwritten on every successful art fetch and
-/// the frontend's render filter (`payload.title === track.title &&
-/// payload.artist === track.artist`) hides stale entries automatically
-/// during the ~100ms between track-change and the fresh art arriving.
-pub type SharedAlbumArt = Arc<RwLock<Option<AlbumArtPayload>>>;
 
 #[derive(Clone, Copy, Debug)]
 #[allow(clippy::enum_variant_names)]
@@ -576,13 +521,6 @@ async fn emit_full(
     if !snap_title.trim().is_empty() {
         spawn_art_fetch(app.clone(), art.clone(), session.clone(), snap_title, snap_artist);
     }
-}
-
-#[derive(Clone, Serialize)]
-pub struct AlbumArtPayload {
-    pub title: String,
-    pub artist: String,
-    pub data_url: String,
 }
 
 // Album art is large (50-200KB base64). Carrying it inside CurrentTrack would

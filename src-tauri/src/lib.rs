@@ -10,8 +10,17 @@ use tokio::sync::RwLock;
 #[cfg(windows)]
 mod itunes;
 
+mod media;
+
 #[cfg(windows)]
 mod smtc;
+
+#[cfg(not(windows))]
+mod smtc {
+    pub use crate::media::{
+        AlbumArtPayload, CurrentTrack, PlaybackState, SharedAlbumArt, SharedSnapshot,
+    };
+}
 
 #[cfg(windows)]
 mod web_bridge;
@@ -37,35 +46,10 @@ mod promos;
 mod settings;
 mod streamer;
 
-#[cfg(windows)]
-use smtc::{AlbumArtPayload, CurrentTrack, SharedAlbumArt, SharedSnapshot};
-
-#[cfg(not(windows))]
-mod smtc {
-    use serde::Serialize;
-    use std::sync::Arc;
-    use tokio::sync::RwLock;
-
-    #[derive(Clone, Serialize, Debug, Default)]
-    pub struct CurrentTrack {}
-
-    #[derive(Clone, Serialize, Debug)]
-    pub struct AlbumArtPayload {
-        pub title: String,
-        pub artist: String,
-        pub data_url: String,
-    }
-
-    pub type SharedSnapshot = Arc<RwLock<CurrentTrack>>;
-    pub type SharedAlbumArt = Arc<RwLock<Option<AlbumArtPayload>>>;
-}
-
-#[cfg(not(windows))]
-use smtc::{AlbumArtPayload, CurrentTrack, SharedAlbumArt, SharedSnapshot};
-
 use artist_info::{clear_artist_info_cache, get_artist_info, ArtistInfoCache};
 use artist_window::{close_artist_panel_cmd, open_artist_panel_cmd, open_ticket_url};
 use lyrics::{CurrentLyrics, SharedLyrics};
+use media::{AlbumArtPayload, CurrentTrack, SharedAlbumArt, SharedSnapshot};
 use mode::{
     apply_mode, cycle_overlay_mode, get_overlay_mode, icon_for, set_overlay_mode, ModeMenuItems,
     OverlayMode, SharedMode, TRAY_ID,
