@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadPlatformInfoWithRetry } from "./types.ts";
+import { loadPlatformInfoWithRetry, loadSettingsWithRetry } from "./types.ts";
 
 const PLATFORM_INFO = {
   platform: "windows",
@@ -48,4 +48,40 @@ test("platform information recovers after an initial rejected load", async () =>
   assert.equal(result, PLATFORM_INFO);
   assert.equal(attempts, 2);
   assert.deepEqual(waited, [1000]);
+});
+
+test("saved settings recover from the native startup race before rendering defaults", async () => {
+  let attempts = 0;
+  const waited = [];
+  const saved = { overlay_shape: "square", font_size_px: 26 };
+
+  const result = await loadSettingsWithRetry(
+    async () => {
+      attempts += 1;
+      if (attempts < 3) throw new Error("state not managed");
+      return saved;
+    },
+    async (delayMs) => {
+      waited.push(delayMs);
+    },
+    () => true,
+  );
+
+  assert.equal(result, saved);
+  assert.equal(attempts, 3);
+  assert.deepEqual(waited, [100, 100]);
+});
+
+test("settings retry stops without publishing a fallback after unmount", async () => {
+  let active = true;
+  const result = await loadSettingsWithRetry(
+    async () => {
+      active = false;
+      throw new Error("state not managed");
+    },
+    async () => {},
+    () => active,
+  );
+
+  assert.equal(result, null);
 });

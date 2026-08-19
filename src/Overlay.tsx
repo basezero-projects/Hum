@@ -23,7 +23,7 @@ import type {
   TextAlign,
   WordSpan,
 } from "./types";
-import { fmtMs, loadPlatformInfoWithRetry } from "./types";
+import { fmtMs, loadPlatformInfoWithRetry, loadSettingsWithRetry } from "./types";
 
 const DEFAULT_SETTINGS: Settings = {
   last_mode: "edit",
@@ -172,6 +172,8 @@ export default function Overlay() {
   }, []);
 
   useEffect(() => {
+    let active = true;
+
     function interpolatedPositionMs(): number {
       const t = trackRef.current;
       if (!t) return 0;
@@ -400,10 +402,18 @@ export default function Overlay() {
       })
       .catch(() => {});
     invoke<OverlayMode>("get_overlay_mode").then(setMode).catch(() => {});
-    invoke<Settings>("get_settings").then(applySettings).catch(() => {});
+    void loadSettingsWithRetry(
+      () => invoke<Settings>("get_settings"),
+      (delayMs) =>
+        new Promise((resolve) => window.setTimeout(resolve, delayMs)),
+      () => active,
+    ).then((saved) => {
+      if (active && saved) applySettings(saved);
+    });
 
     rafId = requestAnimationFrame(tick);
     return () => {
+      active = false;
       cancelAnimationFrame(rafId);
       unlisteners.forEach((p) => p.then((fn) => fn()).catch(() => {}));
     };

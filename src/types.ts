@@ -161,6 +161,22 @@ export async function loadPlatformInfoWithRetry(
   return null;
 }
 
+export async function loadSettingsWithRetry<T>(
+  load: () => Promise<T>,
+  wait: RetryWait = waitForRetry,
+  shouldContinue: () => boolean = () => true,
+): Promise<T | null> {
+  while (shouldContinue()) {
+    try {
+      return await load();
+    } catch {
+      if (!shouldContinue()) return null;
+      await wait(100);
+    }
+  }
+  return null;
+}
+
 export type TicketStatus = "available" | "sold_out";
 
 export type TourDate = {

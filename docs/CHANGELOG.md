@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.66] - 2026-08-19
+
+### Fixed
+- **Square lyrics no longer open as a tiny ribbon inside a square window.** On startup, Hum now retries the saved-settings request when the native backend is still getting ready. The overlay waits for the real Square or Ribbon choice, font size, layout, and appearance instead of silently keeping temporary Ribbon defaults while Windows restores the saved window geometry. A 620 by 620 Square view now opens with the large active lyric in its intended fixed reading position.
+
 ## [0.13.65] - 2026-08-19
 
 ### Added

@@ -5,11 +5,12 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 ## Current cursor
 
 - Slice: HUM-10E, signed updates and update states
-- Step: Survey and plan lock
-- Next action: map the current updater configuration, signing inputs, release workflow, and manual update surfaces before locking the signed-update slice
+- Step: Red-first implementation
+- Next action: create the Hum updater key, lock the release contracts with failing tests, then implement the signed workflow and complete update states
 - Blocker: None for local implementation. Live purchase proof still requires a Polar organization and Hum product.
-- Last updated: 2026-08-19 14:32 MDT
+- Last updated: 2026-08-19 14:45 MDT
 - Last completed plan: `docs/superpowers/plans/2026-08-19-hum-10d-first-run-setup.md`
+- Current plan: `docs/superpowers/plans/2026-08-19-hum-10e-signed-updates.md`
 
 ## Locked product policy
 
@@ -91,3 +92,5 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 - 2026-08-19 13:33 MDT: HUM-10C passed 234 Rust tests, the complete debug and release gate, and native release-window QA after four review and visual repairs. The slice closed in v0.13.64 and the cursor advanced to HUM-10D survey.
 - 2026-08-19 13:47 MDT: HUM-10D locked a ten-file production boundary for versioned completion state, one shared customer-window plan, a predeclared Setup window, live audio and appearance choices, core-control guidance, tray recovery, and reset-safe persistence.
 - 2026-08-19 14:32 MDT: HUM-10D passed 244 Rust tests, the complete debug and release gate, a live two-song NetEase smoke test, and native setup, lyrics, overlay-brand, and title-bar QA. The slice repaired provider fallback lyrics and replaced the remaining waveform assets with the approved hummingbird before v0.13.65 shipped. The cursor advanced to HUM-10E survey.
+- 2026-08-19 14:48 MDT: HUM-10E locked a twelve-file production boundary for a Hum-specific updater key, Azure Trusted Signing inside the Tauri build, private signed proof runs, tag-only GitHub publishing, checked release metadata, and complete customer-visible update states.
+- 2026-08-19 14:45 MDT: A real startup exposed the overlay's one-shot settings hydration race. The failure left Ribbon defaults rendered inside saved Square geometry, shrinking every lyric. A red-first retry test and native 620 by 620 replay closed the v0.13.66 correction before HUM-10E implementation resumed.
