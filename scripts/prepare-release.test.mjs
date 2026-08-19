@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { prepareRelease } from "./prepare-release.mjs";
+import * as releaseContract from "./prepare-release.mjs";
+
+const { prepareRelease } = releaseContract;
 
 const VERSION = "1.2.3";
 
@@ -118,10 +120,52 @@ test("release workflow keeps proof runs private and tag releases signed", async 
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /tags:\s*\n\s*- ['"]v\*['"]/);
   assert.match(workflow, /Microsoft\.Trusted\.Signing\.Client/);
-  assert.match(workflow, /signCommand/);
+  assert.match(workflow, /prepare-release\.mjs write-sign-config/);
+  assert.match(workflow, /--signtool "\$signtool" --azure-library "\$dll"/);
+  assert.doesNotMatch(workflow, /Copy-Item \$signtool signtool\.exe/);
   assert.match(workflow, /TAURI_SIGNING_PRIVATE_KEY/);
   assert.match(workflow, /Get-AuthenticodeSignature/);
   assert.match(workflow, /prepare-release\.mjs/);
-  assert.match(workflow, /if: startsWith\(github\.ref, 'refs\/tags\/v'\)/);
+  assert.match(
+    workflow,
+    /if: github\.event_name == 'push' && startsWith\(github\.ref, 'refs\/tags\/v'\)/,
+  );
   assert.doesNotMatch(workflow, /if: github\.event_name == 'workflow_dispatch'\s*\n\s*uses: .*release/i);
+});
+
+test("Windows signing config preserves exact spaced paths and Tauri placeholder", async () => {
+  assert.equal(typeof releaseContract.writeWindowsSignConfig, "function");
+  const signtool = String.raw`C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe`;
+  const azureLibrary = String.raw`D:\a\Hum build\signing\Azure.CodeSigning.Dlib.dll`;
+  const metadata = String.raw`D:\a\Hum build\signing metadata.json`;
+  const root = await mkdtemp(path.join(os.tmpdir(), "hum-sign-config-"));
+  const outputPath = path.join(root, "sign config.json");
+  await releaseContract.writeWindowsSignConfig({ signtool, azureLibrary, metadata, outputPath });
+  assert.deepEqual(
+    JSON.parse(await readFile(outputPath, "utf8")),
+    {
+      bundle: {
+        windows: {
+          signCommand: {
+            cmd: signtool,
+            args: [
+              "sign",
+              "/v",
+              "/fd",
+              "SHA256",
+              "/tr",
+              "http://timestamp.acs.microsoft.com",
+              "/td",
+              "SHA256",
+              "/dlib",
+              azureLibrary,
+              "/dmdf",
+              metadata,
+              "%1",
+            ],
+          },
+        },
+      },
+    },
+  );
 });

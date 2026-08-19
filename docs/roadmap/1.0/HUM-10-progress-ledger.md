@@ -5,10 +5,10 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 ## Current cursor
 
 - Slice: HUM-10E, signed updates and update states
-- Step: Candidate closeout and signed workflow proof
-- Next action: pass the full v0.13.67 gate, push the proof candidate, dispatch the private signed workflow, and audit its artifacts before the final closeout patch
+- Step: Repair candidate closeout and signed workflow proof
+- Next action: pass the full v0.13.68 gate, push the repaired signing command, dispatch the private signed workflow, and audit its artifacts before the final closeout patch
 - Blocker: None for local implementation. Live purchase proof still requires a Polar organization and Hum product.
-- Last updated: 2026-08-19 15:07 MDT
+- Last updated: 2026-08-19 15:39 MDT
 - Last completed plan: `docs/superpowers/plans/2026-08-19-hum-10d-first-run-setup.md`
 - Current plan: `docs/superpowers/plans/2026-08-19-hum-10e-signed-updates.md`
 
@@ -95,3 +95,5 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 - 2026-08-19 14:48 MDT: HUM-10E locked a twelve-file production boundary for a Hum-specific updater key, Azure Trusted Signing inside the Tauri build, private signed proof runs, tag-only GitHub publishing, checked release metadata, and complete customer-visible update states.
 - 2026-08-19 14:45 MDT: A real startup exposed the overlay's one-shot settings hydration race. The failure left Ribbon defaults rendered inside saved Square geometry, shrinking every lyric. A red-first retry test and native 620 by 620 replay closed the v0.13.66 correction before HUM-10E implementation resumed.
 - 2026-08-19 15:07 MDT: HUM-10E completed its red-first local implementation. Hum now owns a protected updater key, GitHub holds only encrypted release secrets, the committed config contains only the public key, update states and tray projections are tested, and the manual workflow is ready for its first private signed proof run.
+- 2026-08-19 15:39 MDT: The first v0.13.67 private proof passed the complete test gate, Azure setup, and updater key match, then failed when a copied `signtool.exe` could not load from outside its Windows SDK directory. A red-first workflow contract now requires Tauri's structured command form with the original SDK path. The v0.13.68 repair candidate is entering the full gate.
+- 2026-08-19 15:48 MDT: Independent review found that a manual workflow started from a tag could satisfy the original publish condition. Red-first coverage now requires a pushed tag event, and the workflow's generated signing JSON is tested with spaced SDK, Azure library, and metadata paths plus Tauri's `%1` placeholder.

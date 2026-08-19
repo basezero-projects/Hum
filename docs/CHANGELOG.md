@@ -6,6 +6,12 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.68] - 2026-08-19
+
+### Fixed
+- **Signed Windows builds now use the complete Windows SDK signing tool installation.** The private release workflow passes Tauri the original `signtool.exe` path and structured arguments, so the tool can load its neighboring SDK libraries while Azure applies Hum's Authenticode signature. This is release infrastructure only and does not add a new screen or setting.
+- **Manual signing proofs can no longer publish a public release.** Hum now publishes installers and update metadata only when GitHub receives a pushed version tag. Choosing a tag while manually starting a private proof still keeps every artifact private.
+
 ## [0.13.67] - 2026-08-19
 
 ### Added

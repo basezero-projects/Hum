@@ -94,20 +94,12 @@ jobs:
             Sort-Object FullName -Descending |
             Select-Object -First 1 -ExpandProperty FullName
           if (-not $signtool) { throw 'signtool.exe was not found' }
-          Copy-Item $signtool signtool.exe
           @{
             Endpoint = $env:AZURE_CODE_SIGNING_ENDPOINT
             CodeSigningAccountName = $env:AZURE_CODE_SIGNING_NAME
             CertificateProfileName = $env:AZURE_CERT_PROFILE_NAME
           } | ConvertTo-Json | Set-Content signing-metadata.json
-          $signCommand = "$pwd\signtool.exe sign /v /fd SHA256 /tr http://timestamp.acs.microsoft.com /td SHA256 /dlib $dll /dmdf $pwd\signing-metadata.json %1"
-          @{
-            bundle = @{
-              windows = @{
-                signCommand = $signCommand
-              }
-            }
-          } | ConvertTo-Json -Depth 5 | Set-Content sign-config.json
+          node scripts/prepare-release.mjs write-sign-config --signtool "$signtool" --azure-library "$dll" --metadata "$pwd\signing-metadata.json" --output sign-config.json
 
       - name: Verify updater private key matches Hum
         shell: pwsh
@@ -147,7 +139,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish tagged release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: release-output/*

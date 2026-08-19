@@ -48,6 +48,47 @@ function validateTag(tag, version) {
   }
 }
 
+function requiredString(value, label) {
+  if (typeof value !== "string" || !value.trim()) fail(`${label} is required`);
+  return value;
+}
+
+export function createWindowsSignConfig({ signtool, azureLibrary, metadata }) {
+  const cmd = requiredString(signtool, "signtool path");
+  const library = requiredString(azureLibrary, "Azure signing library path");
+  const metadataPath = requiredString(metadata, "Azure signing metadata path");
+  return {
+    bundle: {
+      windows: {
+        signCommand: {
+          cmd,
+          args: [
+            "sign",
+            "/v",
+            "/fd",
+            "SHA256",
+            "/tr",
+            "http://timestamp.acs.microsoft.com",
+            "/td",
+            "SHA256",
+            "/dlib",
+            library,
+            "/dmdf",
+            metadataPath,
+            "%1",
+          ],
+        },
+      },
+    },
+  };
+}
+
+export async function writeWindowsSignConfig({ signtool, azureLibrary, metadata, outputPath }) {
+  const config = createWindowsSignConfig({ signtool, azureLibrary, metadata });
+  await writeFile(outputPath, `${JSON.stringify(config, null, 2)}\n`);
+  return config;
+}
+
 function decodeBase64Strict(value, label) {
   const compact = value.trim();
   if (!compact || !/^[A-Za-z0-9+/]+={0,2}$/.test(compact)) {
@@ -206,6 +247,19 @@ async function main() {
     process.stdout.write("Updater key matches the configured public key\n");
     return;
   }
+  if (command === "write-sign-config") {
+    for (const required of ["signtool", "azure-library", "metadata", "output"]) {
+      if (!values[required]) fail(`write-sign-config requires --${required}`);
+    }
+    await writeWindowsSignConfig({
+      signtool: values.signtool,
+      azureLibrary: values["azure-library"],
+      metadata: values.metadata,
+      outputPath: path.resolve(values.output),
+    });
+    process.stdout.write("Prepared the Windows signing configuration\n");
+    return;
+  }
   if (command === "prepare") {
     for (const required of ["artifacts", "output", "repository"]) {
       if (!values[required]) fail(`prepare requires --${required}`);
@@ -220,7 +274,7 @@ async function main() {
     process.stdout.write(`Prepared Hum v${result.version}\n`);
     return;
   }
-  fail("Expected check-version, verify-key, or prepare command");
+  fail("Expected check-version, verify-key, write-sign-config, or prepare command");
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
