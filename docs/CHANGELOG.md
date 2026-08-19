@@ -6,6 +6,15 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.59] - 2026-08-19
+
+### Added
+- **Hum now recognizes the available Windows audio outputs and the current default output.** The new device contract keeps each native endpoint ID intact and classifies outputs as Wired, Speakers, Bluetooth, HDMI, or Unknown. There is no new user interface yet. This data is ready for a later automatic listening-mode workflow.
+- **Audio-output changes publish without touching lyric timing choices.** Hum checks the endpoint inventory every two seconds, publishes only real inventory or default-output changes, and never changes the saved Wired, Speakers, or Bluetooth profile. A failed check keeps the last known devices and retries quietly.
+
+### Changed
+- **Audio-output monitoring now has a clean application shutdown path.** The dedicated Windows COM worker stops and joins before a normal exit or updater restart. Independent review also added support for Windows Bluetooth enumerators such as `BTHENUM` and `BTHHFENUM`, even when a device name does not contain the word Bluetooth.
+
 ## [0.13.58] - 2026-08-19
 
 ### Changed

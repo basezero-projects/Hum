@@ -19,6 +19,21 @@ export type CurrentTrack = {
 
 export type OverlayMode = "edit" | "locked" | "ghost";
 export type ListeningMode = "wired" | "speakers" | "bluetooth";
+export type AudioOutputRoute =
+  | "wired"
+  | "speakers"
+  | "bluetooth"
+  | "hdmi"
+  | "unknown";
+export type AudioOutputDevice = {
+  id: string;
+  display_name: string;
+  route: AudioOutputRoute;
+};
+export type AudioOutputState = {
+  outputs: AudioOutputDevice[];
+  active: AudioOutputDevice | null;
+};
 export type WindowBackdrop = "acrylic" | "mica" | "tabbed_mica" | "none";
 
 export type LayoutMode = "three_line" | "single_line" | "full_page";

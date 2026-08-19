@@ -4,11 +4,11 @@ This file is the durable execution cursor for HUM-00. Update it at every slice b
 
 ## Current cursor
 
-- Slice: HUM-00F, Audio-output discovery
-- Step: F1, survey the accepted audio-output boundary and lock the executable plan
-- Next action: map Windows endpoint discovery and active-output events without changing the selected listening profile
+- Slice: HUM-00G, Build proof and system documentation
+- Step: G1, survey the CI, smoke-test, and documentation boundary
+- Next action: map native compile jobs, shared-shell smoke proof, Windows regression evidence, and the final media-and-timing document
 - Blocker: None
-- Last updated: 2026-08-19 10:00 MDT
+- Last updated: 2026-08-19 10:35 MDT
 
 ## Completed slices
 
@@ -60,12 +60,23 @@ This file is the durable execution cursor for HUM-00. Update it at every slice b
 
 - Status: Complete
 - Version: 0.13.58
-- Commit: closeout commit titled `Expose platform capabilities to React`
-- Remote: push required before HUM-00F implementation begins
+- Commit: `8f7a9ab` (`Expose platform capabilities to React`)
+- Remote: pushed to `origin/main`
 - Validation: frontend typecheck and build passed; Cargo all-target check passed; Clippy passed with warnings denied; 157 Rust tests passed; full-tree Rust formatting passed; the platform recovery Node test passed; diff check passed
 - Review: independent review found one updater recovery issue, which was fixed red-first and approved on follow-up
 - Acceptance criteria: HUM-00-AC5 and HUM-00-AC6 complete
 - Known deferrals: native macOS and Linux compilation remains assigned to HUM-00G CI; audio-output discovery remains intentionally false until HUM-00F
+
+### HUM-00F, Audio-output discovery
+
+- Status: Complete
+- Version: 0.13.59
+- Commit: closeout commit titled `Add Windows audio output discovery`
+- Remote: push required before HUM-00G implementation begins
+- Validation: frontend typecheck and build passed; Cargo all-target check passed; Clippy passed with warnings denied; 176 Rust tests passed; full-tree Rust formatting passed; diff check passed
+- Review: independent review found a runtime ownership cycle and incomplete Bluetooth enumerator classification; both were fixed red-first and approved on follow-up
+- Acceptance criteria: HUM-00-AC9 complete
+- Known deferrals: physical multi-device smoke coverage and native macOS and Linux compilation remain assigned to HUM-00G; automatic profile selection remains assigned to HUM-30
 
 ## Execution log
 
@@ -84,3 +95,6 @@ This file is the durable execution cursor for HUM-00. Update it at every slice b
 - 2026-08-19 09:39 MDT: HUM-00D committed as `b10b6a4`, pushed to `origin/main`, and HUM-00E plan lock began.
 - 2026-08-19 09:46 MDT: HUM-00E capability facts, path ownership, updater assumptions, and React control branches were mapped. The executable eight-file plan was locked.
 - 2026-08-19 10:00 MDT: HUM-00E passed 157 Rust tests and the full gate after a red-first updater recovery fix. The ledger advanced to HUM-00F survey pending the closeout commit and push.
+- 2026-08-19 10:02 MDT: HUM-00E committed as `8f7a9ab`, pushed to `origin/main`, and HUM-00F survey began.
+- 2026-08-19 10:09 MDT: HUM-00F endpoint APIs, profile isolation, event contracts, polling lifecycle, and failure behavior were mapped. The executable nine-file plan was locked.
+- 2026-08-19 10:35 MDT: HUM-00F passed 176 Rust tests and the full gate after red-first lifecycle and Bluetooth fixes. The ledger advanced to HUM-00G survey pending the closeout commit and push.

@@ -26,6 +26,7 @@ mod youtube_bridge;
 
 mod artist_info;
 mod artist_window;
+mod audio_output;
 #[cfg(windows)]
 mod contrast;
 mod lyrics;
@@ -38,6 +39,12 @@ pub mod window_effects;
 
 use artist_info::{clear_artist_info_cache, get_artist_info, ArtistInfoCache};
 use artist_window::{close_artist_panel_cmd, open_artist_panel_cmd, open_ticket_url};
+use audio_output::{get_active_audio_output, get_audio_outputs, new_shared_state};
+#[cfg(windows)]
+use audio_output::{
+    shutdown_managed_runtime, AudioOutputBackend, AudioOutputBackendContext, AudioOutputPublisher,
+    ManagedAudioOutputRuntime, SharedAudioOutputState,
+};
 use lyrics::{CurrentLyrics, SharedLyrics};
 use media::{AlbumArtPayload, CurrentTrack, SharedAlbumArt, SharedSnapshot};
 #[cfg(windows)]
@@ -133,8 +140,9 @@ pub fn run() {
     let lyrics_state: SharedLyrics = Arc::new(RwLock::new(CurrentLyrics::default()));
     let smtc_active: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     let mode_state: SharedMode = Arc::new(AtomicU8::new(OverlayMode::default() as u8));
+    let audio_output_state = new_shared_state();
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
@@ -167,6 +175,7 @@ pub fn run() {
         .manage(album_art)
         .manage(lyrics_state)
         .manage(mode_state)
+        .manage(audio_output_state)
         .setup(move |app| {
             let snap = app.state::<SharedSnapshot>().inner().clone();
             let art_state = app.state::<SharedAlbumArt>().inner().clone();
@@ -205,6 +214,13 @@ pub fn run() {
                     lyrics: lyrics_shared,
                     smtc_playing: smtc_active.clone(),
                 });
+                let output_cache = app.state::<SharedAudioOutputState>().inner().clone();
+                let output_runtime = platform::windows::WindowsAudioOutputBackend
+                    .start(AudioOutputBackendContext {
+                        publisher: AudioOutputPublisher::new(app.handle().clone(), output_cache),
+                    })
+                    .map_err(std::io::Error::other)?;
+                app.manage(ManagedAudioOutputRuntime::new(output_runtime));
             }
             #[cfg(not(windows))]
             {
@@ -384,6 +400,8 @@ pub fn run() {
             get_overlay_mode,
             set_overlay_mode,
             cycle_overlay_mode,
+            get_audio_outputs,
+            get_active_audio_output,
             get_platform_info,
             get_settings,
             update_settings,
@@ -397,8 +415,19 @@ pub fn run() {
             close_artist_panel_cmd,
             open_ticket_url,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        #[cfg(windows)]
+        if matches!(event, tauri::RunEvent::Exit) {
+            if let Some(runtime) = app_handle.try_state::<ManagedAudioOutputRuntime>() {
+                shutdown_managed_runtime(runtime.inner());
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = (app_handle, event);
+    });
 }
 
 struct ListeningModeMenuItems {

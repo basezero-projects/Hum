@@ -131,8 +131,8 @@ fn build_platform_info(platform: Platform, wayland: bool, paths: PlatformPaths) 
         platform,
         media,
         audio_output: AudioOutputCapabilities {
-            discovery: false,
-            active_output_changes: false,
+            discovery: platform == Platform::Windows,
+            active_output_changes: platform == Platform::Windows,
         },
         window,
         services,
@@ -198,8 +198,8 @@ mod tests {
                 platform: Platform::Windows,
                 media: MediaCapabilities { playback: true },
                 audio_output: AudioOutputCapabilities {
-                    discovery: false,
-                    active_output_changes: false,
+                    discovery: true,
+                    active_output_changes: true,
                 },
                 window: WindowCapabilities {
                     supported_backdrops: vec![
@@ -231,8 +231,8 @@ mod tests {
                 "platform": "windows",
                 "media": { "playback": true },
                 "audio_output": {
-                    "discovery": false,
-                    "active_output_changes": false
+                    "discovery": true,
+                    "active_output_changes": true
                 },
                 "window": {
                     "supported_backdrops": ["acrylic", "mica", "tabbed_mica", "none"],
@@ -326,6 +326,20 @@ mod tests {
         let info = build_platform_info(Platform::Linux, false, test_paths("/Hum"));
 
         assert!(!info.window.click_through);
+    }
+
+    #[test]
+    fn audio_output_capabilities_are_windows_only() {
+        let windows = build_platform_info(Platform::Windows, false, test_paths("C:/Hum"));
+        let macos = build_platform_info(Platform::Macos, false, test_paths("/Hum"));
+        let linux = build_platform_info(Platform::Linux, false, test_paths("/Hum"));
+
+        assert!(windows.audio_output.discovery);
+        assert!(windows.audio_output.active_output_changes);
+        assert!(!macos.audio_output.discovery);
+        assert!(!macos.audio_output.active_output_changes);
+        assert!(!linux.audio_output.discovery);
+        assert!(!linux.audio_output.active_output_changes);
     }
 
     #[test]
