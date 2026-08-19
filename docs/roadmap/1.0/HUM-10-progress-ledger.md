@@ -4,11 +4,11 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 
 ## Current cursor
 
-- Slice: HUM-10C, activation and restore experience
+- Slice: HUM-10D, first-run setup
 - Step: Survey and plan lock
-- Next action: map the release entitlement gate, activation window, checkout handoff, restore, deactivation, and frontend command contracts
-- Blocker: None for local implementation. Live provider proof still requires a Polar organization and Hum product.
-- Last updated: 2026-08-19 13:00 MDT
+- Next action: map the clean-install path for overlay placement, listening output, appearance, and core controls before implementing the guided setup
+- Blocker: None for local implementation. Live purchase proof still requires a Polar organization and Hum product.
+- Last updated: 2026-08-19 13:33 MDT
 
 ## Locked product policy
 
@@ -56,9 +56,23 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 - Acceptance criteria: the protected backend supports HUM-10-AC1 through AC3, but none are checked until HUM-10C exposes and enforces the customer workflow
 - Known deferrals: activation UI, checkout, restore presentation, entitlement enforcement, and live Polar proof remain in HUM-10C onward
 
+### HUM-10C, activation and restore experience
+
+- Status: Complete
+- Version: 0.13.64
+- Commit: closeout commit titled `Add the Hum activation experience`
+- Remote: push to `origin/main` during closeout
+- Validation: frozen frontend install, typecheck, and production build passed; 234 Rust tests passed; debug and release all-target checks passed; debug and release Clippy passed with warnings denied; full Rust formatting and diff validation passed
+- Review: red-first repairs made the final entitlement the sole deactivation success criterion, kept failed device release visible and recoverable, scoped accessibility errors to the action that produced them, and removed misleading retry and device-management actions when no protected license exists
+- Visual proof: the native release build showed the license window while the overlay remained hidden; the default 780 by 600 and minimum 680 by 520 layouts had no clipping or unintended scrolling; keyboard submission, key reveal and hide, close and reopen, safe missing-checkout errors, and secret redaction were exercised
+- Acceptance criteria: HUM-10-AC1 through HUM-10-AC3 are complete for the local paid-product workflow
+- Known deferrals: the production Polar organization, Hum product, hosted checkout, receipt delivery, customer portal, and real purchase proof remain in HUM-10G and HUM-10H
+
 ## Execution log
 
 - 2026-08-19 12:05 MDT: HUM-10 started. The purchase and license policy was locked, ADR-0002 was accepted, and HUM-10A entered implementation.
 - 2026-08-19 12:32 MDT: HUM-10A passed 202 Rust tests and the full gate after a red-first countdown correction. The slice closed in v0.13.62 and the cursor advanced to HUM-10B survey.
 - 2026-08-19 12:44 MDT: HUM-10B locked an eleven-file production boundary for the versioned secret record, storage and provider interfaces, Polar client, license service, Windows DPAPI adapter, startup ownership, and existing Windows API feature additions.
 - 2026-08-19 13:00 MDT: HUM-10B passed 229 Rust tests and the complete debug and release gate after four red-first review repairs. The slice closed in v0.13.63 and the cursor advanced to HUM-10C survey.
+- 2026-08-19 13:12 MDT: HUM-10C locked a nine-file production boundary for safe license commands, native window gating, tray recovery, strict Polar links, and a dedicated activation experience.
+- 2026-08-19 13:33 MDT: HUM-10C passed 234 Rust tests, the complete debug and release gate, and native release-window QA after four review and visual repairs. The slice closed in v0.13.64 and the cursor advanced to HUM-10D survey.

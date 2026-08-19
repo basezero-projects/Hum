@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItemBuilder, MenuBuilder, MenuItem, MenuItemBuilder, SubmenuBuilder};
 use tauri::tray::TrayIconBuilder;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tokio::sync::RwLock;
 
 #[cfg(windows)]
@@ -46,7 +46,7 @@ use audio_output::{
     shutdown_managed_runtime, AudioOutputBackend, AudioOutputBackendContext, AudioOutputPublisher,
     ManagedAudioOutputRuntime, SharedAudioOutputState,
 };
-use license::LicenseService;
+use license::{apply_license_windows, current_unix_ms, LicenseService};
 use lyrics::{CurrentLyrics, SharedLyrics};
 use media::{AlbumArtPayload, CurrentTrack, SharedAlbumArt, SharedSnapshot};
 #[cfg(windows)]
@@ -253,10 +253,17 @@ pub fn run() {
                 Arc::new(service)
             };
             app.manage(license_service.clone());
+            let app_for_license = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(error) = license_service.bootstrap(current_unix_ms()).await {
-                    eprintln!("license bootstrap failed: {error}");
-                }
+                let state = match license_service.bootstrap(current_unix_ms()).await {
+                    Ok(state) => state,
+                    Err(error) => {
+                        eprintln!("license bootstrap failed: {error}");
+                        license_service.state().await
+                    }
+                };
+                apply_license_windows(&app_for_license, &state);
+                let _ = app_for_license.emit("license-state-changed", &state);
             });
 
             let artist_cache = ArtistInfoCache::new(app.handle().clone());
@@ -382,7 +389,7 @@ pub fn run() {
             // window survives and the pending write fires. The overlay has no
             // decorations (no X) and artist-info is created-on-demand + meant to
             // be destroyed, so neither needs this.
-            for label in ["main", "settings"] {
+            for label in ["main", "settings", "activation"] {
                 if let Some(win) = app.get_webview_window(label) {
                     let win_for_event = win.clone();
                     win.on_window_event(move |event| {
@@ -478,6 +485,13 @@ pub fn run() {
             open_artist_panel_cmd,
             close_artist_panel_cmd,
             open_ticket_url,
+            license::commands::get_license_state,
+            license::commands::activate_license,
+            license::commands::refresh_license,
+            license::commands::deactivate_license,
+            license::commands::open_license_window,
+            license::commands::open_license_checkout,
+            license::commands::open_license_portal,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -492,14 +506,6 @@ pub fn run() {
         #[cfg(not(windows))]
         let _ = (app_handle, event);
     });
-}
-
-fn current_unix_ms() -> i64 {
-    let milliseconds = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    i64::try_from(milliseconds).unwrap_or(i64::MAX)
 }
 
 struct ListeningModeMenuItems {
@@ -518,7 +524,6 @@ pub(crate) fn sync_listening_mode_menu(app: &tauri::AppHandle, mode: &str) {
 }
 
 fn set_listening_mode_from_tray(app: &tauri::AppHandle, mode: &'static str) {
-    use tauri::Emitter;
     let Some(state) = app.try_state::<SharedSettings>() else {
         return;
     };
@@ -532,6 +537,27 @@ fn set_listening_mode_from_tray(app: &tauri::AppHandle, mode: &'static str) {
         settings::save_to_store(&app, &snapshot);
         sync_listening_mode_menu(&app, mode);
         let _ = app.emit("settings-changed", &snapshot);
+    });
+}
+
+fn toggle_overlay_from_tray(app: &tauri::AppHandle) {
+    let Some(service) = app.try_state::<Arc<LicenseService>>() else {
+        return;
+    };
+    let service = service.inner().clone();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = service.state().await;
+        if !state.licensed {
+            let _ = license::commands::open_license_window(app);
+            return;
+        }
+        if let Some(window) = app.get_webview_window("overlay") {
+            let _ = match window.is_visible() {
+                Ok(true) => window.hide(),
+                _ => window.show(),
+            };
+        }
     });
 }
 
@@ -574,6 +600,7 @@ fn build_tray(
         .build()?;
 
     let settings_item = MenuItemBuilder::with_id("settings", "Settings…").build(app)?;
+    let license_item = MenuItemBuilder::with_id("license", "License…").build(app)?;
     let check_updates_item =
         MenuItemBuilder::with_id("check-updates", "Check for updates").build(app)?;
     let toggle_console =
@@ -586,6 +613,7 @@ fn build_tray(
         .item(&mode_submenu)
         .item(&listening_submenu)
         .separator()
+        .item(&license_item)
         .item(&settings_item)
         .item(&check_updates_item)
         .item(&toggle_console)
@@ -622,12 +650,7 @@ fn build_tray(
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "toggle-overlay" => {
-                if let Some(w) = app.get_webview_window("overlay") {
-                    let _ = match w.is_visible() {
-                        Ok(true) => w.hide(),
-                        _ => w.show(),
-                    };
-                }
+                toggle_overlay_from_tray(app);
             }
             "mode-edit" => apply_mode(app, OverlayMode::Edit),
             "mode-locked" => apply_mode(app, OverlayMode::Locked),
@@ -640,8 +663,12 @@ fn build_tray(
                     eprintln!("[tray] open settings failed: {e}");
                 }
             }
+            "license" => {
+                if let Err(error) = license::commands::open_license_window(app.clone()) {
+                    eprintln!("[tray] open license failed: {error}");
+                }
+            }
             "check-updates" => {
-                use tauri::Emitter;
                 // Single tray click handles both jobs:
                 // - If the frontend already has an Update available,
                 //   it'll install + relaunch on receiving this event.

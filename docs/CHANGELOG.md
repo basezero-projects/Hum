@@ -6,6 +6,17 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.64] - 2026-08-19
+
+### Added
+- **Hum now has a dedicated purchase and license window.** The new black, warm ivory, and muted gold screen shows the $19 one-time price, three-device allowance, Hum 1.x update policy, 30-day refund, and no-account promise. Customers can buy Hum, paste the key from their Polar receipt, reveal or hide the key, retry an online check, manage devices, release the current PC, and review a redacted key suffix.
+- **Every license state now has a clear next step.** The window distinguishes active, verification due, offline grace, verification required, invalid, revoked, device limit, clock, service unavailable, and development states. Status messages, deadlines, safe errors, and available actions change with the state instead of sending customers to developer tools.
+
+### Changed
+- **Release builds now enforce the paid entitlement before lyrics appear.** The overlay starts hidden and opens only for development, verified, verification due, or offline grace states. Every other state opens the license window, and the tray's Show or Hide overlay action cannot bypass the check.
+- **License recovery is available from the tray.** The new License item reopens the same window after it is closed. Activation shows the overlay, successful device release returns to the license window, and a failed release leaves the protected record and management window intact with a useful retry message.
+- **The activation layout fits its full supported window range.** The two-column hi-fi layout keeps its primary form, purchase details, actions, and protection note visible at both the default 780 by 600 size and the 680 by 520 minimum, with no clipped controls or unintended scrolling.
+
 ## [0.13.63] - 2026-08-19
 
 ### Added

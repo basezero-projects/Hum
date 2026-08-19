@@ -1,3 +1,4 @@
+pub(crate) mod commands;
 mod evaluate;
 mod model;
 mod polar;
@@ -7,6 +8,7 @@ pub(crate) mod record;
 mod service;
 mod store;
 
+pub(crate) use commands::{apply_license_windows, current_unix_ms};
 pub use evaluate::evaluate_license;
 pub use model::{
     LicenseCheck, LicenseEvidence, LicenseState, LicenseStatus, StoredLicenseEvidence,

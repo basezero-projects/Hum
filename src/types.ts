@@ -17,6 +17,32 @@ export type CurrentTrack = {
   ad_active: boolean;
 };
 
+export type LicenseStatus =
+  | "development"
+  | "unlicensed"
+  | "verified"
+  | "verification_due"
+  | "offline_grace"
+  | "verification_required"
+  | "invalid"
+  | "revoked"
+  | "device_limit"
+  | "clock_error"
+  | "service_unavailable";
+
+export type LicenseState = {
+  status: LicenseStatus;
+  licensed: boolean;
+  display_key: string | null;
+  device_limit: number;
+  verified_at_unix_ms: number | null;
+  verify_after_unix_ms: number | null;
+  grace_ends_unix_ms: number | null;
+  days_until_action: number | null;
+  message: string;
+  recovery: string;
+};
+
 export type OverlayMode = "edit" | "locked" | "ghost";
 export type ListeningMode = "wired" | "speakers" | "bluetooth";
 export type AudioOutputRoute =
