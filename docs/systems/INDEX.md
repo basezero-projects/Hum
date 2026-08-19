@@ -1,9 +1,7 @@
-# Systems Index
+# Systems index
 
-Per-system docs for this project. Create one file per major subsystem using `SYSTEM_TEMPLATE.md` as a starting point.
-
-Per [`feedback_project_intel`](~/.claude/projects/d--Work-App-Projects-All-Projects/memory/feedback_project_intel.md) memory: **check this index BEFORE exploring code**. Update systems docs after major changes.
+These documents describe the current implementation and its operating boundaries. Update the relevant page when a subsystem changes.
 
 ## Systems
 
-- _(no systems documented yet)_
+- [Media and timing](media-and-timing.md): playback authority, lyrics, saved and temporary timing, audio-output discovery, platform capabilities, native window seams, and OBS state flow.

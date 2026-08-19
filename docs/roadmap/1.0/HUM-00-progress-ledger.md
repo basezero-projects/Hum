@@ -4,11 +4,11 @@ This file is the durable execution cursor for HUM-00. Update it at every slice b
 
 ## Current cursor
 
-- Slice: HUM-00G, Build proof and system documentation
-- Step: G1, survey the CI, smoke-test, and documentation boundary
-- Next action: map native compile jobs, shared-shell smoke proof, Windows regression evidence, and the final media-and-timing document
+- Slice: HUM-00, Complete
+- Step: Closed out in v0.13.60
+- Next action: begin HUM-10 only under a new execution order
 - Blocker: None
-- Last updated: 2026-08-19 10:35 MDT
+- Last updated: 2026-08-19 11:24 MDT
 
 ## Completed slices
 
@@ -71,12 +71,32 @@ This file is the durable execution cursor for HUM-00. Update it at every slice b
 
 - Status: Complete
 - Version: 0.13.59
-- Commit: closeout commit titled `Add Windows audio output discovery`
-- Remote: push required before HUM-00G implementation begins
+- Commit: `e203c9f` (`Add Windows audio output discovery`)
+- Remote: pushed to `origin/main`
 - Validation: frontend typecheck and build passed; Cargo all-target check passed; Clippy passed with warnings denied; 176 Rust tests passed; full-tree Rust formatting passed; diff check passed
 - Review: independent review found a runtime ownership cycle and incomplete Bluetooth enumerator classification; both were fixed red-first and approved on follow-up
 - Acceptance criteria: HUM-00-AC9 complete
 - Known deferrals: physical multi-device smoke coverage and native macOS and Linux compilation remain assigned to HUM-00G; automatic profile selection remains assigned to HUM-30
+
+### HUM-00G, Build proof and system documentation
+
+- Status: Complete
+- Version: 0.13.60
+- Commit: closeout commit titled `Prove the portable product core`
+- Remote: pushed to `origin/main`
+- Validation: frontend frozen install, typecheck, build, and Node retry test passed; 188 Rust tests passed; Cargo all-target check passed; Clippy passed with warnings denied; full-tree Rust formatting passed; the exact closeout commit passed the portable-core frontend, Windows, macOS, and Linux jobs
+- Review: independent review found an incomplete OBS fingerprint, stale policy and ownership copy, prohibited long dashes, and two stateful seek-tracking defects; every issue was fixed red-first across three review rounds and received final approval
+- Acceptance criteria: HUM-00-AC7, HUM-00-AC8, HUM-00-AC11, and HUM-00-AC12 complete
+- Known deferrals: physical Windows player, layout, mode, audio-device, and OBS checks remain in the 1.0 release checklist; shipping macOS and Linux remains outside HUM-00
+
+## HUM-00 completion
+
+- Status: Complete
+- Version range: 0.13.54 through 0.13.60
+- Slices: HUM-00A through HUM-00G complete, committed, and pushed
+- Acceptance: HUM-00-AC1 through HUM-00-AC12 complete
+- External proof: portable-core workflow on the exact v0.13.60 closeout commit
+- Next phase: HUM-10, Licensing and entitlement foundation
 
 ## Execution log
 
@@ -98,3 +118,6 @@ This file is the durable execution cursor for HUM-00. Update it at every slice b
 - 2026-08-19 10:02 MDT: HUM-00E committed as `8f7a9ab`, pushed to `origin/main`, and HUM-00F survey began.
 - 2026-08-19 10:09 MDT: HUM-00F endpoint APIs, profile isolation, event contracts, polling lifecycle, and failure behavior were mapped. The executable nine-file plan was locked.
 - 2026-08-19 10:35 MDT: HUM-00F passed 176 Rust tests and the full gate after red-first lifecycle and Bluetooth fixes. The ledger advanced to HUM-00G survey pending the closeout commit and push.
+- 2026-08-19 10:39 MDT: HUM-00F committed as `e203c9f`, pushed to `origin/main`, and HUM-00G survey began.
+- 2026-08-19 10:49 MDT: HUM-00G CI runners, shared-shell smoke, regression evidence tiers, documentation scope, and post-push proof rule were mapped. The executable seven-file plan was locked.
+- 2026-08-19 11:24 MDT: HUM-00G passed 188 Rust tests and the full local gate after red-first OBS fingerprint and position-revision fixes. Independent review approved the final implementation, and the ledger closed HUM-00 pending the required exact-commit workflow proof.

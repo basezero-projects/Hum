@@ -96,7 +96,7 @@ async fn get_current_album_art(
 
 /// Frontend calls this when a tray-relevant update is detected (or
 /// cleared) so the "Check for updates" menu item can flip its label
-/// to "Install update vX.Y.Z" — the tray becomes the actionable
+/// to "Install update vX.Y.Z". The tray becomes the actionable
 /// surface; the overlay banner is just a pointer.
 #[tauri::command]
 fn set_update_indicator(
@@ -115,7 +115,7 @@ fn set_update_indicator(
     Ok(())
 }
 
-/// Managed state — handle to the dynamic-label "Check for updates" /
+/// Managed state handle to the dynamic-label "Check for updates" /
 /// "Install update vX" tray menu item. Held in Tauri state so
 /// `set_update_indicator` can find it.
 struct UpdateMenuItem(MenuItem<tauri::Wry>);
@@ -133,14 +133,38 @@ fn set_update_banner_visible(app: tauri::AppHandle, visible: bool) -> Result<(),
     Ok(())
 }
 
+struct SharedShellState {
+    snapshot: SharedSnapshot,
+    album_art: SharedAlbumArt,
+    lyrics_state: SharedLyrics,
+    smtc_active: Arc<AtomicBool>,
+    mode_state: SharedMode,
+    audio_output_state: audio_output::model::SharedAudioOutputState,
+}
+
+impl SharedShellState {
+    fn new() -> Self {
+        Self {
+            snapshot: Arc::new(RwLock::new(CurrentTrack::default())),
+            album_art: Arc::new(RwLock::new(None)),
+            lyrics_state: Arc::new(RwLock::new(CurrentLyrics::default())),
+            smtc_active: Arc::new(AtomicBool::new(false)),
+            mode_state: Arc::new(AtomicU8::new(OverlayMode::default() as u8)),
+            audio_output_state: new_shared_state(),
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let snapshot: SharedSnapshot = Arc::new(RwLock::new(CurrentTrack::default()));
-    let album_art: SharedAlbumArt = Arc::new(RwLock::new(None));
-    let lyrics_state: SharedLyrics = Arc::new(RwLock::new(CurrentLyrics::default()));
-    let smtc_active: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
-    let mode_state: SharedMode = Arc::new(AtomicU8::new(OverlayMode::default() as u8));
-    let audio_output_state = new_shared_state();
+    let SharedShellState {
+        snapshot,
+        album_art,
+        lyrics_state,
+        smtc_active,
+        mode_state,
+        audio_output_state,
+    } = SharedShellState::new();
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -156,7 +180,7 @@ pub fn run() {
             None,
         ))
         // Save / restore position + size for the OVERLAY window only.
-        // Dev console and settings windows are not tracked — they always
+        // Dev console and settings windows are not tracked, so they always
         // open at the position tauri.conf.json declares (centered).
         // VISIBLE flag is excluded so saved state can never re-show a
         // window that conf says should start hidden.
@@ -190,7 +214,7 @@ pub fn run() {
             // Capture streamer fields before move so we can apply after manage.
             let streamer_enabled_at_start = loaded_settings.streamer_enabled;
             let streamer_port_at_start = loaded_settings.streamer_port;
-            // Reconcile OS autostart with saved setting on every launch — picks
+            // Reconcile OS autostart with saved setting on every launch. This picks
             // up any external drift (e.g. user removed Hum from Windows Startup
             // Apps via OS settings while the file still says launch_on_startup = true).
             settings::sync_autostart(app.handle(), loaded_settings.launch_on_startup);
@@ -307,7 +331,7 @@ pub fn run() {
             // Settings + dev-console are HIDE-on-close, not destroy-on-close.
             // Both are pre-declared in tauri.conf.json with visible:false and
             // re-shown via the tray ("Settings…" / "Show / Hide dev console")
-            // + open_settings_window — all of which rely on get_webview_window()
+            // + open_settings_window. All of these rely on get_webview_window()
             // still resolving. The native title-bar X fires Tauri's default
             // CloseRequested, which DESTROYS the window unless we intercept it.
             // Destroying breaks two things: (1) reopening fails because
@@ -331,7 +355,7 @@ pub fn run() {
             }
 
             // Window height auto-follows content via the frontend's
-            // ResizeObserver in Overlay.tsx — no empty vertical space
+            // ResizeObserver in Overlay.tsx, so no empty vertical space appears
             // possible. Width is user-controllable (drag the right edge);
             // dragging text bigger via wider window. Vertical drag is
             // effectively a no-op since the next ResizeObserver fire
@@ -539,7 +563,7 @@ fn build_tray(
         .icon(initial_icon)
         .icon_as_template(false)
         .tooltip(format!(
-            "Hum — {} mode",
+            "Hum: {} mode",
             match initial_mode {
                 OverlayMode::Edit => "edit",
                 OverlayMode::Locked => "locked",
@@ -719,4 +743,32 @@ fn register_hotkey(app: &tauri::AppHandle) -> tauri::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_shell_state_smoke_preserves_neutral_defaults() {
+        let state = SharedShellState::new();
+
+        assert_eq!(
+            serde_json::to_value(state.snapshot.try_read().unwrap().clone()).unwrap(),
+            serde_json::to_value(CurrentTrack::default()).unwrap()
+        );
+        assert!(state.album_art.try_read().unwrap().is_none());
+        assert_eq!(
+            serde_json::to_value(state.lyrics_state.try_read().unwrap().clone()).unwrap(),
+            serde_json::to_value(CurrentLyrics::default()).unwrap()
+        );
+        assert_eq!(
+            OverlayMode::from_u8(state.mode_state.load(Ordering::Acquire)),
+            OverlayMode::Edit
+        );
+        assert!(!state.smtc_active.load(Ordering::Acquire));
+        let audio_output = state.audio_output_state.read().unwrap();
+        assert!(audio_output.outputs.is_empty());
+        assert!(audio_output.active.is_none());
+    }
 }

@@ -2,25 +2,27 @@
 //!
 //! Spawns an axum server bound to 127.0.0.1:<port> that exposes:
 //!
-//! - `GET  /state`   — JSON snapshot of current track + lyrics + cursor.
+//! - `GET  /state`: JSON snapshot of current track + lyrics + cursor.
 //!   Stateless poll endpoint; used as a fallback when the SSE stream is
 //!   unavailable and by external tools that want a one-shot read.
-//! - `GET  /events`  — Server-Sent Events stream. Pushes the same state
+//! - `GET  /events`: Server-Sent Events stream. Pushes the same state
 //!   payload as `/state` whenever any change-relevant field flips (track,
-//!   lyrics status, cursor, ad_active, playback state, album art). Position
-//!   ticks are NOT pushed — the client interpolates locally from
+//!   lyrics, cursor, source, playback state, album art, or saved timing).
+//!   Native seeks also push when the reported position anchor departs from
+//!   projected playback beyond the saved jitter tolerance. Position ticks
+//!   are NOT pushed because the client interpolates locally from
 //!   `position_ms + (now - last_update_unix_ms)` so the progress bar
 //!   advances smoothly without the server flooding the wire.
-//! - `GET  /art`     — Current album art image bytes. Decoded from the
+//! - `GET  /art`: Current album art image bytes. Decoded from the
 //!   `data:image/...` URL the desktop fetch chain produces, with the right
 //!   Content-Type so `<img src="/art">` Just Works.
-//! - `GET  /overlay` — Self-contained HTML page rendering the same chrome
+//! - `GET  /overlay`: Self-contained HTML page rendering the same chrome
 //!   (album art, metadata, progress bar, source badge, gold dashed border)
 //!   as the desktop overlay. Background is fully transparent so OBS
 //!   browser-source layering needs no chroma-key tricks.
-//! - `GET  /healthz` — Minimal liveness probe ("ok").
+//! - `GET  /healthz`: Minimal liveness probe ("ok").
 //!
-//! The server is gated by `settings.streamer_enabled` — when off, no
+//! The server is gated by `settings.streamer_enabled`. When off, no
 //! port is bound. When toggled on at runtime via `update_settings`, a
 //! new server task is spawned. When toggled off, the task's shutdown
 //! signal fires and the port is freed.
@@ -182,7 +184,7 @@ fn source_label_for(app_id: &str) -> String {
         return "YouTube Music".into();
     }
     // Specific browser identification so the source badge can render
-    // the right browser logo. Was "Browser" generic — useless for
+    // the right browser logo. "Browser" was too generic for
     // logo lookups since simple-icons doesn't have a "browser" icon.
     if lower.contains("chrome") {
         return "Chrome".into();
@@ -209,7 +211,7 @@ fn source_label_for(app_id: &str) -> String {
         return "Arc".into();
     }
     if lower.contains("zen") {
-        // Old broad-match path — kept for backwards compatibility
+        // Old broad-match path retained for backwards compatibility
         // with any cached state. Falls through to Browser otherwise.
         return "Browser".into();
     }
@@ -222,40 +224,143 @@ fn source_label_for(app_id: &str) -> String {
     }
 }
 
-/// Fingerprint of the change-relevant fields. Used by `/events` to
-/// suppress pushes that would only carry a position-tick (the client
-/// interpolates the progress bar locally). Two state snapshots with the
-/// same fingerprint render identically apart from the progress bar's
-/// elapsed milliseconds.
-fn change_fingerprint(s: &StateResponse) -> String {
-    let lines_hash = s.lyrics.line_count;
-    let mut word_hasher = std::collections::hash_map::DefaultHasher::new();
-    for line in &s.lyrics.lines {
-        line.time_ms.hash(&mut word_hasher);
-        if let Some(words) = &line.words {
-            for word in words {
-                word.time_ms.hash(&mut word_hasher);
-                word.duration_ms.hash(&mut word_hasher);
-                word.text.hash(&mut word_hasher);
-            }
+#[derive(Serialize)]
+struct RenderTrackFingerprint<'a> {
+    title: &'a str,
+    artist: &'a str,
+    album: &'a str,
+    duration_ms: u64,
+    state: PlaybackState,
+    source_app_id: Option<&'a str>,
+    ad_active: bool,
+    bridge_source: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct RenderStateFingerprint<'a> {
+    track: RenderTrackFingerprint<'a>,
+    lyrics: &'a CurrentLyrics,
+    cursor: i32,
+    art_key: &'a str,
+    source_label: &'a str,
+    anticipate_ms: i32,
+    effective_offset_ms: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SseEventIdentity {
+    render_fingerprint: String,
+    position_revision: u64,
+}
+
+#[derive(Clone, Copy)]
+struct PositionAnchor {
+    position_ms: u64,
+    last_update_unix_ms: i64,
+    is_playing: bool,
+}
+
+impl From<&StateResponse> for PositionAnchor {
+    fn from(state: &StateResponse) -> Self {
+        Self {
+            position_ms: state.track.position_ms,
+            last_update_unix_ms: state.track.last_update_unix_ms,
+            is_playing: state.track.state == PlaybackState::Playing,
         }
     }
-    let word_timing_hash = word_hasher.finish();
-    format!(
-        "{}|{}|{}|{}|{:?}|{:?}|{}|{}|{}|{}|{}|{}",
-        s.track.title,
-        s.track.artist,
-        s.track.album,
-        s.track.ad_active,
-        s.track.state,
-        s.lyrics.status,
-        lines_hash,
-        s.cursor,
-        s.art_key,
-        s.lyrics.source.as_deref().unwrap_or(""),
-        s.effective_offset_ms,
-        word_timing_hash,
-    )
+}
+
+struct SseEventTracker {
+    published_anchor: PositionAnchor,
+    published_identity: SseEventIdentity,
+}
+
+impl SseEventTracker {
+    fn new(initial: &StateResponse) -> Self {
+        Self {
+            published_anchor: initial.into(),
+            published_identity: SseEventIdentity {
+                render_fingerprint: change_fingerprint(initial),
+                position_revision: 0,
+            },
+        }
+    }
+
+    fn observe(
+        &mut self,
+        state: &StateResponse,
+        jitter_tolerance_ms: i32,
+    ) -> Option<SseEventIdentity> {
+        let next_anchor = PositionAnchor::from(state);
+        let render_fingerprint = change_fingerprint(state);
+        let position_changed = position_anchor_is_discontinuous(
+            self.published_anchor,
+            next_anchor,
+            jitter_tolerance_ms,
+        );
+        if render_fingerprint == self.published_identity.render_fingerprint && !position_changed {
+            return None;
+        }
+
+        let position_revision = if position_changed {
+            self.published_identity.position_revision.saturating_add(1)
+        } else {
+            self.published_identity.position_revision
+        };
+        let identity = SseEventIdentity {
+            render_fingerprint,
+            position_revision,
+        };
+        self.published_anchor = next_anchor;
+        self.published_identity = identity.clone();
+        Some(identity)
+    }
+}
+
+fn position_anchor_is_discontinuous(
+    previous: PositionAnchor,
+    current: PositionAnchor,
+    jitter_tolerance_ms: i32,
+) -> bool {
+    let elapsed_ms = current
+        .last_update_unix_ms
+        .saturating_sub(previous.last_update_unix_ms)
+        .max(0) as u64;
+    let expected_position_ms = if previous.is_playing {
+        previous.position_ms.saturating_add(elapsed_ms)
+    } else {
+        previous.position_ms
+    };
+    expected_position_ms.abs_diff(current.position_ms) > jitter_tolerance_ms.max(0) as u64
+}
+
+/// Fingerprint of every render-relevant field except position interpolation
+/// ticks. The client advances position from the last native observation, so
+/// position, its update timestamp, and the server clock are intentionally
+/// excluded. A cursor change still publishes because it changes the lyric.
+fn change_fingerprint(s: &StateResponse) -> String {
+    let payload = RenderStateFingerprint {
+        track: RenderTrackFingerprint {
+            title: &s.track.title,
+            artist: &s.track.artist,
+            album: &s.track.album,
+            duration_ms: s.track.duration_ms,
+            state: s.track.state,
+            source_app_id: s.track.source_app_id.as_deref(),
+            ad_active: s.track.ad_active,
+            bridge_source: s.track.bridge_source.as_deref(),
+        },
+        lyrics: &s.lyrics,
+        cursor: s.cursor,
+        art_key: &s.art_key,
+        source_label: &s.source_label,
+        anticipate_ms: s.anticipate_ms,
+        effective_offset_ms: s.effective_offset_ms,
+    };
+    let encoded = serde_json::to_vec(&payload).expect("render fingerprint must serialize");
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    encoded.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 /// Subset of Settings exposed to the OBS browser source so it can mirror the
@@ -345,7 +450,7 @@ async fn get_events(State(s): State<AppState>) -> impl IntoResponse {
     let stream = async_stream::stream! {
         // Initial push so a freshly-connected client renders immediately.
         let initial = build_state(&s).await;
-        let mut last_fp = change_fingerprint(&initial);
+        let mut event_tracker = SseEventTracker::new(&initial);
         let initial_json = serde_json::to_string(&initial).unwrap_or_else(|_| "{}".into());
         yield Ok::<Event, std::convert::Infallible>(Event::default().event("state").data(initial_json));
 
@@ -354,11 +459,10 @@ async fn get_events(State(s): State<AppState>) -> impl IntoResponse {
         loop {
             tick.tick().await;
             let body = build_state(&s).await;
-            let fp = change_fingerprint(&body);
-            if fp == last_fp {
+            let jitter_tolerance_ms = s.settings.read().await.jitter_tolerance_ms;
+            if event_tracker.observe(&body, jitter_tolerance_ms).is_none() {
                 continue;
             }
-            last_fp = fp;
             let json = serde_json::to_string(&body).unwrap_or_else(|_| "{}".into());
             yield Ok::<Event, std::convert::Infallible>(Event::default().event("state").data(json));
         }
@@ -407,7 +511,7 @@ async fn get_art(State(s): State<AppState>) -> Response {
 }
 
 /// Extract `(mime, base64_body)` from a `data:<mime>;base64,<body>` URL.
-/// Returns None on any structural mismatch — caller falls back to 500.
+/// Returns None on any structural mismatch, and the caller falls back to 500.
 fn parse_data_url(url: &str) -> Option<(&str, &str)> {
     let rest = url.strip_prefix("data:")?;
     let (header_part, body) = rest.split_once(',')?;
@@ -437,7 +541,7 @@ async fn get_overlay() -> Response {
 }
 
 // Hum brand mark for the centered ghost watermark. Embedded so the streamer
-// endpoint stays self-contained — Vite serves the same file from `public/`
+// endpoint stays self-contained. Vite serves the same file from `public/`
 // for the desktop overlay.
 async fn get_logo() -> Response {
     let bytes: &[u8] = include_bytes!("../../public/hum-logo.png");
@@ -458,7 +562,7 @@ async fn get_logo() -> Response {
 // Service brand logos (Netflix / Twitch / YouTube / etc.). Embedded as
 // bytes so the streamer endpoint stays self-contained; the desktop
 // overlay loads the same files via Vite's `public/` static-serve.
-// Each entry is a `(slug, svg-bytes)` pair — adding a new logo means
+// Each entry is a `(slug, svg-bytes)` pair. Adding a new logo means
 // dropping the SVG into `public/logos/` and adding an entry below.
 const SERVICE_LOGOS: &[(&str, &[u8])] = &[
     // Video services
@@ -571,7 +675,7 @@ impl Drop for ServerHandle {
 }
 
 /// DNS-rebinding guard. The server binds 127.0.0.1, but every response sets
-/// `Access-Control-Allow-Origin: *` for OBS browser-source compatibility —
+/// `Access-Control-Allow-Origin: *` for OBS browser-source compatibility.
 /// without this a malicious web page could rebind a hostname it controls to
 /// 127.0.0.1 and read the now-playing data cross-origin. Only accept loopback
 /// `Host` headers, which is exactly what OBS / the browser source
@@ -766,6 +870,181 @@ mod tests {
         let first = response_with_word(300);
         let second = response_with_word(450);
         assert_ne!(change_fingerprint(&first), change_fingerprint(&second));
+    }
+
+    #[test]
+    fn sse_fingerprint_changes_when_same_count_line_text_changes() {
+        let first = response_with_word(300);
+        let mut second = first.clone();
+        second.lyrics.lines[0].text = "Goodbye".into();
+
+        assert_ne!(change_fingerprint(&first), change_fingerprint(&second));
+    }
+
+    #[test]
+    fn sse_fingerprint_changes_when_plain_lyrics_change() {
+        let mut first = response_with_word(300);
+        first.lyrics.status = Status::Plain;
+        first.lyrics.line_count = 0;
+        first.lyrics.lines.clear();
+        first.lyrics.plain = Some("First plain lyric".into());
+        let mut second = first.clone();
+        second.lyrics.plain = Some("Second plain lyric".into());
+
+        assert_ne!(change_fingerprint(&first), change_fingerprint(&second));
+    }
+
+    #[test]
+    fn sse_fingerprint_changes_when_translations_change() {
+        let mut first = response_with_word(300);
+        first.lyrics.translation = Some(vec![LyricLine {
+            time_ms: 1_000,
+            text: "First translation".into(),
+            words: None,
+        }]);
+        let mut second = first.clone();
+        second.lyrics.translation.as_mut().unwrap()[0].text = "Second translation".into();
+
+        assert_ne!(change_fingerprint(&first), change_fingerprint(&second));
+    }
+
+    #[test]
+    fn sse_fingerprint_changes_when_track_duration_changes() {
+        let first = response_with_word(300);
+        let mut second = first.clone();
+        second.track.duration_ms = 240_000;
+
+        assert_ne!(change_fingerprint(&first), change_fingerprint(&second));
+    }
+
+    #[test]
+    fn sse_fingerprint_changes_when_source_app_id_changes() {
+        let first = response_with_word(300);
+        let mut second = first.clone();
+        second.track.source_app_id = Some("Spotify.exe".into());
+
+        assert_ne!(change_fingerprint(&first), change_fingerprint(&second));
+    }
+
+    #[test]
+    fn sse_fingerprint_changes_when_source_label_changes() {
+        let first = response_with_word(300);
+        let mut second = first.clone();
+        second.source_label = "Spotify".into();
+
+        assert_ne!(change_fingerprint(&first), change_fingerprint(&second));
+    }
+
+    #[test]
+    fn sse_fingerprint_ignores_position_interpolation_ticks() {
+        let first = response_with_word(300);
+        let mut second = first.clone();
+        second.track.position_ms = 15_000;
+        second.track.last_update_unix_ms = 42_000;
+        second.server_now_ms = 43_000;
+
+        assert_eq!(change_fingerprint(&first), change_fingerprint(&second));
+    }
+
+    #[test]
+    fn sse_event_identity_changes_for_same_line_seek() {
+        let mut first = response_with_word(300);
+        first.track.state = PlaybackState::Playing;
+        first.track.position_ms = 10_000;
+        first.track.last_update_unix_ms = 100_000;
+        first.server_now_ms = 100_000;
+        let mut second = first.clone();
+        second.track.position_ms = 30_000;
+        second.track.last_update_unix_ms = 101_000;
+        second.server_now_ms = 101_000;
+
+        let mut tracker = SseEventTracker::new(&first);
+        let first_identity = tracker.published_identity.clone();
+        let second_identity = tracker.observe(&second, 2_000).unwrap();
+
+        assert_ne!(first_identity, second_identity);
+    }
+
+    #[test]
+    fn sse_event_identity_ignores_equivalent_natural_position_anchor() {
+        let mut first = response_with_word(300);
+        first.track.state = PlaybackState::Playing;
+        first.track.position_ms = 10_000;
+        first.track.last_update_unix_ms = 100_000;
+        first.server_now_ms = 100_000;
+        let mut second = first.clone();
+        second.track.position_ms = 11_000;
+        second.track.last_update_unix_ms = 101_000;
+        second.server_now_ms = 101_000;
+
+        let mut tracker = SseEventTracker::new(&first);
+        let first_identity = tracker.published_identity.clone();
+        let second_identity = tracker.observe(&second, 2_000);
+
+        assert!(second_identity.is_none());
+        assert_eq!(first_identity, tracker.published_identity);
+    }
+
+    #[test]
+    fn sse_event_identity_accumulates_sub_tolerance_drift_from_published_anchor() {
+        let mut initial = response_with_word(300);
+        initial.track.state = PlaybackState::Playing;
+        initial.track.position_ms = 10_000;
+        initial.track.last_update_unix_ms = 100_000;
+        initial.server_now_ms = 100_000;
+        let mut first_drift = initial.clone();
+        first_drift.track.position_ms = 12_500;
+        first_drift.track.last_update_unix_ms = 101_000;
+        first_drift.server_now_ms = 101_000;
+        let mut cumulative_drift = first_drift.clone();
+        cumulative_drift.track.position_ms = 15_000;
+        cumulative_drift.track.last_update_unix_ms = 102_000;
+        cumulative_drift.server_now_ms = 102_000;
+
+        let mut tracker = SseEventTracker::new(&initial);
+        let initial_identity = tracker.published_identity.clone();
+        let first_identity = tracker.observe(&first_drift, 2_000);
+        let cumulative_identity = tracker.observe(&cumulative_drift, 2_000).unwrap();
+
+        assert!(first_identity.is_none());
+        assert_ne!(initial_identity, cumulative_identity);
+    }
+
+    #[test]
+    fn sse_render_event_resets_published_position_anchor() {
+        let mut initial = response_with_word(300);
+        initial.track.state = PlaybackState::Playing;
+        initial.track.position_ms = 10_000;
+        initial.track.last_update_unix_ms = 100_000;
+        initial.server_now_ms = 100_000;
+        let mut first_drift = initial.clone();
+        first_drift.track.position_ms = 12_500;
+        first_drift.track.last_update_unix_ms = 101_000;
+        first_drift.server_now_ms = 101_000;
+        let mut render_change = first_drift.clone();
+        render_change.track.position_ms = 13_500;
+        render_change.track.last_update_unix_ms = 102_000;
+        render_change.server_now_ms = 102_000;
+        render_change.lyrics.lines[0].text = "Updated lyric".into();
+        let mut drift_after_render = render_change.clone();
+        drift_after_render.track.position_ms = 16_000;
+        drift_after_render.track.last_update_unix_ms = 103_000;
+        drift_after_render.server_now_ms = 103_000;
+
+        let mut tracker = SseEventTracker::new(&initial);
+        let initial_identity = tracker.published_identity.clone();
+        let first_identity = tracker.observe(&first_drift, 2_000);
+        let render_identity = tracker.observe(&render_change, 2_000).unwrap();
+        let after_render_identity = tracker.observe(&drift_after_render, 2_000);
+
+        assert!(first_identity.is_none());
+        assert_ne!(initial_identity, render_identity);
+        assert_eq!(
+            initial_identity.position_revision,
+            render_identity.position_revision
+        );
+        assert!(after_render_identity.is_none());
+        assert_eq!(render_identity, tracker.published_identity);
     }
 
     #[test]

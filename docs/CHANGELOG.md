@@ -6,6 +6,19 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.60] - 2026-08-19
+
+### Fixed
+- **OBS now follows seeks and corrected playback anchors without waiting for the next lyric.** Same-line seeks, accumulated timing drift, source changes, duration changes, corrected lyrics, translations, and plain lyric updates now publish immediately to the browser source. Naturally advancing playback anchors stay quiet, so the fix does not create constant network updates.
+
+### Added
+- **Hum's portable product core now has native build proof.** GitHub checks the frontend on Ubuntu and the shared Rust shell on Windows, macOS, and Linux. The native jobs compile all targets, run library tests, and exercise the same neutral state constructor used by production. They do not launch a GUI, package installers, or publish non-Windows builds.
+- **Media and timing behavior now has one current system reference.** The new system guide documents source priority, full event payloads, artwork ordering, lyric provider fallback, saved and temporary timing, audio-output discovery, native window boundaries, PlatformInfo, OBS delivery, retries, caches, and shutdown behavior.
+- **Windows regression evidence is separated by proof type.** Automated contract coverage lists the exact tests that protect the refactor. Physical checks for Spotify, Chromium, iTunes, Pandora, layouts, OBS, and overlay modes remain visible in the 1.0 release checklist instead of being falsely claimed by headless CI.
+
+### Changed
+- **The README now describes the completed portable boundary in present tense.** It points to the system and verification documents, lists the current local validation commands, and records Hum's push-after-every-commit policy.
+
 ## [0.13.59] - 2026-08-19
 
 ### Added
