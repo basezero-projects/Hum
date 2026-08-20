@@ -1366,11 +1366,47 @@ async fn fetch_netease(
         return Ok((CachedLyrics::NotFound, "netease".into()));
     }
     let songs = parsed.result.map(|r| r.songs).unwrap_or_default();
-    let Some(song) = pick_best_netease(songs, artist, title, duration_ms) else {
+    let candidates = rank_netease_candidates(songs, artist, title, duration_ms);
+    if candidates.is_empty() {
         return Ok((CachedLyrics::NotFound, "netease".into()));
-    };
+    }
 
-    let song_id = song.id.to_string();
+    let candidate_count = candidates.len();
+    let mut completed = Vec::with_capacity(candidate_count);
+    let mut failures = 0usize;
+    let mut last_error = None;
+    for (rank, song) in candidates.into_iter().enumerate() {
+        match fetch_netease_song_lyrics(&client, song.id).await {
+            Ok(lyrics) => {
+                if matches!(
+                    &lyrics,
+                    CachedLyrics::Synced { lines, .. } if has_valid_word_timing(lines)
+                ) {
+                    return Ok((lyrics, "netease".into()));
+                }
+                completed.push((rank, lyrics));
+            }
+            Err(error) => {
+                failures += 1;
+                last_error = Some(error);
+            }
+        }
+    }
+
+    if let Some(cached) = select_best_netease_lyrics(completed) {
+        return Ok((cached, "netease".into()));
+    }
+    if failures == candidate_count {
+        return Err(
+            last_error.unwrap_or_else(|| anyhow::anyhow!("all NetEase lyric requests failed"))
+        );
+    }
+
+    Ok((CachedLyrics::NotFound, "netease".into()))
+}
+
+async fn fetch_netease_song_lyrics(client: &reqwest::Client, song_id: u64) -> Result<CachedLyrics> {
+    let song_id = song_id.to_string();
     let lyric_url = reqwest::Url::parse_with_params(
         "https://music.163.com/api/song/lyric",
         &[
@@ -1390,15 +1426,14 @@ async fn fetch_netease(
     let status = resp.status();
     if !status.is_success() {
         if status.is_client_error() {
-            return Ok((CachedLyrics::NotFound, "netease".into()));
+            return Ok(CachedLyrics::NotFound);
         }
         anyhow::bail!("netease lyric returned {status}");
     }
     let body = resp.text().await.context("read netease lyric body")?;
     let parsed: NeteaseLyricResp =
         serde_json::from_str(&body).context("parse netease lyric json")?;
-    let cached = cached_from_netease_response(parsed);
-    Ok((cached, "netease".into()))
+    Ok(cached_from_netease_response(parsed))
 }
 
 fn cached_from_netease_response(parsed: NeteaseLyricResp) -> CachedLyrics {
@@ -1432,12 +1467,30 @@ fn cached_from_netease_response(parsed: NeteaseLyricResp) -> CachedLyrics {
     }
 }
 
-fn pick_best_netease(
+fn select_best_netease_lyrics(
+    mut ranked_results: Vec<(usize, CachedLyrics)>,
+) -> Option<CachedLyrics> {
+    ranked_results.sort_by_key(|(rank, _)| *rank);
+
+    if let Some((_, lyrics)) = ranked_results.iter().find(|(_, lyrics)| match lyrics {
+        CachedLyrics::Synced { lines, .. } => has_valid_word_timing(lines),
+        _ => false,
+    }) {
+        return Some(lyrics.clone());
+    }
+
+    ranked_results
+        .into_iter()
+        .map(|(_, lyrics)| lyrics)
+        .find(|lyrics| !matches!(lyrics, CachedLyrics::NotFound))
+}
+
+fn rank_netease_candidates(
     songs: Vec<NeteaseSong>,
     artist: &str,
     title: &str,
     requested_duration_ms: u64,
-) -> Option<NeteaseSong> {
+) -> Vec<NeteaseSong> {
     let artist_l = normalize_for_match(artist);
     let title_l = normalize_for_match(title);
     let tolerance_ms: i64 = 5_000;
@@ -1477,7 +1530,19 @@ fn pick_best_netease(
             (s.duration as i64 - requested_duration_ms as i64).abs()
         }
     });
-    candidates.into_iter().next()
+    candidates
+}
+
+#[cfg(test)]
+fn pick_best_netease(
+    songs: Vec<NeteaseSong>,
+    artist: &str,
+    title: &str,
+    requested_duration_ms: u64,
+) -> Option<NeteaseSong> {
+    rank_netease_candidates(songs, artist, title, requested_duration_ms)
+        .into_iter()
+        .next()
 }
 
 // ─── Title cleaner ─────────────────────────────────────────────────────────
@@ -1787,9 +1852,36 @@ fn canonical_provider_metadata(title: &str, artist: &str) -> (String, String) {
             .collect::<String>()
     };
 
+    let decorated_video_title = {
+        let lower = title.to_lowercase();
+        cleaned_title.trim() != title.trim()
+            && (lower.contains("official")
+                || lower.contains("lyrics")
+                || lower.contains("lyric video")
+                || lower.contains("music video")
+                || lower.contains("visualizer")
+                || lower.contains("(video)")
+                || lower.contains("[video]")
+                || lower.contains("(audio)")
+                || lower.contains("[audio]")
+                || [
+                    ".wmv", ".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".m4v",
+                ]
+                .iter()
+                .any(|extension| lower.trim_end().ends_with(extension)))
+    };
+    let recognized_video_channel = artist
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>()
+        .to_lowercase()
+        .ends_with("vevo");
+
     if !title_artist.is_empty()
         && !title_song.is_empty()
-        && compact(&title_artist) == compact(&cleaned_artist)
+        && (compact(&title_artist) == compact(&cleaned_artist)
+            || decorated_video_title
+            || recognized_video_channel)
     {
         (title_artist, title_song)
     } else {
@@ -2449,6 +2541,41 @@ mod tests {
     }
 
     #[test]
+    fn provider_metadata_uses_decorated_video_title_when_uploader_is_not_the_artist() {
+        for (raw_title, uploader, expected_artist, expected_title) in [
+            (
+                "Train - Drops Of Jupiter (Tell Me) (Official 4K Video)",
+                "RHINO",
+                "Train",
+                "Drops Of Jupiter (Tell Me)",
+            ),
+            (
+                "The Neighbourhood - Sweater Weather (Lyrics)",
+                "TrendingTracks",
+                "The Neighbourhood",
+                "Sweater Weather",
+            ),
+            (
+                "Goo Goo Dolls - Iris [Official Music Video] [4K Remaster]",
+                "Warner Records Vault",
+                "Goo Goo Dolls",
+                "Iris",
+            ),
+            (
+                "James Arthur - Say You Won't Let Go",
+                "JamesAVEVO",
+                "James Arthur",
+                "Say You Won't Let Go",
+            ),
+        ] {
+            let (artist, title) = canonical_provider_metadata(raw_title, uploader);
+
+            assert_eq!(artist, expected_artist);
+            assert_eq!(title, expected_title);
+        }
+    }
+
+    #[test]
     fn provider_metadata_accepts_unicode_artist_song_separator() {
         let (artist, title) = canonical_provider_metadata(
             "Goo Goo Dolls \u{2013} Iris [Official Music Video] [4K Remaster]",
@@ -2465,6 +2592,12 @@ mod tests {
 
         assert_eq!(artist, "Original Artist");
         assert_eq!(title, "Love - Part II");
+
+        let (artist, title) =
+            canonical_provider_metadata("Officially Missing You - Part II", "Tamia");
+
+        assert_eq!(artist, "Tamia");
+        assert_eq!(title, "Officially Missing You - Part II");
     }
 
     #[test]
@@ -2513,6 +2646,54 @@ mod tests {
         assert!(picked.is_none());
     }
 
+    #[test]
+    fn netease_lyrics_skip_empty_duplicate_releases() {
+        let line_only = CachedLyrics::Synced {
+            lines: vec![LyricLine {
+                time_ms: 1_000,
+                text: "Found on the second release".into(),
+                words: None,
+            }],
+            translation: None,
+        };
+
+        let selected =
+            select_best_netease_lyrics(vec![(0, CachedLyrics::NotFound), (1, line_only)]);
+
+        assert!(matches!(selected, Some(CachedLyrics::Synced { .. })));
+    }
+
+    #[test]
+    fn netease_lyrics_prefer_word_timing_across_duplicate_releases() {
+        let line_only = CachedLyrics::Synced {
+            lines: vec![LyricLine {
+                time_ms: 1_000,
+                text: "Line timing".into(),
+                words: None,
+            }],
+            translation: None,
+        };
+        let word_timed = CachedLyrics::Synced {
+            lines: vec![LyricLine {
+                time_ms: 1_000,
+                text: "Word timing".into(),
+                words: Some(vec![WordSpan {
+                    time_ms: 1_000,
+                    duration_ms: Some(500),
+                    text: "Word".into(),
+                }]),
+            }],
+            translation: None,
+        };
+
+        let selected = select_best_netease_lyrics(vec![(0, line_only), (1, word_timed)]);
+
+        let Some(CachedLyrics::Synced { lines, .. }) = selected else {
+            panic!("an exact duplicate with word timing should win");
+        };
+        assert!(has_valid_word_timing(&lines));
+    }
+
     #[tokio::test]
     #[ignore = "requires the live NetEase service"]
     async fn live_netease_resolves_exact_song_with_video_duration() {
@@ -2521,6 +2702,7 @@ mod tests {
             ("Khalid", "Better", 230_101, true),
             ("Lady Gaga", "Always Remember Us This Way", 241_000, true),
             ("Goo Goo Dolls", "Iris", 215_561, false),
+            ("Train", "Drops Of Jupiter (Tell Me)", 259_560, false),
         ] {
             let (cached, source) = fetch_netease(artist, title, duration_ms)
                 .await

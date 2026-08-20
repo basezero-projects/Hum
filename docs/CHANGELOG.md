@@ -6,6 +6,12 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.82] - 2026-08-20
+
+### Fixed
+- **YouTube music videos no longer depend on the uploader name to find lyrics.** Hum now reads the artist and song from clearly decorated video titles such as `Train - Drops Of Jupiter (Tell Me) (Official 4K Video)`, even when the channel is RHINO, TrendingTracks, or another uploader. VEVO uploads also recover the artist from the video title when the compact channel name does not match it.
+- **Duplicate provider releases no longer cause false No lyrics results.** When NetEase returns several exact copies of a song, Hum skips releases with an empty lyric payload and keeps checking. A word-timed copy wins when one is available, with synced line timing kept as the fallback.
+
 ## [0.13.81] - 2026-08-20
 
 ### Changed
