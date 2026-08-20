@@ -5,12 +5,12 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 ## Current cursor
 
 - Slice: HUM-10G, paid-product defaults and checkout completion
-- Step: Survey
-- Next action: inspect promo defaults, purchase-site checkout, domain readiness, and live Polar setup, then lock the HUM-10G implementation plan
-- Blocker: None for local implementation. Live purchase proof still requires a Polar organization and Hum product.
-- Last updated: 2026-08-19 19:23 MDT
+- Step: Polar sandbox configuration
+- Next action: configure and prove the Polar sandbox product, three-activation license benefit, signed installer benefit, checkout link, and portal
+- Blocker: None for provider inspection. Domain purchase requires Wes's explicit spending approval.
+- Last updated: 2026-08-20 01:49 MDT
 - Last completed plan: `docs/superpowers/plans/2026-08-19-hum-10f-trust-support.md`
-- Current plan: None, HUM-10G survey is next
+- Current plan: `docs/superpowers/plans/2026-08-19-hum-10g-paid-launch.md`
 
 ## Locked product policy
 
@@ -129,3 +129,7 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 - 2026-08-19 18:24 MDT: The exact v0.13.73 proof passed every gate, both Authenticode checks, metadata generation, and private artifact upload. The downloaded four-file artifact matched its feed, updater signature, and hashes, and a second local SignTool audit verified the installer plus extracted application. HUM-10E is closing in v0.13.74, and the cursor advances to HUM-10F survey.
 - 2026-08-19 18:40 MDT: HUM-10F locked an eight-file production boundary for privacy-safe diagnostic export, fixed support and privacy destinations, a customer-facing About and support section, and build-aware removal of developer-console entry points.
 - 2026-08-19 19:23 MDT: HUM-10F passed the complete debug and release gate, independent review, native debug and optimized-release tray checks, and a real diagnostic privacy audit. The slice closes in v0.13.75, and the cursor advances to HUM-10G survey.
+- 2026-08-19 19:45 MDT: HUM-10G locked a two-repository paid-launch plan. Polar's built-in license-key, file-download, checkout-link, refund, and customer-portal features support the basic Hum flow without a webhook. Local work starts with paid-safe promo defaults, then a validated checkout and final public purchase policy.
+- 2026-08-19 20:14 MDT: The first cross-repository review found an official Polar sandbox URL mismatch, an unvalidated canonical origin, a staging-only robots sitemap, and one missing promo regression. The approved boundary expands to twenty-nine files for red-first repairs without adding a dependency or product mechanism.
+- 2026-08-20 01:37 MDT: The review repairs passed the complete Hum debug and release gates plus the full website gate. Website v0.1.2 shipped at commit `e52b4a4`, and the Vercel production deployment passed live route, console, canonical, robots, sitemap, noindex, disconnected-checkout, and schema checks. Desktop v0.13.76 is entering closeout before Polar sandbox configuration.
+- 2026-08-20 01:49 MDT: Desktop v0.13.76 passed the restarted closeout gate after registering the promo-policy tests in the standard frontend command. Twenty-eight frontend tests, 262 debug Rust tests, 262 optimized Rust tests, both Clippy profiles, formatting, builds, and scope audits passed. HUM-10-AC9 is complete, and the cursor advances to Polar sandbox configuration.

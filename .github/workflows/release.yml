@@ -26,6 +26,9 @@ jobs:
       AZURE_CODE_SIGNING_ENDPOINT: ${{ secrets.AZURE_CODE_SIGNING_ENDPOINT }}
       AZURE_CODE_SIGNING_NAME: ${{ secrets.AZURE_CODE_SIGNING_NAME }}
       AZURE_CERT_PROFILE_NAME: ${{ secrets.AZURE_CERT_PROFILE_NAME }}
+      HUM_POLAR_ORGANIZATION_ID: ${{ vars.HUM_POLAR_ORGANIZATION_ID }}
+      HUM_POLAR_CHECKOUT_URL: ${{ vars.HUM_POLAR_CHECKOUT_URL }}
+      HUM_POLAR_CUSTOMER_PORTAL_URL: ${{ vars.HUM_POLAR_CUSTOMER_PORTAL_URL }}
       RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
     steps:
       - name: Check out repository
@@ -52,6 +55,9 @@ jobs:
 
       - name: Test frontend and release contracts
         run: pnpm test
+
+      - name: Test paid promo policy
+        run: node --test src/promo-policy.test.mts
 
       - name: Typecheck frontend
         run: pnpm typecheck
@@ -110,6 +116,22 @@ jobs:
           pnpm tauri signer sign updater-key-probe.txt -k "$env:TAURI_SIGNING_PRIVATE_KEY" -p "$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
           node scripts/prepare-release.mjs verify-key --repo-root . --signature updater-key-probe.txt.sig
           Remove-Item updater-key-probe.txt, updater-key-probe.txt.sig
+
+      - name: Verify public Polar configuration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $required = @(
+            'HUM_POLAR_ORGANIZATION_ID',
+            'HUM_POLAR_CHECKOUT_URL',
+            'HUM_POLAR_CUSTOMER_PORTAL_URL'
+          )
+          foreach ($name in $required) {
+            $value = [Environment]::GetEnvironmentVariable($name)
+            if ([string]::IsNullOrWhiteSpace($value)) {
+              throw "Missing required public Polar configuration: $name"
+            }
+          }
 
       - name: Build signed Tauri bundle
         run: pnpm tauri build --config sign-config.json

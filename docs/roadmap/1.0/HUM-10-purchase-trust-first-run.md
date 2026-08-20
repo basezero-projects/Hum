@@ -64,7 +64,7 @@ The durable reasoning is recorded in [ADR-0002](../../decisions/ADR-0002-use-pol
 - [x] HUM-10-AC6: Manual update checks report current, available, downloading, installing, and failed states.
 - [x] HUM-10-AC7: Production builds hide the dev console and contain no demo-only update path.
 - [x] HUM-10-AC8: About, support, privacy, and diagnostics are reachable from Settings or the tray.
-- [ ] HUM-10-AC9: Promotional cards are off by default for paid customers.
+- [x] HUM-10-AC9: Promotional cards are off by default for paid customers.
 
 ## Required test matrix
 

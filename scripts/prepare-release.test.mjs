@@ -148,6 +148,32 @@ test("release workflow keeps proof runs private and tag releases signed", async 
   assert.doesNotMatch(workflow, /if: github\.event_name == 'workflow_dispatch'\s*\n\s*uses: .*release/i);
 });
 
+test("release workflow requires every public Polar build value before packaging", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+
+  assert.match(
+    workflow,
+    /name: Test paid promo policy\s*\n\s*run: node --test src\/promo-policy\.test\.mts/,
+  );
+
+  for (const name of [
+    "HUM_POLAR_ORGANIZATION_ID",
+    "HUM_POLAR_CHECKOUT_URL",
+    "HUM_POLAR_CUSTOMER_PORTAL_URL",
+  ]) {
+    assert.match(
+      workflow,
+      new RegExp(`${name}: \\$\\{\\{ vars\\.${name} \\}\\}`),
+    );
+    assert.match(workflow, new RegExp(`Missing required public Polar configuration: \\$name`));
+  }
+
+  const guard = workflow.indexOf("Verify public Polar configuration");
+  const packaging = workflow.indexOf("Build signed Tauri bundle");
+  assert.ok(guard >= 0, "Polar configuration guard is missing");
+  assert.ok(packaging > guard, "Polar configuration must be checked before packaging");
+});
+
 test("Windows signing config preserves exact spaced paths and Tauri placeholder", async () => {
   assert.equal(typeof releaseContract.writeWindowsSignConfig, "function");
   const signtool = String.raw`C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe`;

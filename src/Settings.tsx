@@ -15,6 +15,7 @@ import type {
   TrustDestination,
   WindowBackdrop,
 } from "./types";
+import { PROMO_CARD_DESCRIPTION, PROMO_CARD_LABEL } from "./promo-policy";
 
 const ACCENT = "#d4af37";
 type TrustAction = "license" | "updates" | TrustDestination | "diagnostics";
@@ -451,16 +452,11 @@ export default function SettingsView() {
           </>
         ) : null}
         <Toggle
-          label="Show SYVR promo cards during ad breaks"
+          label={PROMO_CARD_LABEL}
           checked={s.ad_break_promos_enabled}
           onChange={(v) => update("ad_break_promos_enabled", v)}
         />
-        <Hint>
-          When on, the lyric area shows a rotating SYVR Studios product card
-          during ad breaks (Spotify, Pandora, YouTube). When off, a plain
-          "Ad break" label appears instead. The AD BREAK badge and progress
-          bar still show ad timing either way.
-        </Hint>
+        <Hint>{PROMO_CARD_DESCRIPTION}</Hint>
       </Section>
 
       <Section title="Artist info panel">

@@ -13,6 +13,7 @@ use crate::window_effects::{SystemWindowEffects, WindowEffects};
 
 pub(crate) const SETTINGS_STORE_FILE: &str = "settings.json";
 const SETTINGS_STORE_KEY: &str = "settings";
+const CURRENT_PROMO_POLICY_VERSION: u8 = 1;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -77,11 +78,15 @@ pub struct Settings {
     /// Windows 11 DWM backdrop applied to the overlay window.
     /// Persisted as snake_case string: "acrylic" | "mica" | "tabbed_mica" | "none".
     pub window_backdrop: BackdropKind,
-    /// When true, the overlay shows a rotating SYVR Studios product promo card
-    /// in the lyric area during ad breaks (Spotify, Pandora, YouTube). When false,
-    /// a neutral "Ad break" text is shown instead. Default true.
-    #[serde(default = "default_ad_break_promos_enabled")]
+    /// When true, the overlay shows an optional Hum product card in the lyric
+    /// area during ad breaks. Paid-safe defaults and migrations keep this off
+    /// until the customer chooses to enable it.
+    #[serde(default)]
     pub ad_break_promos_enabled: bool,
+    /// Version of the paid-product promo default applied to this saved state.
+    /// Version zero is the legacy on-by-default policy.
+    #[serde(default = "legacy_promo_policy_version")]
+    pub promo_policy_version: u8,
     /// When true, Hum launches automatically when the user signs into their PC.
     /// Off by default — opt-in. The actual OS-level registration is handled by
     /// tauri-plugin-autostart (Windows registry Run key, macOS LaunchAgent,
@@ -100,8 +105,8 @@ pub struct Settings {
     pub show_media: bool,
 }
 
-fn default_ad_break_promos_enabled() -> bool {
-    true
+fn legacy_promo_policy_version() -> u8 {
+    0
 }
 
 fn default_true() -> bool {
@@ -157,7 +162,8 @@ impl Default for Settings {
             streamer_port: 38247,
             show_artist_info_panel: true,
             window_backdrop: BackdropKind::Acrylic,
-            ad_break_promos_enabled: true,
+            ad_break_promos_enabled: false,
+            promo_policy_version: CURRENT_PROMO_POLICY_VERSION,
             launch_on_startup: false,
             bg_hidden: false,
             show_media: true,
@@ -193,7 +199,10 @@ pub fn load_from_store(app: &AppHandle) -> Settings {
     };
     // Validate on load too — protects against a hand-edited / tampered
     // settings.json that bypasses the update_settings sanitize() path.
-    sanitize(&mut loaded);
+    let promo_policy_migrated = sanitize(&mut loaded);
+    if promo_policy_migrated {
+        save_to_store(app, &loaded);
+    }
     loaded
 }
 
@@ -335,8 +344,16 @@ pub async fn update_settings(
 // don't want exotic strings (semicolons, quotes, control chars) leaking into
 // `font_family` / color values where they could enable CSS-side-channel
 // shenanigans. Invalid values silently fall back to safe defaults.
-fn sanitize(s: &mut Settings) {
+fn sanitize(s: &mut Settings) -> bool {
     let defaults = Settings::default();
+
+    // The free preview defaulted promos on and stored no provenance for that
+    // value. Apply the paid-safe default once, then preserve any later opt-in.
+    let promo_policy_migrated = s.promo_policy_version < CURRENT_PROMO_POLICY_VERSION;
+    if promo_policy_migrated {
+        s.ad_break_promos_enabled = false;
+        s.promo_policy_version = CURRENT_PROMO_POLICY_VERSION;
+    }
 
     // font_family: allow letters, digits, spaces, dashes, dots, commas. Strip
     // anything else. Empty after stripping → fall back.
@@ -410,6 +427,8 @@ fn sanitize(s: &mut Settings) {
     if s.streamer_port < 1024 {
         s.streamer_port = defaults.streamer_port;
     }
+
+    promo_policy_migrated
 }
 
 fn is_valid_hex_color(s: &str) -> bool {
@@ -593,6 +612,51 @@ mod tests {
         assert_eq!(current, saved);
         assert_eq!(current.onboarding_version, 4);
         assert_eq!(current.listening_mode, "wired");
+    }
+
+    #[test]
+    fn paid_promo_policy_starts_fresh_and_reset_settings_off() {
+        let fresh = Settings::default();
+        assert!(!fresh.ad_break_promos_enabled);
+
+        let reset = reset_defaults(&Settings {
+            ad_break_promos_enabled: true,
+            ..Settings::default()
+        });
+        assert!(!reset.ad_break_promos_enabled);
+    }
+
+    #[test]
+    fn paid_promo_policy_migrates_legacy_on_once() {
+        let mut settings: Settings =
+            serde_json::from_str(r#"{"ad_break_promos_enabled":true}"#).unwrap();
+
+        assert!(sanitize(&mut settings));
+
+        assert!(!settings.ad_break_promos_enabled);
+        assert_eq!(
+            serde_json::to_value(&settings).unwrap()["promo_policy_version"],
+            1
+        );
+
+        settings.ad_break_promos_enabled = true;
+        assert!(!sanitize(&mut settings));
+        assert!(settings.ad_break_promos_enabled);
+    }
+
+    #[test]
+    fn paid_promo_policy_preserves_current_explicit_opt_in() {
+        let mut settings: Settings =
+            serde_json::from_str(r#"{"promo_policy_version":1,"ad_break_promos_enabled":true}"#)
+                .unwrap();
+
+        assert!(!sanitize(&mut settings));
+
+        assert!(settings.ad_break_promos_enabled);
+        assert_eq!(
+            serde_json::to_value(&settings).unwrap()["promo_policy_version"],
+            1
+        );
     }
 }
 

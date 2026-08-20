@@ -2440,4 +2440,29 @@ mod ad_short_circuit_tests {
             "rotation should have picked something"
         );
     }
+
+    #[tokio::test]
+    async fn disabled_promos_emit_plain_ad_state_without_advancing_cooldown() {
+        let snap = CurrentTrack {
+            title: "Advertisement".into(),
+            artist: "Spotify".into(),
+            duration_ms: 30_000,
+            ad_active: true,
+            source_app_id: Some("Spotify.exe".into()),
+            ..Default::default()
+        };
+        let tmp = std::env::temp_dir().join("hum-test-disabled-promos");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let source = std::sync::Arc::new(SyvrRemoteSource::new(tmp));
+        source.seed_with_defaults().await;
+        let last = std::sync::Arc::new(tokio::sync::RwLock::new(Some(
+            "keep-this-cooldown".to_string(),
+        )));
+
+        let outcome = ad_break_outcome(&snap, &source, &last, false).await;
+
+        assert_eq!(outcome.status, Status::Ad);
+        assert!(outcome.promo.is_none());
+        assert_eq!(last.read().await.as_deref(), Some("keep-this-cooldown"));
+    }
 }

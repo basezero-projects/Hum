@@ -8,7 +8,6 @@ use crate::settings::SharedSettings;
 use super::{LicenseService, LicenseState};
 
 const MAX_CUSTOMER_KEY_LENGTH: usize = 256;
-const POLAR_HOSTS: &[&str] = &["buy.polar.sh", "polar.sh", "www.polar.sh"];
 
 pub(crate) fn current_unix_ms() -> i64 {
     let milliseconds = std::time::SystemTime::now()
@@ -81,7 +80,11 @@ pub fn open_license_window(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn open_license_checkout() -> Result<(), String> {
-    open_configured_polar_url(option_env!("HUM_POLAR_CHECKOUT_URL"), "checkout")
+    open_configured_polar_url(
+        option_env!("HUM_POLAR_CHECKOUT_URL"),
+        "checkout",
+        validate_polar_checkout_url,
+    )
 }
 
 #[tauri::command]
@@ -89,6 +92,7 @@ pub fn open_license_portal() -> Result<(), String> {
     open_configured_polar_url(
         option_env!("HUM_POLAR_CUSTOMER_PORTAL_URL"),
         "customer portal",
+        validate_polar_portal_url,
     )
 }
 
@@ -128,31 +132,104 @@ fn validate_customer_key(value: &str) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
-fn configured_polar_url(value: Option<&str>, label: &str) -> Result<String, String> {
+fn configured_polar_url(
+    value: Option<&str>,
+    label: &str,
+    validate: fn(&str) -> Result<(), String>,
+) -> Result<String, String> {
     let value = value
-        .filter(|candidate| !candidate.trim().is_empty())
+        .map(str::trim)
+        .filter(|candidate| !candidate.is_empty())
         .ok_or_else(|| format!("Hum {label} is not configured yet."))?;
-    validate_polar_url(value)?;
+    validate(value)?;
     Ok(value.to_string())
 }
 
-fn validate_polar_url(value: &str) -> Result<(), String> {
+fn validate_polar_checkout_url(value: &str) -> Result<(), String> {
     let parsed = reqwest::Url::parse(value)
         .map_err(|_| "Hum could not open that Polar link.".to_string())?;
-    let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
-    let valid = parsed.scheme() == "https"
-        && POLAR_HOSTS.contains(&host.as_str())
+    let common_valid = parsed.scheme() == "https"
         && parsed.username().is_empty()
         && parsed.password().is_none()
-        && parsed.fragment().is_none();
+        && parsed.port().is_none()
+        && parsed.query().is_none()
+        && parsed.fragment().is_none()
+        && parsed.as_str() == value;
+    let path = parsed.path();
+    let valid = common_valid
+        && match parsed.host_str() {
+            Some("buy.polar.sh") => path
+                .strip_prefix('/')
+                .is_some_and(is_polar_checkout_link_id),
+            Some("sandbox-api.polar.sh") => path
+                .strip_prefix("/v1/checkout-links/")
+                .and_then(|rest| rest.strip_suffix("/redirect"))
+                .is_some_and(is_polar_checkout_link_id),
+            _ => false,
+        };
     if !valid {
         return Err("Hum could not open that Polar link.".to_string());
     }
     Ok(())
 }
 
-fn open_configured_polar_url(value: Option<&str>, label: &str) -> Result<(), String> {
-    let url = configured_polar_url(value, label)?;
+fn validate_polar_portal_url(value: &str) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(value)
+        .map_err(|_| "Hum could not open that Polar link.".to_string())?;
+    let mut segments = parsed
+        .path()
+        .split('/')
+        .filter(|segment| !segment.is_empty());
+    let organization = segments.next().unwrap_or_default();
+    let portal = segments.next().unwrap_or_default();
+    let valid = parsed.scheme() == "https"
+        && parsed.host_str() == Some("polar.sh")
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+        && parsed.port().is_none()
+        && parsed.query().is_none()
+        && parsed.fragment().is_none()
+        && parsed.as_str() == value
+        && is_polar_organization_slug(organization)
+        && portal == "portal"
+        && parsed.path() == format!("/{organization}/portal")
+        && segments.next().is_none();
+    if !valid {
+        return Err("Hum could not open that Polar link.".to_string());
+    }
+    Ok(())
+}
+
+fn is_polar_checkout_link_id(value: &str) -> bool {
+    value.strip_prefix("polar_cl_").is_some_and(|suffix| {
+        !suffix.is_empty()
+            && suffix
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric())
+    })
+}
+
+fn is_polar_organization_slug(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        })
+        && value
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
+        && value
+            .chars()
+            .last()
+            .is_some_and(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
+}
+
+fn open_configured_polar_url(
+    value: Option<&str>,
+    label: &str,
+    validate: fn(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    let url = configured_polar_url(value, label, validate)?;
     opener::open(url).map_err(|_| format!("Hum could not open the {label}."))
 }
 
@@ -176,24 +253,33 @@ mod tests {
     }
 
     #[test]
-    fn external_license_links_accept_only_safe_polar_https_urls() {
+    fn checkout_links_accept_only_persistent_production_and_sandbox_redirect_urls() {
         for url in [
-            "https://buy.polar.sh/polar_cl_example",
-            "https://polar.sh/purchases",
-            "https://www.polar.sh/purchases",
+            "https://buy.polar.sh/polar_cl_01abcXYZ",
+            "https://sandbox-api.polar.sh/v1/checkout-links/polar_cl_01abcXYZ/redirect",
         ] {
-            assert!(validate_polar_url(url).is_ok(), "{url}");
+            assert!(validate_polar_checkout_url(url).is_ok(), "{url}");
         }
         for url in [
-            "http://buy.polar.sh/polar_cl_example",
-            "https://polar.sh.evil.example/purchases",
-            "https://evil.example/polar.sh",
-            "https://user:pass@polar.sh/purchases",
-            "https://polar.sh/purchases#license-key",
+            "https://buy.polar.sh/polar_c_temporary_session",
+            "https://buy.polar.sh/polar_cl_01abcXYZ/extra",
+            "https://buy.polar.sh/polar_cl_01abcXYZ?theme=dark",
+            "https://buy.polar.sh:443/polar_cl_01abcXYZ",
+            "https://buy.polar.sh:8443/polar_cl_01abcXYZ",
+            "https://user:pass@buy.polar.sh/polar_cl_01abcXYZ",
+            "https://buy.polar.sh/polar_cl_01abcXYZ#payment",
+            "https://polar.sh/checkout/polar_cl_01abcXYZ",
+            "https://www.polar.sh/checkout/polar_cl_01abcXYZ",
+            "https://evil.buy.polar.sh/polar_cl_01abcXYZ",
+            "https://buy.polar.sh.evil.example/polar_cl_01abcXYZ",
+            "https://sandbox-api.polar.sh/v1/checkout-links/polar_cl_01abcXYZ",
+            "https://sandbox-api.polar.sh/v1/checkout-links/polar_cl_01abcXYZ/redirect/extra",
+            "https://sandbox-api.polar.sh:443/v1/checkout-links/polar_cl_01abcXYZ/redirect",
+            "http://buy.polar.sh/polar_cl_01abcXYZ",
             "file:///C:/license.txt",
             "",
         ] {
-            let error = validate_polar_url(url).unwrap_err();
+            let error = validate_polar_checkout_url(url).unwrap_err();
             if !url.is_empty() {
                 assert!(!error.contains(url));
             }
@@ -201,13 +287,36 @@ mod tests {
     }
 
     #[test]
+    fn portal_links_accept_only_the_organization_portal_path() {
+        assert!(validate_polar_portal_url("https://polar.sh/syvr-studios/portal").is_ok());
+
+        for url in [
+            "https://polar.sh/portal",
+            "https://polar.sh/syvr-studios/portal/",
+            "https://polar.sh/syvr-studios/portal/orders",
+            "https://polar.sh/syvr-studios/portal?customer=example",
+            "https://polar.sh:443/syvr-studios/portal",
+            "https://polar.sh:8443/syvr-studios/portal",
+            "https://user:pass@polar.sh/syvr-studios/portal",
+            "https://www.polar.sh/syvr-studios/portal",
+            "https://evil.polar.sh/syvr-studios/portal",
+            "https://polar.sh.evil.example/syvr-studios/portal",
+            "http://polar.sh/syvr-studios/portal",
+        ] {
+            let error = validate_polar_portal_url(url).unwrap_err();
+            assert!(!error.contains(url));
+        }
+    }
+
+    #[test]
     fn missing_link_configuration_returns_a_useful_safe_error() {
         assert_eq!(
-            configured_polar_url(None, "checkout").unwrap_err(),
+            configured_polar_url(None, "checkout", validate_polar_checkout_url).unwrap_err(),
             "Hum checkout is not configured yet."
         );
         assert_eq!(
-            configured_polar_url(Some(""), "customer portal").unwrap_err(),
+            configured_polar_url(Some(""), "customer portal", validate_polar_portal_url)
+                .unwrap_err(),
             "Hum customer portal is not configured yet."
         );
     }

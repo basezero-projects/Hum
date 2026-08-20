@@ -28,6 +28,7 @@ import type {
   WordSpan,
 } from "./types";
 import { fmtMs, loadPlatformInfoWithRetry, loadSettingsWithRetry } from "./types";
+import { DEFAULT_AD_BREAK_PROMOS_ENABLED } from "./promo-policy";
 import {
   canInstallUpdate,
   clampDownloadProgress,
@@ -71,7 +72,7 @@ const DEFAULT_SETTINGS: Settings = {
   streamer_enabled: false,
   streamer_port: 38247,
   show_artist_info_panel: true,
-  ad_break_promos_enabled: true,
+  ad_break_promos_enabled: DEFAULT_AD_BREAK_PROMOS_ENABLED,
   launch_on_startup: false,
   bg_hidden: false,
   show_media: true,

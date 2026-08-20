@@ -1,6 +1,6 @@
 {
   "name": "hum",
-  "version": "0.13.75",
+  "version": "0.13.76",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "typecheck": "tsc --noEmit",
-    "test": "node --test src/platform-info-retry.test.mjs src/update-state.test.mts src/window-route.test.mts scripts/prepare-release.test.mjs"
+    "test": "node --test src/platform-info-retry.test.mjs src/promo-policy.test.mts src/update-state.test.mts src/window-route.test.mts scripts/prepare-release.test.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

@@ -6,6 +6,12 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.76] - 2026-08-20
+
+### Changed
+- **Paid installs now start without promotional cards.** Fresh installs, Reset Settings, and existing settings migrated to the current promo policy all start with optional Hum offers turned off. The existing neutral Ad break screen remains available, and a customer who later enables offers in Settings keeps that choice.
+- **Release builds now accept only the intended Polar purchase and recovery links.** The Windows workflow requires the Hum Polar organization, checkout value, and customer portal value before packaging. Hum opens those values only when they match the exact hosted checkout or organization portal contract. General Polar pages, temporary sessions, deceptive hosts, credentials, ports, queries, fragments, and extra paths are rejected.
+
 ## [0.13.75] - 2026-08-19
 
 ### Added
