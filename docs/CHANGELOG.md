@@ -6,6 +6,12 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.78] - 2026-08-20
+
+### Fixed
+- **Transparent lyrics stay readable over the desktop.** When Transparent mode and auto contrast are both on, the ribbon now keeps bright lyrics and a dark shadow. A nearby light screen sample can no longer turn the current line nearly black or give it a hollow white outline. Hum still uses dark lyrics when its own solid or blurred background is light.
+- **Common VEVO uploads can reach the lyric fallback again.** Hum now recognizes compact channel names such as `VanessaCarltonVEVO` when the video title contains the spaced artist and song, such as `Vanessa Carlton - A Thousand Miles`. This lets NetEase return synced lyrics when LRCLib is unavailable, while real hyphenated song titles remain unchanged.
+
 ## [0.13.77] - 2026-08-20
 
 ### Changed

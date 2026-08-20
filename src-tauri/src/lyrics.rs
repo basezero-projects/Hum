@@ -516,8 +516,7 @@ async fn resolve_lyrics(
     // via `clean_artist`. Without that, LRCLib's exact match never hits and
     // /api/search returns 400 on the noisy params, which used to surface as
     // "error fetching lyrics" instead of a clean NotFound.
-    let cleaned_title = clean_title(&track.title);
-    let cleaned_artist = clean_artist(&track.artist);
+    let (cleaned_artist, cleaned_title) = canonical_provider_metadata(&track.title, &track.artist);
 
     // Mashups / bootlegs / fan edits don't exist on any canonical lyric
     // source (LRCLib, NetEase), only their constituent songs
@@ -1766,6 +1765,34 @@ pub fn clean_artist(artist: &str) -> String {
     stripped.trim().trim_matches('-').trim().to_string()
 }
 
+fn canonical_provider_metadata(title: &str, artist: &str) -> (String, String) {
+    let cleaned_title = clean_title(title);
+    let cleaned_artist = clean_artist(artist);
+
+    let Some((title_artist, title_song)) = cleaned_title.split_once(" - ") else {
+        return (cleaned_artist, cleaned_title);
+    };
+
+    let title_artist = clean_artist(title_artist);
+    let title_song = clean_title(title_song);
+    let compact = |value: &str| {
+        value
+            .chars()
+            .filter(|character| character.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+
+    if !title_artist.is_empty()
+        && !title_song.is_empty()
+        && compact(&title_artist) == compact(&cleaned_artist)
+    {
+        (title_artist, title_song)
+    } else {
+        (cleaned_artist, cleaned_title)
+    }
+}
+
 // ─── LRC parser ────────────────────────────────────────────────────────────
 
 /// Parse NetEase YRC lines of the form
@@ -2326,6 +2353,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(picked.id, 1);
+    }
+
+    #[test]
+    fn provider_metadata_recovers_artist_and_song_from_vevo_title() {
+        let (artist, title) =
+            canonical_provider_metadata("Vanessa Carlton - A Thousand Miles", "VanessaCarltonVEVO");
+
+        assert_eq!(artist, "Vanessa Carlton");
+        assert_eq!(title, "A Thousand Miles");
+    }
+
+    #[test]
+    fn provider_metadata_preserves_real_hyphenated_song_titles() {
+        let (artist, title) = canonical_provider_metadata("Love - Part II", "Original Artist");
+
+        assert_eq!(artist, "Original Artist");
+        assert_eq!(title, "Love - Part II");
     }
 
     #[test]

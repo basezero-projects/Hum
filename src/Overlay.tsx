@@ -29,6 +29,7 @@ import type {
 } from "./types";
 import { fmtMs, loadPlatformInfoWithRetry, loadSettingsWithRetry } from "./types";
 import { DEFAULT_AD_BREAK_PROMOS_ENABLED } from "./promo-policy";
+import { resolveOverlayTextAppearance } from "./overlay-appearance";
 import {
   canInstallUpdate,
   clampDownloadProgress,
@@ -861,17 +862,20 @@ export default function Overlay() {
   // read for the OVERLAY SURFACE (not the screen behind — see the
   // composited-luminance useEffect below), replace the user's text colors
   // with high-contrast values.
-  const autoColorActive = settings.auto_contrast && surfaceIsLight !== null;
-  const effectiveTextColor = autoColorActive
-    ? (surfaceIsLight ? "#0a0a0a" : "#ffffff")
-    : settings.text_color;
-  // Solid grays for the autocolor branch — alpha-based dims wash out on
-  // bright/colorful album-art backgrounds because the background bleeds
-  // through and tints the dim text. Solid values render the same regardless
-  // of what's behind.
-  const effectiveTextColorDim = autoColorActive
-    ? (surfaceIsLight ? "#5a5a5a" : "#c8c8c8")
-    : settings.text_color_dim;
+  const textAppearance = resolveOverlayTextAppearance({
+    autoContrast: settings.auto_contrast,
+    surfaceIsLight,
+    backgroundHidden: settings.bg_hidden,
+    textColor: settings.text_color,
+    textColorDim: settings.text_color_dim,
+  });
+  const {
+    autoColorActive,
+    textColor: effectiveTextColor,
+    textColorDim: effectiveTextColorDim,
+    textShadow: effectiveTextShadow,
+    useDarkLogo,
+  } = textAppearance;
   // Ribbon scaling follows width, preserving its existing behavior. Square
   // scaling follows its tighter dimension so resized square windows keep the
   // full composition visible.
@@ -886,15 +890,6 @@ export default function Overlay() {
     font_size_px: baseSettings.font_size_px * scale,
     line_padding_px: Math.max(0, Math.round(baseSettings.line_padding_px * scale)),
   };
-  // Drop shadow under the text — directional (light source from above)
-  // rather than a symmetric halo. Two stacked offsets: a tight sharp one
-  // for edge definition + a wider soft one for depth against busy
-  // backgrounds. Color flips opposite the text (dark text gets a white
-  // shadow on light surfaces, light text gets a black shadow elsewhere).
-  const effectiveTextShadow =
-    autoColorActive && surfaceIsLight
-      ? "0 1px 2px rgba(255,255,255,0.9), 0 3px 10px rgba(255,255,255,0.55)"
-      : "0 1px 2px rgba(0,0,0,0.9), 0 3px 10px rgba(0,0,0,0.55)";
   // When tint is on AND we have a color extracted from the current art, blend
   // the user's bg_color with the tint at 50/50 in RGB. Force a minimum 22%
   // opacity so the toggle is visibly doing something even when the user has
@@ -985,10 +980,9 @@ export default function Overlay() {
   // without a hard-edged box.
   const watermark = (
     <img
-      // Match the lyric color: when auto-contrast flips the text dark over a
-      // light background (most visible in transparent mode), use the black
-      // mark so the watermark stays legible too.
-      src={autoColorActive && surfaceIsLight ? "/hum-logo-dark.png" : "/hum-logo.png"}
+      // Match the lyric color when Hum owns the visible background. Fully
+      // transparent overlays keep the white mark and a dark shadow.
+      src={useDarkLogo ? "/hum-logo-dark.png" : "/hum-logo.png"}
       alt=""
       draggable={false}
       style={{
