@@ -1,8 +1,8 @@
 # HUM-10E signed updates plan
 
 Date: 2026-08-19
-Status: Implementation complete, signed proof pending
-Target version: 0.13.73 repair candidate, final closeout follows signed proof
+Status: Complete
+Final version: 0.13.74
 Related phase: [HUM-10](../../roadmap/1.0/HUM-10-purchase-trust-first-run.md)
 Progress ledger: [HUM-10 ledger](../../roadmap/1.0/HUM-10-progress-ledger.md)
 
@@ -77,6 +77,16 @@ External setup is part of this slice, but secrets never enter the repository:
 ## Proof split
 
 HUM-10E closes the signed build path, customer update-state behavior, updater public key, and a real nonpublishing signed CI artifact. HUM-10H owns the destructive release-path proof from a previously installed signed Hum build, the actual public tag, successful relaunch, feed withdrawal, and manual rollback.
+
+## Completion proof
+
+- GitHub Actions run `32315736382` passed the full release gate on commit `8c503d29a17b9a05f38399329359e31d94d65f1e`.
+- Azure Trusted Signing completed before Tauri created the updater signature.
+- Windows SignTool verified the extracted customer `hum.exe` and the completed NSIS installer on the runner.
+- The private artifact contained only `Hum_0.13.73_x64-setup.exe`, its `.exe.sig`, `latest.json`, and `release-proof.json`.
+- The downloaded installer SHA-256 was `a6d58d4ddd5d389fae2b62abb417003db6fe1268b13c9a67df51f9bd1f328fec`, matching both installer and updater roles in the proof record.
+- A separate local audit verified the feed URL, signature text, four-file inventory, proof hashes, installer Authenticode signature, and extracted application Authenticode signature.
+- The manual proof did not publish a GitHub Release or change the public updater feed.
 
 ## Amendment gate
 

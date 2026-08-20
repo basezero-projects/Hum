@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.74] - 2026-08-19
+
+### Changed
+- **Hum's signed Windows update path now has a complete private release proof.** The release workflow built and signed the v0.13.73 installer, verified the installed `hum.exe` and installer with Windows SignTool, generated the exact Windows updater feed, and uploaded a private four-file audit bundle. Manual update checks already show clear current, available, downloading, installing, restarting, and retry states in the overlay and tray. Installing an update from a previous signed version remains part of the final release-path test.
+
 ## [0.13.73] - 2026-08-19
 
 ### Fixed
