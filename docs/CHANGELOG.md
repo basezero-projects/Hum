@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.77] - 2026-08-20
+
+### Changed
+- **Support requests now reach the monitored SYVR inbox.** The Email support action in Settings now opens a message to `info@syvr.dev`, matching the support address used by Polar and the Hum website. The app still uses a fixed, allowlisted mail destination rather than accepting a caller-provided URL.
+
 ## [0.13.76] - 2026-08-20
 
 ### Changed

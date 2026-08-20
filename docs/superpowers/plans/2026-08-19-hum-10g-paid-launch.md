@@ -94,7 +94,7 @@ Standard closeout files are also expected in both repositories: version manifest
 - `PUBLIC_SITE_URL` controls canonicals, Open Graph URLs, and the sitemap. Until the custom domain works, the deployed Vercel URL is the honest default.
 - Product schema reports availability only when checkout configuration is valid. It must not advertise a purchasable product when checkout is disconnected.
 - Pricing, Buy, Terms, Privacy, Download, Support, footer, and purchase completion agree on price, device count, covered updates, refund window, Polar's role, portal delivery, and support email.
-- The Support page has one clear purpose, one h1, unique metadata, and a stable `hello@syvr.dev` route.
+- The Support page has one clear purpose, one h1, unique metadata, and a stable `info@syvr.dev` route.
 
 ## Required red-first tests
 
@@ -113,7 +113,7 @@ Standard closeout files are also expected in both repositories: version manifest
 - Missing or hostile checkout URLs fail closed.
 - Approved Polar production and sandbox URLs remain exact and usable.
 - PurchaseButton and Buy share the parser instead of opening raw environment input.
-- Final purchase copy contains $19 once, three devices, Hum 1.x updates, 30-day refunds, Polar portal delivery, and `hello@syvr.dev` wherever relevant.
+- Final purchase copy contains $19 once, three devices, Hum 1.x updates, 30-day refunds, Polar portal delivery, and `info@syvr.dev` wherever relevant.
 - Terms contain no launch-draft or unfinished-refund language.
 - Download does not promise a direct installer attachment.
 - Support and purchase-complete pages use unique metadata, one h1, safe links, and the intended robots behavior.

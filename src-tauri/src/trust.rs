@@ -10,7 +10,7 @@ use crate::license::{current_unix_ms, LicenseService, LicenseState, LicenseStatu
 use crate::platform::info::PlatformInfo;
 use crate::settings::{Settings, SharedSettings};
 
-const SUPPORT_DESTINATION: &str = "mailto:hello@syvr.dev?subject=Hum%20support";
+const SUPPORT_DESTINATION: &str = "mailto:info@syvr.dev?subject=Hum%20support";
 const PRIVACY_DESTINATION: &str = "https://humlyrics.com/privacy";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -692,7 +692,7 @@ mod tests {
     fn trust_destinations_are_fixed_without_caller_provided_urls() {
         assert_eq!(
             trust_destination_url(TrustDestination::Support),
-            "mailto:hello@syvr.dev?subject=Hum%20support"
+            "mailto:info@syvr.dev?subject=Hum%20support"
         );
         assert_eq!(
             trust_destination_url(TrustDestination::Privacy),

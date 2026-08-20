@@ -5,10 +5,10 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 ## Current cursor
 
 - Slice: HUM-10G, paid-product defaults and checkout completion
-- Step: Polar sandbox configuration
-- Next action: configure and prove the Polar sandbox product, three-activation license benefit, signed installer benefit, checkout link, and portal
-- Blocker: None for provider inspection. Domain purchase requires Wes's explicit spending approval.
-- Last updated: 2026-08-20 01:49 MDT
+- Step: Polar production account review
+- Next action: Wes completes Stripe photo-ID verification and payout-account setup, then the account review can be submitted and the first real-payment journey can be proven
+- Blocker: The remaining Polar steps require Wes's government ID and private payout details. Domain purchase still requires Wes's explicit spending approval.
+- Last updated: 2026-08-20 11:59 MDT
 - Last completed plan: `docs/superpowers/plans/2026-08-19-hum-10f-trust-support.md`
 - Current plan: `docs/superpowers/plans/2026-08-19-hum-10g-paid-launch.md`
 
@@ -133,3 +133,5 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 - 2026-08-19 20:14 MDT: The first cross-repository review found an official Polar sandbox URL mismatch, an unvalidated canonical origin, a staging-only robots sitemap, and one missing promo regression. The approved boundary expands to twenty-nine files for red-first repairs without adding a dependency or product mechanism.
 - 2026-08-20 01:37 MDT: The review repairs passed the complete Hum debug and release gates plus the full website gate. Website v0.1.2 shipped at commit `e52b4a4`, and the Vercel production deployment passed live route, console, canonical, robots, sitemap, noindex, disconnected-checkout, and schema checks. Desktop v0.13.76 is entering closeout before Polar sandbox configuration.
 - 2026-08-20 01:49 MDT: Desktop v0.13.76 passed the restarted closeout gate after registering the promo-policy tests in the standard frontend command. Twenty-eight frontend tests, 262 debug Rust tests, 262 optimized Rust tests, both Clippy profiles, formatting, builds, and scope audits passed. HUM-10-AC9 is complete, and the cursor advances to Polar sandbox configuration.
+- 2026-08-20 10:03 MDT: The isolated Polar sandbox now has a BaseZero organization in USD, a $19 one-time Hum product, a visible `HUM` license-key benefit limited to three activations with customer self-deactivation, the exact sandbox checkout link with success and return URLs, and a Hum-only 100% test code. The audited signed v0.13.73 installer matches SHA-256 `a6d58d4ddd5d389fae2b62abb417003db6fe1268b13c9a67df51f9bd1f328fec`, but Chrome blocked the local file handoff before Polar received it. The cursor remains on the installer benefit until extension file access is enabled.
+- 2026-08-20 11:59 MDT: The isolated Polar sandbox journey passed from checkout through delivery. A zero-dollar discounted order produced the paid order, `HUM` license grant, signed installer grant, customer email code, and authenticated portal view with the receipt, license key, download, and activation controls. Production Polar now has the $19 Hum product, three-activation license benefit, signed v0.13.73 installer benefit, hosted checkout, and BaseZero customer portal. The three public Polar values are configured in GitHub Actions, the checkout and site origin are configured in Vercel, and the live Buy page reaches the production checkout. Polar still blocks real payments until Wes completes Stripe photo-ID verification, connects a payout account, and submits the account review. The public product description, website, and `info@syvr.dev` support contact are saved. The cursor is the private Polar identity and payout handoff, followed by account-review submission and the first real-payment proof.

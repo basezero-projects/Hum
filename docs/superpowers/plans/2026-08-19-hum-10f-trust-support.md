@@ -13,7 +13,7 @@ A customer can confirm which Hum build they are using, manage their license, che
 ## Product contract
 
 - Settings gains one polished `About & support` section. It shows the Hum name and version, operating system and architecture, a concise license summary, and actions for license management, updates, support, privacy, and diagnostic export.
-- Support opens `mailto:hello@syvr.dev?subject=Hum%20support`.
+- Support opens `mailto:info@syvr.dev?subject=Hum%20support`.
 - Privacy opens `https://humlyrics.com/privacy`.
 - Rust owns both destinations through a closed enum. The frontend cannot pass an arbitrary URL.
 - A successful diagnostic export shows the exact saved file path. A failure stays visible beside the action in plain language.
