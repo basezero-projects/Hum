@@ -6,6 +6,12 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.81] - 2026-08-20
+
+### Changed
+- **Settings is now organized by category instead of one long page.** A fixed navigation rail opens focused pages for General, Timing, Text, Background, Layout, Features, Shortcuts, Streaming, and About. Hum remembers the last page you used, resets the content position when you switch pages, and supports arrow, Home, and End keys while the category rail is focused.
+- **The Settings window now gives controls enough room.** Its default size is 920 by 720 pixels with a 720 by 600 minimum. Shortcut bindings use a two-column grid at the default width, while narrower layouts stay readable without squeezing labels and controls together. The approved hummingbird and Hum's gold accent now anchor the Settings workspace.
+
 ## [0.13.80] - 2026-08-20
 
 ### Added

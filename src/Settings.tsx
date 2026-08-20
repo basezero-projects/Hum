@@ -17,12 +17,18 @@ import type {
 } from "./types";
 import { PROMO_CARD_DESCRIPTION, PROMO_CARD_LABEL } from "./promo-policy";
 import {
+  availableSettingsPages,
+  normalizeSettingsPage,
+  type SettingsPageId,
+} from "./settings-navigation";
+import {
   displayShortcut,
   SHORTCUT_ROWS,
   triggerFromKeyboardInput,
   triggerFromMouseInput,
   type ShortcutActionId,
 } from "./shortcut-config";
+import "./Settings.css";
 
 const ACCENT = "#d4af37";
 type TrustAction = "license" | "updates" | TrustDestination | "diagnostics";
@@ -40,9 +46,17 @@ export default function SettingsView() {
   const [trustFeedback, setTrustFeedback] = useState<TrustFeedback | null>(null);
   const [recordingShortcut, setRecordingShortcut] = useState<ShortcutActionId | null>(null);
   const [shortcutFeedback, setShortcutFeedback] = useState<ShortcutFeedback | null>(null);
+  const [activePage, setActivePage] = useState<SettingsPageId>(() => {
+    try {
+      return normalizeSettingsPage(window.localStorage.getItem("hum.settings.page"), true);
+    } catch {
+      return "general";
+    }
+  });
   // Track in-flight pending writes so slider drags coalesce.
   const writeTimer = useRef<number | null>(null);
   const pendingPatch = useRef<Partial<Settings>>({});
+  const settingsScrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let active = true;
@@ -118,6 +132,11 @@ export default function SettingsView() {
     };
   }, [recordingShortcut]);
 
+  useEffect(() => {
+    const globalShortcuts = platformInfo?.services.global_shortcuts ?? true;
+    setActivePage((current) => normalizeSettingsPage(current, globalShortcuts));
+  }, [platformInfo?.services.global_shortcuts]);
+
   function update<K extends keyof Settings>(key: K, value: Settings[K]) {
     if (!s) return;
     setS({ ...s, [key]: value });
@@ -171,6 +190,17 @@ export default function SettingsView() {
   function reset() {
     if (!confirm("Reset all settings to defaults?")) return;
     invoke<Settings>("reset_settings").then(setS).catch(console.error);
+  }
+
+  function selectSettingsPage(page: SettingsPageId) {
+    setActivePage(page);
+    setRecordingShortcut(null);
+    settingsScrollRef.current?.scrollTo({ top: 0 });
+    try {
+      window.localStorage.setItem("hum.settings.page", page);
+    } catch {
+      // Storage can be unavailable in hardened webviews. Navigation still works for this session.
+    }
   }
 
   async function runTrustAction(action: TrustAction, operation: () => Promise<string>) {
@@ -233,19 +263,86 @@ export default function SettingsView() {
     modeOptions.push(["ghost", "Ghost (click-through)"]);
   }
   const shortcutHelp = platformInfo.services.global_shortcuts;
+  const settingsPages = availableSettingsPages(shortcutHelp);
+  const currentPage =
+    settingsPages.find(({ id }) => id === activePage) ?? settingsPages[0]!;
+
+  function moveSettingsTab(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
+    let nextIndex = index;
+    if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+      nextIndex = (index - 1 + settingsPages.length) % settingsPages.length;
+    } else if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+      nextIndex = (index + 1) % settingsPages.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = settingsPages.length - 1;
+    } else {
+      return;
+    }
+    const nextPage = settingsPages[nextIndex];
+    if (!nextPage) return;
+    event.preventDefault();
+    selectSettingsPage(nextPage.id);
+    window.requestAnimationFrame(() => {
+      document.getElementById(`settings-tab-${nextPage.id}`)?.focus();
+    });
+  }
 
   return (
-    <div style={pageStyle}>
-      <header style={{ marginBottom: 24 }}>
-        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600, letterSpacing: 0.2 }}>
-          Settings
-        </h1>
-        <p style={{ margin: "6px 0 0", opacity: 0.55, fontSize: 13 }}>
-          Changes apply live to the overlay. Saved automatically.
-        </p>
-      </header>
+    <div className="settings-shell">
+      <aside className="settings-nav">
+        <div className="settings-brand">
+          <img src="/hum-logo.png" alt="" aria-hidden="true" />
+          <div>
+            <div className="settings-brand-name">Hum</div>
+            <div className="settings-brand-kicker">Control room</div>
+          </div>
+        </div>
+        <nav className="settings-nav-list" role="tablist" aria-label="Settings categories">
+          {settingsPages.map((page, index) => {
+            const selected = page.id === activePage;
+            return (
+              <button
+                key={page.id}
+                id={`settings-tab-${page.id}`}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                aria-controls="settings-active-panel"
+                tabIndex={selected ? 0 : -1}
+                className="settings-nav-button"
+                onClick={() => selectSettingsPage(page.id)}
+                onKeyDown={(event) => moveSettingsTab(event, index)}
+              >
+                <span className="settings-nav-number">{page.number}</span>
+                <span className="settings-nav-label">{page.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+        <div className="settings-save-state">
+          <span className="settings-save-dot" aria-hidden="true" />
+          Changes save automatically
+        </div>
+      </aside>
 
-      <Section title="Mode & startup">
+      <main className="settings-main">
+        <header className="settings-page-header">
+          <div className="settings-page-index">Settings / {currentPage.number}</div>
+          <h1 className="settings-page-title">{currentPage.title}</h1>
+          <p className="settings-page-description">{currentPage.description}</p>
+        </header>
+        <div ref={settingsScrollRef} className="settings-scroll">
+          <div
+            id="settings-active-panel"
+            role="tabpanel"
+            aria-labelledby={`settings-tab-${activePage}`}
+            className="settings-content settings-page-enter"
+            key={activePage}
+          >
+      {activePage === "general" ? (
+        <Section title="Mode & startup">
         <Row label="Last mode (restored on launch)">
           <Select
             value={s.last_mode}
@@ -272,29 +369,23 @@ export default function SettingsView() {
             </Hint>
           </>
         ) : null}
-      </Section>
+        </Section>
+      ) : null}
 
-      {shortcutHelp ? (
-        <Section title="Global shortcuts">
+      {activePage === "shortcuts" && shortcutHelp ? (
+        <Section title="Bindings">
           <Hint>
             Every shortcut keeps Ctrl + Alt so it works globally without taking over normal app
             controls. Click a binding, then press Ctrl + Alt with any supported key
             {platformInfo.platform === "windows" ? " or Mouse 4 / Mouse 5" : ""}. Escape cancels.
           </Hint>
-          <div style={{ marginTop: 12, borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+          <div className="settings-shortcut-grid">
             {SHORTCUT_ROWS.map(({ action, label, detail }) => {
               const recording = recordingShortcut === action;
               return (
                 <div
                   key={action}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 18,
-                    minHeight: 58,
-                    borderBottom: "1px solid rgba(255,255,255,0.07)",
-                  }}
+                  className="settings-shortcut-item"
                 >
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 600 }}>{label}</div>
@@ -309,7 +400,7 @@ export default function SettingsView() {
                     }}
                     style={{
                       ...inputStyle,
-                      minWidth: 190,
+                      minWidth: 168,
                       cursor: "pointer",
                       borderColor: recording ? ACCENT : inputStyle.borderColor,
                       color: recording ? "#f4d66d" : inputStyle.color,
@@ -343,7 +434,8 @@ export default function SettingsView() {
         </Section>
       ) : null}
 
-      <Section title="Lyrics timing">
+      {activePage === "timing" ? (
+        <Section title="Timing controls">
         <Row label="Listening mode">
           <SegmentedControl
             ariaLabel="Listening mode"
@@ -393,9 +485,11 @@ export default function SettingsView() {
           onChange={(v) => update("jitter_tolerance_ms", v)}
           help="Backward position jumps smaller than this are treated as source-counter jitter, not real seeks."
         />
-      </Section>
+        </Section>
+      ) : null}
 
-      <Section title="Typography">
+      {activePage === "text" ? (
+        <Section title="Typography">
         <Row label="Font family">
           <input
             type="text"
@@ -447,9 +541,11 @@ export default function SettingsView() {
             ]}
           />
         </Row>
-      </Section>
+        </Section>
+      ) : null}
 
-      <Section title="Background">
+      {activePage === "background" ? (
+        <Section title="Surface and artwork">
         <Row label="Background color">
           <ColorInput
             value={s.bg_color}
@@ -517,9 +613,11 @@ export default function SettingsView() {
             </>
           ) : null}
         </Hint>
-      </Section>
+        </Section>
+      ) : null}
 
-      <Section title="Layout">
+      {activePage === "layout" ? (
+        <Section title="Overlay format">
         <Row label="Overlay shape">
           <SegmentedControl<OverlayShape>
             ariaLabel="Overlay shape"
@@ -560,9 +658,12 @@ export default function SettingsView() {
           value={s.line_padding_px}
           onChange={(v) => update("line_padding_px", v)}
         />
-      </Section>
+        </Section>
+      ) : null}
 
-      <Section title="Extras">
+      {activePage === "features" ? (
+        <div>
+        <Section title="Overlay details">
         <Toggle
           label="Show album art (when available)"
           checked={s.show_album_art}
@@ -606,9 +707,9 @@ export default function SettingsView() {
           onChange={(v) => update("ad_break_promos_enabled", v)}
         />
         <Hint>{PROMO_CARD_DESCRIPTION}</Hint>
-      </Section>
+        </Section>
 
-      <Section title="Artist info panel">
+        <Section title="Artist info panel">
         <Toggle
           label="Show artist info panel"
           checked={s.show_artist_info_panel}
@@ -630,9 +731,12 @@ export default function SettingsView() {
             Clear artist info cache
           </button>
         </Row>
-      </Section>
+        </Section>
+        </div>
+      ) : null}
 
-      <Section title="OBS / Streamer">
+      {activePage === "streaming" ? (
+        <Section title="Browser source">
         <Toggle
           label="Expose lyrics as a browser source"
           checked={s.streamer_enabled}
@@ -660,9 +764,12 @@ export default function SettingsView() {
           transparent background, no chroma key needed. Off by default
           since it opens a TCP port on localhost.
         </Hint>
-      </Section>
+        </Section>
+      ) : null}
 
-      <Section title="About & support">
+      {activePage === "about" ? (
+        <div>
+        <Section title="Product and support">
         <div style={aboutCardStyle}>
           <div>
             <div style={{ fontSize: 18, fontWeight: 700 }}>{aboutInfo.product_name}</div>
@@ -795,6 +902,11 @@ export default function SettingsView() {
           Reset to defaults
         </button>
       </footer>
+        </div>
+      ) : null}
+          </div>
+        </div>
+      </main>
     </div>
   );
 }

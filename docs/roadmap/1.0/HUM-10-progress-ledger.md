@@ -6,9 +6,9 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 
 - Slice: HUM-10G, paid-product defaults and checkout completion
 - Step: Internal bug testing and release-readiness hold
-- Next action: Wes tests the current v0.13.80 build, reports issues, and approves release readiness before any Polar review, payment proof, or public release resumes
+- Next action: Wes tests the current v0.13.81 build, reports issues, and approves release readiness before any Polar review, payment proof, or public release resumes
 - Blocker: Hum does not have Wes's release approval. The public checkout is intentionally disconnected, Polar review is not submitted, and no GitHub release tag exists.
-- Last updated: 2026-08-20 13:35 MDT
+- Last updated: 2026-08-20 13:48 MDT
 - Last completed plan: `docs/superpowers/plans/2026-08-19-hum-10f-trust-support.md`
 - Current plan: `docs/superpowers/plans/2026-08-19-hum-10g-paid-launch.md`
 
@@ -140,3 +140,4 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 - 2026-08-20 12:57 MDT: Internal testing found a transparent-mode contrast failure and a YouTube metadata fallback gap. Desktop v0.13.78 keeps bright lyrics and a dark shadow when the overlay is fully transparent, even if the screen sampler sees a nearby light area. It also recovers spaced artist and song metadata from common VEVO titles so NetEase can supply synced lyrics when LRCLib is unavailable. Thirty-two frontend tests and 264 Rust tests passed, with the live NetEase resolution test also passing when run explicitly. The release hold remains in place.
 - 2026-08-20 13:09 MDT: The internal playback pass found three provider cleanup gaps. Desktop v0.13.79 removes parenthetical `from ...` soundtrack labels and quality tags such as `4K Remaster`, recognizes Unicode artist and song separators from YouTube, and filters early NetEase songwriting and production credits before they reach the overlay. Lady Gaga's `Always Remember Us This Way` now resolves with word timing, Goo Goo Dolls' `Iris` resolves with synced line timing, and the Chinese `lyrics by` credit on Natasha Bedingfield's `Unwritten` no longer renders as a lyric. The lyric cache moved to v3 so stale credit rows are refreshed. Focused parser tests and the explicit live NetEase provider test pass. The release hold remains in place.
 - 2026-08-20 13:35 MDT: Desktop v0.13.80 adds a Settings recorder for every global shortcut while keeping Ctrl + Alt fixed. Timing now defaults to Left and Right, lyric view cycling defaults to Up and Down, and Windows users can assign Mouse 4 or Mouse 5. Duplicate, unsupported, and unavailable bindings are rejected without replacing the previous working shortcuts. A live native smoke test changed the lyric view with the new arrow defaults, and the complete frontend and Rust gate passed. The release hold remains in place.
+- 2026-08-20 13:48 MDT: Desktop v0.13.81 replaces the single scrolling Settings document with nine focused category pages. The new 920 by 720 workspace has a fixed navigation rail, remembers the last category, and supports mouse plus keyboard category switching. Native review covered the default width, the 720-pixel minimum, the two-column shortcut page, About and support, and keyboard movement from About to Streaming. The release hold remains in place.
