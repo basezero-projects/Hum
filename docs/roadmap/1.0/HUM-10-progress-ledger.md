@@ -4,13 +4,13 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 
 ## Current cursor
 
-- Slice: HUM-10F, trust and support surfaces
+- Slice: HUM-10G, paid-product defaults and checkout completion
 - Step: Survey
-- Next action: inspect the existing Settings, tray, diagnostics, privacy, support, and production-menu seams, then lock the HUM-10F implementation plan
+- Next action: inspect promo defaults, purchase-site checkout, domain readiness, and live Polar setup, then lock the HUM-10G implementation plan
 - Blocker: None for local implementation. Live purchase proof still requires a Polar organization and Hum product.
-- Last updated: 2026-08-19 18:24 MDT
-- Last completed plan: `docs/superpowers/plans/2026-08-19-hum-10e-signed-updates.md`
-- Current plan: None, HUM-10F survey is next
+- Last updated: 2026-08-19 19:23 MDT
+- Last completed plan: `docs/superpowers/plans/2026-08-19-hum-10f-trust-support.md`
+- Current plan: None, HUM-10G survey is next
 
 ## Locked product policy
 
@@ -91,8 +91,20 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 - Validation: frozen frontend install, 18 JavaScript tests, frontend typecheck and production build, 247 passing Rust tests with one live provider test intentionally ignored, debug and release all-target checks, debug and release Clippy with warnings denied, full Rust formatting, diff validation, exact version consistency, and long-dash validation
 - Review: independent reviews approved the signed command boundary, release-target isolation, canonical SignTool checks, installed-payload verification, current Tauri `.exe` plus `.exe.sig` updater contract, generated feed, proof hashes, and guarded publication path
 - Signed proof: workflow run `32315736382` passed on commit `8c503d29a17b9a05f38399329359e31d94d65f1e`. Windows SignTool verified both customer targets, and private artifact `9388432007` contained exactly the installer, `.exe.sig`, `latest.json`, and `release-proof.json`. The downloaded installer SHA-256 was `a6d58d4ddd5d389fae2b62abb417003db6fe1268b13c9a67df51f9bd1f328fec` and passed a second local SignTool audit with its extracted `hum.exe`.
-- Acceptance criteria: HUM-10-AC6 is complete. HUM-10-AC5 remains open until HUM-10H installs an update from the previous signed version. HUM-10-AC7 production-menu cleanup remains in HUM-10F.
+- Acceptance criteria: HUM-10-AC6 is complete. HUM-10-AC5 remains open until HUM-10H installs an update from the previous signed version. HUM-10-AC7 was deferred by this slice and completed in HUM-10F.
 - Known deferrals: public tag publishing, prior-version update and relaunch, feed withdrawal, and manual rollback remain in HUM-10H
+
+### HUM-10F, trust and support surfaces
+
+- Status: Complete
+- Version: 0.13.75
+- Commit: closeout commit titled `Add Hum support and diagnostics`
+- Remote: push to `origin/main` during closeout
+- Validation: 24 frontend tests passed; frontend typecheck and production build passed; 257 Rust tests passed in both debug and release profiles with one live provider test intentionally ignored; debug and release all-target checks and Clippy with warnings denied passed; full Rust formatting and diff validation passed
+- Review: independent review found and closed inaccurate diagnostic disclosure copy, omitted aspect-lock and update-banner pointer capabilities, and a Vite versus Rust debug-build mismatch. The final re-review approved the corrected privacy contract and single Rust-owned build signal.
+- Native proof: the debug tray retained its developer-console action, the optimized release tray omitted it, Settings exposed every About and support action through UI Automation, and a real exported diagnostic contained only the documented keys without license secrets, personal media, URLs, or user paths
+- Acceptance criteria: HUM-10-AC7 and HUM-10-AC8 are complete
+- Known deferrals: historical log bundles, broad opener hardening, website-domain launch proof, and a full Settings navigation redesign remain outside this slice
 
 ## Execution log
 
@@ -115,3 +127,5 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 - 2026-08-19 17:28 MDT: The v0.13.71 proof passed the complete gate and signing, then SignTool confirmed that Tauri's restored development executable is intentionally unsigned. Tauri had already packaged the signed executable into NSIS before restoring the original build output. A red-first workflow contract now extracts the completed installer, requires exactly one installed `hum.exe`, and verifies that customer payload plus the installer. The v0.13.72 repair is entering the complete local gate.
 - 2026-08-19 17:59 MDT: The v0.13.72 proof passed the full gate, Azure signing, installer extraction, and strict SignTool verification for both the installed `hum.exe` and the completed installer. Metadata preparation then found that current Tauri pairs the installer with `.exe.sig` instead of building a separate `.nsis.zip`. A red-first release-contract repair now uses the installer as the Windows updater payload. The v0.13.73 repair is entering the complete local gate.
 - 2026-08-19 18:24 MDT: The exact v0.13.73 proof passed every gate, both Authenticode checks, metadata generation, and private artifact upload. The downloaded four-file artifact matched its feed, updater signature, and hashes, and a second local SignTool audit verified the installer plus extracted application. HUM-10E is closing in v0.13.74, and the cursor advances to HUM-10F survey.
+- 2026-08-19 18:40 MDT: HUM-10F locked an eight-file production boundary for privacy-safe diagnostic export, fixed support and privacy destinations, a customer-facing About and support section, and build-aware removal of developer-console entry points.
+- 2026-08-19 19:23 MDT: HUM-10F passed the complete debug and release gate, independent review, native debug and optimized-release tray checks, and a real diagnostic privacy audit. The slice closes in v0.13.75, and the cursor advances to HUM-10G survey.

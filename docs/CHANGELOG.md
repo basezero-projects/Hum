@@ -6,6 +6,14 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.75] - 2026-08-19
+
+### Added
+- **Settings now has an About & support section for customer help and recovery.** It shows the installed Hum version, operating system, license status, and actions for license management, update checks, email support, the privacy policy, and diagnostic export. Export diagnostics saves a JSON snapshot to Downloads and reports the exact path in Settings. The snapshot includes product settings, platform capabilities, limited license status, and cache totals, while excluding license keys, activation details, verification timestamps, song information, lyrics, file paths, and cache contents.
+
+### Changed
+- **Production builds no longer expose the developer console.** The release tray omits the developer-console action, and release window routing fails closed to Settings if build information is unavailable. Development builds retain the console for local debugging, and both paths now use the same Rust-owned build signal.
+
 ## [0.13.74] - 2026-08-19
 
 ### Changed

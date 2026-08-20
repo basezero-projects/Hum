@@ -2,23 +2,33 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
+  AboutInfo,
+  DiagnosticExport,
   LayoutMode,
+  LicenseState,
   ListeningMode,
   OverlayMode,
   OverlayShape,
   PlatformInfo,
   Settings,
   TextAlign,
+  TrustDestination,
   WindowBackdrop,
 } from "./types";
 
 const ACCENT = "#d4af37";
+type TrustAction = "license" | "updates" | TrustDestination | "diagnostics";
+type TrustFeedback = { tone: "success" | "error"; message: string };
 
 export default function SettingsView() {
   const [s, setS] = useState<Settings | null>(null);
   const [platformInfo, setPlatformInfo] = useState<PlatformInfo | null>(null);
+  const [aboutInfo, setAboutInfo] = useState<AboutInfo | null>(null);
+  const [license, setLicense] = useState<LicenseState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const [trustAction, setTrustAction] = useState<TrustAction | null>(null);
+  const [trustFeedback, setTrustFeedback] = useState<TrustFeedback | null>(null);
   // Track in-flight pending writes so slider drags coalesce.
   const writeTimer = useRef<number | null>(null);
   const pendingPatch = useRef<Partial<Settings>>({});
@@ -27,23 +37,33 @@ export default function SettingsView() {
     let active = true;
     setS(null);
     setPlatformInfo(null);
+    setAboutInfo(null);
+    setLicense(null);
     setLoadError(null);
     Promise.all([
       invoke<Settings>("get_settings"),
       invoke<PlatformInfo>("get_platform_info"),
+      invoke<AboutInfo>("get_about_info"),
+      invoke<LicenseState>("get_license_state"),
     ])
-      .then(([settings, info]) => {
+      .then(([settings, info, about, licenseState]) => {
         if (!active) return;
         setS(settings);
         setPlatformInfo(info);
+        setAboutInfo(about);
+        setLicense(licenseState);
       })
       .catch((error: unknown) => {
         if (active) setLoadError(String(error));
       });
-    const un = listen<Settings>("settings-changed", (e) => setS(e.payload));
+    const unSettings = listen<Settings>("settings-changed", (e) => setS(e.payload));
+    const unLicense = listen<LicenseState>("license-state-changed", (e) =>
+      setLicense(e.payload),
+    );
     return () => {
       active = false;
-      un.then((fn) => fn()).catch(() => {});
+      unSettings.then((fn) => fn()).catch(() => {});
+      unLicense.then((fn) => fn()).catch(() => {});
       if (writeTimer.current) window.clearTimeout(writeTimer.current);
     };
   }, [loadAttempt]);
@@ -76,6 +96,28 @@ export default function SettingsView() {
     invoke<Settings>("reset_settings").then(setS).catch(console.error);
   }
 
+  async function runTrustAction(action: TrustAction, operation: () => Promise<string>) {
+    if (trustAction) return;
+    setTrustAction(action);
+    setTrustFeedback(null);
+    try {
+      setTrustFeedback({ tone: "success", message: await operation() });
+    } catch (error: unknown) {
+      setTrustFeedback({ tone: "error", message: safeActionError(error) });
+    } finally {
+      setTrustAction(null);
+    }
+  }
+
+  function openTrustDestination(destination: TrustDestination) {
+    void runTrustAction(destination, async () => {
+      await invoke("open_trust_destination", { destination });
+      return destination === "support"
+        ? "Your email app should open with a Hum support message."
+        : "The Hum privacy policy opened in your browser.";
+    });
+  }
+
   if (loadError) {
     return (
       <div style={pageStyle}>
@@ -98,7 +140,7 @@ export default function SettingsView() {
     );
   }
 
-  if (!s || !platformInfo) {
+  if (!s || !platformInfo || !aboutInfo || !license) {
     return (
       <div style={pageStyle}>
         <div style={{ opacity: 0.6 }}>Loading settings…</div>
@@ -293,7 +335,7 @@ export default function SettingsView() {
         />
         <Hint>
           Paints a heavily blurred, dimmed copy of the current track's album
-          art behind the lyrics — Apple Music "Now Playing" style. Your
+          art behind the lyrics in the Apple Music "Now Playing" style. Your
           background color renders on top so the opacity slider still tints
           the result. No effect on tracks without art.
           {shortcutHelp ? (
@@ -318,8 +360,8 @@ export default function SettingsView() {
           onChange={(v) => update("bg_hidden", v)}
         />
         <Hint>
-          Hides every background layer — blurred album art, color tint,
-          background paint, and the window backdrop — so only the lyrics, art,
+          Hides every background layer, including blurred album art, color tint,
+          background paint, and the window backdrop, so only the lyrics, art,
           and media info float over the desktop.
           {shortcutHelp ? (
             <> Toggle on the fly with <code>Ctrl+Alt+T</code>.</>
@@ -469,10 +511,118 @@ export default function SettingsView() {
         <Hint>
           When on, runs a local HTTP server on the selected port. Paste the
           URL above into OBS as a Browser Source (recommended size 1100×200,
-          custom CSS empty) — the overlay shows on your stream with a
+          custom CSS empty). The overlay shows on your stream with a
           transparent background, no chroma key needed. Off by default
           since it opens a TCP port on localhost.
         </Hint>
+      </Section>
+
+      <Section title="About & support">
+        <div style={aboutCardStyle}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>{aboutInfo.product_name}</div>
+            <div style={{ marginTop: 3, fontSize: 13, opacity: 0.65 }}>
+              Version {aboutInfo.version} for {platformLabel(aboutInfo.operating_system)} {" "}
+              ({aboutInfo.architecture})
+            </div>
+          </div>
+          <div style={licenseSummaryStyle}>
+            <span
+              aria-hidden="true"
+              style={{
+                ...licenseDotStyle,
+                background: license.licensed ? "#77c990" : "#d99a72",
+              }}
+            />
+            <span>{licenseSummary(license)}</span>
+          </div>
+        </div>
+
+        <div style={trustActionGridStyle}>
+          <button
+            type="button"
+            style={secondaryButtonStyle}
+            disabled={trustAction !== null}
+            onClick={() =>
+              void runTrustAction("license", async () => {
+                await invoke("open_license_window");
+                return "License details opened in a separate window.";
+              })
+            }
+          >
+            {trustAction === "license" ? "Opening license" : "Manage license"}
+          </button>
+          <button
+            type="button"
+            style={secondaryButtonStyle}
+            disabled={trustAction !== null || !platformInfo.services.updater}
+            onClick={() =>
+              void runTrustAction("updates", async () => {
+                await invoke("request_update_check");
+                return "Update check started. The result will appear in Hum's tray menu.";
+              })
+            }
+          >
+            {trustAction === "updates" ? "Checking" : "Check for updates"}
+          </button>
+          <button
+            type="button"
+            style={secondaryButtonStyle}
+            disabled={trustAction !== null}
+            onClick={() => openTrustDestination("support")}
+          >
+            {trustAction === "support" ? "Opening email" : "Email support"}
+          </button>
+          <button
+            type="button"
+            style={secondaryButtonStyle}
+            disabled={trustAction !== null}
+            onClick={() => openTrustDestination("privacy")}
+          >
+            {trustAction === "privacy" ? "Opening policy" : "Privacy policy"}
+          </button>
+        </div>
+
+        <div style={diagnosticsRowStyle}>
+          <div>
+            <strong style={{ display: "block", fontSize: 13 }}>Diagnostic snapshot</strong>
+            <span style={{ display: "block", marginTop: 4, fontSize: 12, opacity: 0.58 }}>
+              Saves app settings and system capabilities to Downloads. Includes limited license
+              status and device details. It leaves out license keys, activation details,
+              verification timestamps, song information, lyrics, file paths, and cache contents.
+            </span>
+          </div>
+          <button
+            type="button"
+            style={{ ...secondaryButtonStyle, flex: "0 0 auto" }}
+            disabled={trustAction !== null}
+            onClick={() =>
+              void runTrustAction("diagnostics", async () => {
+                const exported = await invoke<DiagnosticExport>("export_diagnostics");
+                return `Saved diagnostic snapshot to ${exported.path}`;
+              })
+            }
+          >
+            {trustAction === "diagnostics" ? "Exporting" : "Export diagnostics"}
+          </button>
+        </div>
+
+        {trustFeedback ? (
+          <div
+            role={trustFeedback.tone === "error" ? "alert" : "status"}
+            aria-live="polite"
+            style={{
+              ...trustFeedbackStyle,
+              borderColor:
+                trustFeedback.tone === "error"
+                  ? "rgba(217, 126, 114, 0.4)"
+                  : "rgba(119, 201, 144, 0.34)",
+              color: trustFeedback.tone === "error" ? "#f0b0a7" : "#b5dfc1",
+            }}
+          >
+            {trustFeedback.message}
+          </div>
+        ) : null}
       </Section>
 
 
@@ -502,6 +652,27 @@ export default function SettingsView() {
       </footer>
     </div>
   );
+}
+
+function safeActionError(error: unknown): string {
+  if (typeof error === "string" && error.trim()) return error;
+  if (error instanceof Error && error.message.trim()) return error.message;
+  return "Hum could not complete that action. Try again.";
+}
+
+function platformLabel(platform: string): string {
+  if (platform === "windows") return "Windows";
+  if (platform === "macos") return "macOS";
+  if (platform === "linux") return "Linux";
+  return platform;
+}
+
+function licenseSummary(license: LicenseState): string {
+  if (license.status === "development") return "Development license";
+  if (license.licensed) return "License active";
+  if (license.status === "device_limit") return "Device limit reached";
+  if (license.status === "service_unavailable") return "License check unavailable";
+  return "License needs attention";
 }
 
 function backdropLabel(backdrop: WindowBackdrop): string {
@@ -885,6 +1056,72 @@ const cardStyle: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.06)",
   borderRadius: 8,
   overflow: "hidden",
+};
+
+const aboutCardStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 18,
+  padding: "16px 18px",
+  borderBottom: "1px solid rgba(255,255,255,0.06)",
+  background: "linear-gradient(135deg, rgba(212,175,55,0.08), rgba(255,255,255,0.015))",
+};
+
+const licenseSummaryStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  border: "1px solid rgba(255,255,255,0.08)",
+  borderRadius: 999,
+  padding: "6px 10px",
+  fontSize: 12,
+  whiteSpace: "nowrap",
+};
+
+const licenseDotStyle: React.CSSProperties = {
+  width: 7,
+  height: 7,
+  borderRadius: "50%",
+  boxShadow: "0 0 10px currentColor",
+};
+
+const trustActionGridStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: 8,
+  padding: "14px",
+  borderBottom: "1px solid rgba(255,255,255,0.06)",
+};
+
+const secondaryButtonStyle: React.CSSProperties = {
+  background: "rgba(255,255,255,0.035)",
+  color: "#eaeaea",
+  border: "1px solid rgba(255,255,255,0.1)",
+  borderRadius: 7,
+  padding: "8px 12px",
+  fontSize: 12,
+  fontFamily: "inherit",
+  cursor: "pointer",
+};
+
+const diagnosticsRowStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 18,
+  padding: "14px",
+};
+
+const trustFeedbackStyle: React.CSSProperties = {
+  margin: "0 14px 14px",
+  padding: "9px 11px",
+  border: "1px solid",
+  borderRadius: 7,
+  background: "rgba(0,0,0,0.22)",
+  fontSize: 12,
+  lineHeight: 1.45,
+  overflowWrap: "anywhere",
 };
 
 const inputStyle: React.CSSProperties = {

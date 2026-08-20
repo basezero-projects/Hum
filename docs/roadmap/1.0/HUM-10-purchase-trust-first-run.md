@@ -62,8 +62,8 @@ The durable reasoning is recorded in [ADR-0002](../../decisions/ADR-0002-use-pol
 - [x] HUM-10-AC4: A clean install guides the user through overlay placement, listening mode, appearance, and core controls.
 - [ ] HUM-10-AC5: The installer and update artifacts have valid signatures, and an update is tested from the previous release.
 - [x] HUM-10-AC6: Manual update checks report current, available, downloading, installing, and failed states.
-- [ ] HUM-10-AC7: Production builds hide the dev console and contain no demo-only update path.
-- [ ] HUM-10-AC8: About, support, privacy, and diagnostics are reachable from Settings or the tray.
+- [x] HUM-10-AC7: Production builds hide the dev console and contain no demo-only update path.
+- [x] HUM-10-AC8: About, support, privacy, and diagnostics are reachable from Settings or the tray.
 - [ ] HUM-10-AC9: Promotional cards are off by default for paid customers.
 
 ## Required test matrix
@@ -81,7 +81,7 @@ The durable reasoning is recorded in [ADR-0002](../../decisions/ADR-0002-use-pol
 - HUM-10C: activation, restore, deactivation, and checkout handoff UI, complete in v0.13.64
 - HUM-10D: first-run setup for placement, listening output, appearance, and controls, complete in v0.13.65
 - HUM-10E: signed installer, signed updater, and complete update-state UI, complete in v0.13.74
-- HUM-10F: About, support, privacy, diagnostics, and production menu cleanup
+- HUM-10F: About, support, privacy, diagnostics, and production menu cleanup, complete in v0.13.75
 - HUM-10G: paid-product promo defaults and purchase-site checkout completion
 - HUM-10H: clean-install, recovery, scaling, and prior-version update proof
 

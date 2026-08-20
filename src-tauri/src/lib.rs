@@ -37,6 +37,7 @@ mod platform;
 mod promos;
 mod settings;
 mod streamer;
+mod trust;
 mod update_status;
 pub mod window_effects;
 
@@ -63,6 +64,10 @@ use onboarding::{
 use platform::info::get_platform_info;
 use settings::{
     get_settings, open_settings_window, reset_settings, update_settings, SharedSettings,
+};
+use trust::{
+    export_diagnostics, get_about_info, get_build_info, open_trust_destination,
+    request_update_check,
 };
 use window_effects::{SystemWindowEffects, WindowEffects};
 
@@ -494,6 +499,11 @@ pub fn run() {
             get_onboarding_state,
             onboarding::open_onboarding_window,
             complete_onboarding,
+            get_about_info,
+            get_build_info,
+            open_trust_destination,
+            request_update_check,
+            export_diagnostics,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -614,11 +624,14 @@ fn build_tray(
     let license_item = MenuItemBuilder::with_id("license", "License…").build(app)?;
     let check_updates_item =
         MenuItemBuilder::with_id("check-updates", "Check for updates").build(app)?;
-    let toggle_console =
-        MenuItemBuilder::with_id("toggle-console", "Show / Hide dev console").build(app)?;
+    let toggle_console = if get_build_info().developer_console {
+        Some(MenuItemBuilder::with_id("toggle-console", "Show / Hide dev console").build(app)?)
+    } else {
+        None
+    };
     let quit_item = MenuItemBuilder::with_id("quit", "Quit Hum").build(app)?;
 
-    let menu = MenuBuilder::new(app)
+    let mut menu_builder = MenuBuilder::new(app)
         .item(&toggle_overlay)
         .separator()
         .item(&mode_submenu)
@@ -627,11 +640,11 @@ fn build_tray(
         .item(&license_item)
         .item(&setup_item)
         .item(&settings_item)
-        .item(&check_updates_item)
-        .item(&toggle_console)
-        .separator()
-        .item(&quit_item)
-        .build()?;
+        .item(&check_updates_item);
+    if let Some(toggle_console) = toggle_console.as_ref() {
+        menu_builder = menu_builder.item(toggle_console);
+    }
+    let menu = menu_builder.separator().item(&quit_item).build()?;
 
     app.manage(ModeMenuItems {
         edit: mode_edit,
@@ -701,8 +714,11 @@ fn build_tray(
                 // - Otherwise it runs a fresh check().
                 // The menu item's LABEL ("Check for updates" vs "Install
                 // update vX") tells the user which it's about to do.
-                let _ = app.emit("updater-check-requested", ());
+                if let Err(error) = request_update_check(app.clone()) {
+                    eprintln!("[tray] update check failed: {error}");
+                }
             }
+            #[cfg(debug_assertions)]
             "toggle-console" => {
                 if let Some(w) = app.get_webview_window("main") {
                     match w.is_visible() {
@@ -888,5 +904,10 @@ mod tests {
             serde_json::to_value(read_current_track(&state).await).unwrap(),
             serde_json::to_value(expected).unwrap()
         );
+    }
+
+    #[test]
+    fn tray_console_plan_matches_the_rust_build_profile() {
+        assert_eq!(get_build_info().developer_console, cfg!(debug_assertions));
     }
 }

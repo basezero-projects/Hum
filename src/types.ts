@@ -43,6 +43,23 @@ export type LicenseState = {
   recovery: string;
 };
 
+export type AboutInfo = {
+  product_name: string;
+  version: string;
+  operating_system: string;
+  architecture: string;
+};
+
+export type BuildInfo = {
+  developer_console: boolean;
+};
+
+export type DiagnosticExport = {
+  path: string;
+};
+
+export type TrustDestination = "support" | "privacy";
+
 export type OverlayMode = "edit" | "locked" | "ghost";
 export type ListeningMode = "wired" | "speakers" | "bluetooth";
 export type AudioOutputRoute =
@@ -104,9 +121,9 @@ export type Settings = {
   show_artist_info_panel: boolean;
   ad_break_promos_enabled: boolean;
   launch_on_startup: boolean;
-  // Transparent mode (Ctrl+Alt+T): suppress every background layer — blurred
+  // Transparent mode (Ctrl+Alt+T): suppress every background layer, including blurred
   // album art, service-color background, album tint, bg paint, AND the DWM
-  // window backdrop — so only the lyrics/art/metadata float over the desktop.
+  // window backdrop, so only the lyrics/art/metadata float over the desktop.
   bg_hidden: boolean;
   // Show the right-hand metadata column ("media player"). Toggle: Ctrl+Alt+H.
   show_media: boolean;
