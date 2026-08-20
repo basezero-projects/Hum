@@ -1517,9 +1517,10 @@ fn cleaner() -> &'static Regex {
                   ft\.?\s.* |
                   featuring\s.* |
                   with\s.* |
-                  remaster(?:ed)?(?:\s\d{2,4})? |
+                  (?:\d{1,2}k\s+)?remaster(?:ed)?(?:\s\d{2,4})? |
                   \d{2,4}\s+remaster(?:ed)? |
                   re-?recorded(?:\s\d{2,4})? |
+                  from\s+.* |
                   live(?:\s+(?:at|from|in)\s+.*)? |
                   acoustic |
                   unplugged |
@@ -1769,7 +1770,10 @@ fn canonical_provider_metadata(title: &str, artist: &str) -> (String, String) {
     let cleaned_title = clean_title(title);
     let cleaned_artist = clean_artist(artist);
 
-    let Some((title_artist, title_song)) = cleaned_title.split_once(" - ") else {
+    let split = [" - ", " \u{2013} ", " \u{2014} "]
+        .into_iter()
+        .find_map(|separator| cleaned_title.split_once(separator));
+    let Some((title_artist, title_song)) = split else {
         return (cleaned_artist, cleaned_title);
     };
 
@@ -1794,6 +1798,50 @@ fn canonical_provider_metadata(title: &str, artist: &str) -> (String, String) {
 }
 
 // ─── LRC parser ────────────────────────────────────────────────────────────
+
+fn is_provider_credit_line(time_ms: u32, text: &str) -> bool {
+    if time_ms > 10_000 {
+        return false;
+    }
+
+    let trimmed = text.trim_start();
+    let label = trimmed
+        .split_once([':', '：'])
+        .map(|(label, _)| label.trim())
+        .unwrap_or("");
+    let known_label = matches!(
+        label,
+        "作词"
+            | "作曲"
+            | "编曲"
+            | "制作人"
+            | "混音"
+            | "录音"
+            | "监制"
+            | "出品"
+            | "发行"
+            | "和声"
+            | "吉他"
+            | "贝斯"
+            | "鼓"
+            | "弦乐"
+            | "母带"
+            | "统筹"
+    );
+    let lowercase = trimmed.to_lowercase();
+    let known_english_credit = [
+        "written by ",
+        "lyrics by ",
+        "lyricist:",
+        "composer:",
+        "arranger:",
+        "producer:",
+    ]
+    .iter()
+    .any(|prefix| lowercase.starts_with(prefix));
+
+    known_label || known_english_credit
+}
 
 /// Parse NetEase YRC lines of the form
 /// `[lineStart,lineDuration](wordStart,wordDuration,0)word...`.
@@ -1875,7 +1923,7 @@ pub fn parse_yrc(s: &str) -> Vec<LyricLine> {
             previous_start = Some(word_start);
         }
 
-        if valid && !words.is_empty() {
+        if valid && !words.is_empty() && !is_provider_credit_line(line_start, &text) {
             lines.push(LyricLine {
                 time_ms: line_start,
                 text,
@@ -1934,6 +1982,9 @@ pub fn parse_lrc(s: &str) -> Vec<LyricLine> {
         }
         let text = rest.trim().to_string();
         for t in times {
+            if is_provider_credit_line(t, &text) {
+                continue;
+            }
             lines.push(LyricLine {
                 time_ms: t,
                 text: text.clone(),
@@ -1950,7 +2001,7 @@ pub fn parse_lrc(s: &str) -> Vec<LyricLine> {
 fn cache_key(artist: &str, title: &str, duration_ms: u64) -> String {
     let dur_secs = duration_ms / 1000;
     format!(
-        "word-timing-v2\x1f{}\x1f{}\x1f{}",
+        "word-timing-v3\x1f{}\x1f{}\x1f{}",
         normalize(artist),
         normalize(title),
         dur_secs
@@ -2015,6 +2066,10 @@ mod tests {
             "Sweet Caroline"
         );
         assert_eq!(clean_title("Test Song [HD] (4K)"), "Test Song");
+        assert_eq!(
+            clean_title("Goo Goo Dolls - Iris [Official Music Video] [4K Remaster]"),
+            "Goo Goo Dolls - Iris"
+        );
         assert_eq!(clean_title("Track Name (Live at Wembley)"), "Track Name");
         assert_eq!(clean_title("Plain Title"), "Plain Title");
 
@@ -2152,6 +2207,12 @@ mod tests {
         assert_eq!(clean_title("Song HQ"), "Song HQ");
         // Compose with bracketed cleaner — bare tag inside parens still works
         assert_eq!(clean_title("Angel (Lyrics)"), "Angel");
+        assert_eq!(
+            clean_title(
+                "Lady Gaga - Always Remember Us This Way (from A Star Is Born) (Official Music Video)"
+            ),
+            "Lady Gaga - Always Remember Us This Way"
+        );
         // Compose with bracketed cleaner where bracketed AND bare appear
         assert_eq!(clean_title("Angel (HD) Lyrics"), "Angel");
 
@@ -2253,6 +2314,29 @@ mod tests {
         assert_eq!(words[1].time_ms, 1_400);
         assert_eq!(words[2].text, "!");
         assert_eq!(words[2].duration_ms, Some(1_100));
+    }
+
+    #[test]
+    fn provider_credit_lines_are_not_rendered_as_lyrics() {
+        let lrc = concat!(
+            "[00:00.00] 作词 : BEDINGFIELD, NATASHA/BRISEBOIS, DANIELLE\n",
+            "[00:13.29]I am unwritten, can't read my mind, I'm undefined",
+        );
+        let yrc = concat!(
+            "[0,1000](0,1000,0) 作词 : BEDINGFIELD, NATASHA/BRISEBOIS, DANIELLE\n",
+            "[12110,8850](12110,1260,0)I (13370,690,0)am (14060,1650,0)unwritten",
+        );
+
+        let lrc_lines = parse_lrc(lrc);
+        let yrc_lines = parse_yrc(yrc);
+
+        assert_eq!(lrc_lines.len(), 1);
+        assert_eq!(
+            lrc_lines[0].text,
+            "I am unwritten, can't read my mind, I'm undefined"
+        );
+        assert_eq!(yrc_lines.len(), 1);
+        assert_eq!(yrc_lines[0].text, "I am unwritten");
     }
 
     #[test]
@@ -2365,6 +2449,17 @@ mod tests {
     }
 
     #[test]
+    fn provider_metadata_accepts_unicode_artist_song_separator() {
+        let (artist, title) = canonical_provider_metadata(
+            "Goo Goo Dolls \u{2013} Iris [Official Music Video] [4K Remaster]",
+            "Goo Goo Dolls",
+        );
+
+        assert_eq!(artist, "Goo Goo Dolls");
+        assert_eq!(title, "Iris");
+    }
+
+    #[test]
     fn provider_metadata_preserves_real_hyphenated_song_titles() {
         let (artist, title) = canonical_provider_metadata("Love - Part II", "Original Artist");
 
@@ -2421,9 +2516,11 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires the live NetEase service"]
     async fn live_netease_resolves_exact_song_with_video_duration() {
-        for (artist, title, duration_ms) in [
-            ("Vanessa Carlton", "A Thousand Miles", 266_000),
-            ("Khalid", "Better", 230_101),
+        for (artist, title, duration_ms, requires_word_timing) in [
+            ("Vanessa Carlton", "A Thousand Miles", 266_000, true),
+            ("Khalid", "Better", 230_101, true),
+            ("Lady Gaga", "Always Remember Us This Way", 241_000, true),
+            ("Goo Goo Dolls", "Iris", 215_561, false),
         ] {
             let (cached, source) = fetch_netease(artist, title, duration_ms)
                 .await
@@ -2438,14 +2535,19 @@ mod tests {
                 );
             };
             assert!(lines.len() > 20);
-            assert!(has_valid_word_timing(&lines));
+            if requires_word_timing {
+                assert!(
+                    has_valid_word_timing(&lines),
+                    "NetEase returned line timing without word timing for {artist} - {title}"
+                );
+            }
         }
     }
 
     #[test]
     fn lyric_cache_key_is_versioned_for_word_timing_refresh() {
         let key = cache_key("Artist", "Song", 120_000);
-        assert!(key.starts_with("word-timing-v2\x1f"));
+        assert!(key.starts_with("word-timing-v3\x1f"));
     }
 }
 

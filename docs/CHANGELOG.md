@@ -6,6 +6,12 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.79] - 2026-08-20
+
+### Fixed
+- **More YouTube songs now find their lyrics.** Hum removes soundtrack labels, quality tags such as `4K Remaster`, and common music-video text before looking for a match. It also recognizes the alternate artist and song separator used by some YouTube sessions. Lady Gaga's `Always Remember Us This Way` and Goo Goo Dolls' `Iris` now resolve from their full video titles instead of showing No lyrics.
+- **Provider credits no longer appear as lyrics.** Early metadata rows such as the Chinese `lyrics by` credit shown on `Unwritten` are filtered before display. Hum also refreshes its lyric cache so previously saved credit rows disappear automatically.
+
 ## [0.13.78] - 2026-08-20
 
 ### Fixed
