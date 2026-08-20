@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.84] - 2026-08-20
+
+### Fixed
+- **The same song no longer loses cached lyrics when its source changes the metadata format.** Hum now gives decorated video metadata and clean track metadata one canonical cache identity. A successful result from `JamesArthurVEVO / James Arthur - Say You Won't Let Go` can immediately serve `James Arthur / Say You Won't Let Go` instead of starting another provider lookup and showing No lyrics. Existing v3 cache entries are matched within a guarded 45-second duration window, copied to the canonical key, and rejected when the artist, title, cache version, or recording length does not fit.
+
 ## [0.13.83] - 2026-08-20
 
 ### Fixed

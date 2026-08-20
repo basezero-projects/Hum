@@ -6,9 +6,9 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 
 - Slice: HUM-10G, paid-product defaults and checkout completion
 - Step: Internal bug testing and release-readiness hold
-- Next action: Wes tests the current v0.13.83 build, reports issues, and approves release readiness before any Polar review, payment proof, or public release resumes
+- Next action: Wes tests the current v0.13.84 build, reports issues, and approves release readiness before any Polar review, payment proof, or public release resumes
 - Blocker: Hum does not have Wes's release approval. The public checkout is intentionally disconnected, Polar review is not submitted, and no GitHub release tag exists.
-- Last updated: 2026-08-20 14:19 MDT
+- Last updated: 2026-08-20 14:34 MDT
 - Last completed plan: `docs/superpowers/plans/2026-08-19-hum-10f-trust-support.md`
 - Current plan: `docs/superpowers/plans/2026-08-19-hum-10g-paid-launch.md`
 
@@ -143,3 +143,4 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 - 2026-08-20 13:48 MDT: Desktop v0.13.81 replaces the single scrolling Settings document with nine focused category pages. The new 920 by 720 workspace has a fixed navigation rail, remembers the last category, and supports mouse plus keyboard category switching. Native review covered the default width, the 720-pixel minimum, the two-column shortcut page, About and support, and keyboard movement from About to Streaming. The release hold remains in place.
 - 2026-08-20 14:07 MDT: Desktop v0.13.82 fixes lyric misses from decorated YouTube titles whose uploader name is not the artist. NetEase now checks every exact duplicate release, skips empty lyric payloads, and prefers word timing before falling back to synced lines. The live app resolved the active James Arthur VEVO upload, and the exact Train `Drops Of Jupiter (Tell Me)` provider test passed. The release hold remains in place.
 - 2026-08-20 14:19 MDT: Desktop v0.13.83 fixes a startup race that could leave the overlay showing No lyrics after the provider had already returned and cached a successful result. Lyric event subscriptions now finish before Hum reads its initial snapshot, and a newer event cannot be replaced by an older snapshot. The exact `Sweater Weather` lookup stored 44 word-timed lines, and the focused startup synchronization tests pass. The release hold remains in place.
+- 2026-08-20 14:34 MDT: Desktop v0.13.84 gives decorated video metadata and clean track metadata one canonical lyric-cache identity. Existing v3 results can migrate across equivalent source keys within a guarded duration window, while mismatched artists, titles, cache versions, and distant recordings remain isolated. The live provider returned `Say You Won't Let Go` within 1.46 seconds, and the stored VEVO result contains 56 word-timed lines. The release hold remains in place.

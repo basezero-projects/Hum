@@ -2091,6 +2091,11 @@ pub fn parse_lrc(s: &str) -> Vec<LyricLine> {
 // ─── Cache key ─────────────────────────────────────────────────────────────
 
 fn cache_key(artist: &str, title: &str, duration_ms: u64) -> String {
+    let (artist, title) = canonical_provider_metadata(title, artist);
+    raw_cache_key(&artist, &title, duration_ms)
+}
+
+fn raw_cache_key(artist: &str, title: &str, duration_ms: u64) -> String {
     let dur_secs = duration_ms / 1000;
     format!(
         "word-timing-v3\x1f{}\x1f{}\x1f{}",
@@ -2104,21 +2109,74 @@ fn normalize(s: &str) -> String {
     s.trim().to_lowercase()
 }
 
+fn parse_versioned_cache_key(key: &str) -> Option<(&str, &str, u64)> {
+    let mut parts = key.split('\x1f');
+    let version = parts.next()?;
+    let artist = parts.next()?;
+    let title = parts.next()?;
+    let duration_secs = parts.next()?.parse::<u64>().ok()?;
+    if version != "word-timing-v3" || parts.next().is_some() {
+        return None;
+    }
+    Some((artist, title, duration_secs))
+}
+
+fn equivalent_cache_key_distance(candidate: &str, requested: &str) -> Option<u64> {
+    const MAX_DURATION_DIFFERENCE_SECS: u64 = 45;
+
+    let (candidate_artist, candidate_title, candidate_duration) =
+        parse_versioned_cache_key(candidate)?;
+    let (requested_artist, requested_title, requested_duration) =
+        parse_versioned_cache_key(requested)?;
+    let (candidate_artist, candidate_title) =
+        canonical_provider_metadata(candidate_title, candidate_artist);
+    let (requested_artist, requested_title) =
+        canonical_provider_metadata(requested_title, requested_artist);
+
+    if normalize_for_match(&candidate_artist) != normalize_for_match(&requested_artist)
+        || normalize_for_match(&candidate_title) != normalize_for_match(&requested_title)
+    {
+        return None;
+    }
+
+    let distance = candidate_duration.abs_diff(requested_duration);
+    (candidate_duration == 0 || requested_duration == 0 || distance <= MAX_DURATION_DIFFERENCE_SECS)
+        .then_some(distance)
+}
+
 // ─── Persistent store (tauri-plugin-store) ─────────────────────────────────
 
 fn read_store(app: &AppHandle, key: &str) -> Option<CachedLyrics> {
     let store = app.store(STORE_FILE).ok()?;
-    let v = store.get(key)?;
-    let cached: CachedLyrics = serde_json::from_value(v).ok()?;
-    // Discard any persisted NotFound entries — the lyric-finding algorithm
-    // keeps evolving (new YouTube-noise patterns, punctuation normalization,
-    // pick_best refinements), so a NotFound cached under a previous version
-    // shouldn't lock the user out of a fresh fetch under the new logic.
-    // Successful matches (Synced / Plain / Instrumental) stay cached forever
-    // because their content doesn't depend on resolver heuristics.
-    if matches!(cached, CachedLyrics::NotFound | CachedLyrics::Unsupported) {
-        return None;
+    let usable = |value| {
+        let cached: CachedLyrics = serde_json::from_value(value).ok()?;
+        (!matches!(cached, CachedLyrics::NotFound | CachedLyrics::Unsupported)).then_some(cached)
+    };
+
+    if let Some(cached) = store.get(key).and_then(usable) {
+        return Some(cached);
     }
+
+    let mut best: Option<((u8, u64), CachedLyrics)> = None;
+    for (candidate_key, value) in store.entries() {
+        let Some(distance) = equivalent_cache_key_distance(&candidate_key, key) else {
+            continue;
+        };
+        let Some(cached) = usable(value) else {
+            continue;
+        };
+        let word_rank = match &cached {
+            CachedLyrics::Synced { lines, .. } if has_valid_word_timing(lines) => 0,
+            _ => 1,
+        };
+        let rank = (word_rank, distance);
+        if best.as_ref().is_none_or(|(best_rank, _)| rank < *best_rank) {
+            best = Some((rank, cached));
+        }
+    }
+
+    let cached = best.map(|(_, cached)| cached)?;
+    write_store(app, key, &cached);
     Some(cached)
 }
 
@@ -2726,10 +2784,74 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    #[ignore = "requires the live NetEase service"]
+    async fn live_netease_resolves_james_arthur_within_overlay_timeout() {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(6),
+            fetch_netease("James Arthur", "Say You Won't Let Go", 210_000),
+        )
+        .await
+        .expect("James Arthur lookup exceeded the overlay enrichment timeout")
+        .expect("James Arthur lookup failed");
+
+        let CachedLyrics::Synced { lines, .. } = result.0 else {
+            panic!("James Arthur lookup returned no lyrics");
+        };
+        assert!(!lines.is_empty());
+    }
+
     #[test]
     fn lyric_cache_key_is_versioned_for_word_timing_refresh() {
         let key = cache_key("Artist", "Song", 120_000);
         assert!(key.starts_with("word-timing-v3\x1f"));
+    }
+
+    #[test]
+    fn cache_key_uses_canonical_provider_identity() {
+        let decorated = cache_key(
+            "JamesArthurVEVO",
+            "James Arthur - Say You Won't Let Go (Official Music Video)",
+            210_000,
+        );
+        let canonical = cache_key("James Arthur", "Say You Won't Let Go", 210_000);
+
+        assert_eq!(decorated, canonical);
+    }
+
+    #[test]
+    fn equivalent_cache_key_recovers_old_decorated_identity() {
+        let old_key = raw_cache_key(
+            "JamesArthurVEVO",
+            "James Arthur - Say You Won't Let Go",
+            210_000,
+        );
+        let canonical = cache_key("James Arthur", "Say You Won't Let Go", 211_000);
+
+        assert_eq!(equivalent_cache_key_distance(&old_key, &canonical), Some(1));
+    }
+
+    #[test]
+    fn equivalent_cache_key_rejects_wrong_or_distant_recordings() {
+        let canonical = cache_key("James Arthur", "Say You Won't Let Go", 211_000);
+        let wrong_artist = raw_cache_key("Cover Artist", "Say You Won't Let Go", 211_000);
+        let wrong_title = raw_cache_key("James Arthur", "Impossible", 211_000);
+        let distant = raw_cache_key("James Arthur", "Say You Won't Let Go", 300_000);
+        let old_version = canonical.replacen("word-timing-v3", "word-timing-v2", 1);
+
+        assert_eq!(
+            equivalent_cache_key_distance(&wrong_artist, &canonical),
+            None
+        );
+        assert_eq!(
+            equivalent_cache_key_distance(&wrong_title, &canonical),
+            None
+        );
+        assert_eq!(equivalent_cache_key_distance(&distant, &canonical), None);
+        assert_eq!(
+            equivalent_cache_key_distance(&old_version, &canonical),
+            None
+        );
     }
 }
 
