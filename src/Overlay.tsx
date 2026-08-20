@@ -64,6 +64,16 @@ const DEFAULT_SETTINGS: Settings = {
   line_padding_px: 6,
   layout_mode: "three_line",
   overlay_shape: "ribbon",
+  shortcuts: {
+    cycle_mode: "KeyL",
+    timing_earlier: "ArrowLeft",
+    timing_later: "ArrowRight",
+    view_previous: "ArrowUp",
+    view_next: "ArrowDown",
+    toggle_blur: "KeyB",
+    toggle_transparent: "KeyT",
+    toggle_media: "KeyH",
+  },
   show_album_art: true,
   show_translation: false,
   tint_bg_from_album_art: false,
@@ -140,7 +150,7 @@ export default function Overlay() {
       h: DEFAULT_RIBBON_WINDOW_H_PX,
     },
   );
-  // Live lyric-offset nudge (Ctrl+Alt+[ / Ctrl+Alt+]). Session-only;
+  // Live lyric-offset nudge (default Ctrl+Alt+Left / Right). Session-only;
   // resets on track change so a nudge for one bad LRC doesn't bleed
   // into the next song. Stored in a ref because the rAF closure reads
   // it; the React state is the brief on-screen banner only.
@@ -988,7 +998,7 @@ export default function Overlay() {
       style={{
         position: "absolute",
         top: "50%",
-        // When the metadata column is hidden (Ctrl+Alt+H) in the row layouts,
+        // When the metadata column is hidden through its global shortcut,
         // slide the ghost mark right into the space the column vacated so the
         // composition stays balanced; slide it back when the column returns.
         // full_page has no metadata column, so it always stays centered.
@@ -2896,7 +2906,7 @@ function sourceLabel(appId: string | null, override: string | null): string | nu
 }
 
 // Brief 1.5s indicator showing the current lyric-offset nudge value when
-// the user presses Ctrl+Alt+[ / Ctrl+Alt+]. Auto-fades out via a timer
+// the user presses the earlier or later timing shortcut. Auto-fades out via a timer
 // so it doesn't sit on top of the lyrics permanently.
 function NudgeBanner({ banner }: { banner: TimingBanner | null }) {
   const [, force] = useState(0);

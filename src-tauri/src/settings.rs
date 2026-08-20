@@ -8,6 +8,7 @@ use tauri_plugin_store::StoreExt;
 use tokio::sync::RwLock;
 
 use crate::mode::OverlayMode;
+use crate::shortcuts::{sanitize_bindings, ShortcutBindings};
 use crate::window_effects::backdrop::BackdropKind;
 use crate::window_effects::{SystemWindowEffects, WindowEffects};
 
@@ -44,6 +45,8 @@ pub struct Settings {
 
     pub layout_mode: String,
     pub overlay_shape: String,
+    #[serde(default)]
+    pub shortcuts: ShortcutBindings,
 
     pub show_album_art: bool,
     pub show_translation: bool,
@@ -94,12 +97,12 @@ pub struct Settings {
     /// syncs the plugin state on every save.
     #[serde(default)]
     pub launch_on_startup: bool,
-    /// Transparent mode (Ctrl+Alt+T): suppress every background layer in the
+    /// Transparent mode: suppress every background layer in the
     /// overlay AND drop the DWM window backdrop to None, so only the lyrics /
     /// art / metadata float over the desktop. Default off.
     #[serde(default)]
     pub bg_hidden: bool,
-    /// Show the right-hand metadata column ("media player"). Toggle: Ctrl+Alt+M.
+    /// Show the right-hand metadata column ("media player").
     /// Default on.
     #[serde(default = "default_true")]
     pub show_media: bool,
@@ -146,6 +149,7 @@ impl Default for Settings {
             line_padding_px: 6,
             layout_mode: "three_line".to_string(),
             overlay_shape: "ribbon".to_string(),
+            shortcuts: ShortcutBindings::default(),
             show_album_art: true,
             show_translation: false,
             tint_bg_from_album_art: false,
@@ -290,6 +294,9 @@ pub async fn update_settings(
     state: tauri::State<'_, SharedSettings>,
     patch: Value,
 ) -> Result<Settings, String> {
+    if patch.get("shortcuts").is_some() {
+        return Err("Use Hum's shortcut recorder to change global shortcuts.".to_string());
+    }
     // bg_hidden also drives the effective backdrop (None vs configured), so a
     // change to either must re-apply it.
     let backdrop_changed =
@@ -405,6 +412,7 @@ fn sanitize(s: &mut Settings) -> bool {
     if !matches!(s.overlay_shape.as_str(), "ribbon" | "square") {
         s.overlay_shape = defaults.overlay_shape.clone();
     }
+    sanitize_bindings(&mut s.shortcuts);
     if !matches!(
         s.listening_mode.as_str(),
         "wired" | "speakers" | "bluetooth"
@@ -464,12 +472,6 @@ fn reset_defaults(current: &Settings) -> Settings {
     }
 }
 
-fn reset_in_place(current: &mut Settings) -> Settings {
-    let defaults = reset_defaults(current);
-    *current = defaults.clone();
-    defaults
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -478,6 +480,17 @@ mod tests {
     fn overlay_shape_defaults_to_ribbon_when_missing() {
         let settings: Settings = serde_json::from_str(r#"{}"#).unwrap();
         assert_eq!(settings.overlay_shape, "ribbon");
+    }
+
+    #[test]
+    fn shortcuts_default_when_missing_and_invalid_sets_are_repaired() {
+        let missing: Settings = serde_json::from_str(r#"{}"#).unwrap();
+        assert_eq!(missing.shortcuts, ShortcutBindings::default());
+
+        let mut invalid = missing;
+        invalid.shortcuts.view_next = invalid.shortcuts.view_previous.clone();
+        sanitize(&mut invalid);
+        assert_eq!(invalid.shortcuts, ShortcutBindings::default());
     }
 
     #[test]
@@ -600,18 +613,19 @@ mod tests {
     }
 
     #[test]
-    fn reset_replaces_preferences_without_releasing_the_settings_lock() {
-        let mut current = Settings {
+    fn reset_candidate_leaves_current_preferences_unchanged_until_commit() {
+        let current = Settings {
             onboarding_version: 4,
             listening_mode: "bluetooth".to_string(),
             ..Default::default()
         };
 
-        let saved = reset_in_place(&mut current);
+        let candidate = reset_defaults(&current);
 
-        assert_eq!(current, saved);
         assert_eq!(current.onboarding_version, 4);
-        assert_eq!(current.listening_mode, "wired");
+        assert_eq!(current.listening_mode, "bluetooth");
+        assert_eq!(candidate.onboarding_version, 4);
+        assert_eq!(candidate.listening_mode, "wired");
     }
 
     #[test]
@@ -667,7 +681,10 @@ pub async fn reset_settings(
 ) -> Result<Settings, String> {
     let defaults = {
         let mut current = state.write().await;
-        reset_in_place(&mut current)
+        let candidate = reset_defaults(&current);
+        crate::shortcuts::apply_bindings(&app, &candidate.shortcuts)?;
+        *current = candidate.clone();
+        candidate
     };
     save_to_store(&app, &defaults);
     crate::sync_listening_mode_menu(&app, &defaults.listening_mode);

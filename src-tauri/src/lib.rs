@@ -36,6 +36,7 @@ mod onboarding;
 mod platform;
 mod promos;
 mod settings;
+mod shortcuts;
 mod streamer;
 mod trust;
 mod update_status;
@@ -65,6 +66,7 @@ use platform::info::get_platform_info;
 use settings::{
     get_settings, open_settings_window, reset_settings, update_settings, SharedSettings,
 };
+use shortcuts::{reset_shortcuts, set_shortcut_binding, ShortcutAction, ViewDirection};
 use trust::{
     export_diagnostics, get_about_info, get_build_info, open_trust_destination,
     request_update_check,
@@ -210,6 +212,7 @@ pub fn run() {
                 .build(),
         )
         .plugin(build_global_shortcut_plugin())
+        .manage(shortcuts::ShortcutRuntime::default())
         .manage(snapshot)
         .manage(album_art)
         .manage(lyrics_state)
@@ -227,6 +230,7 @@ pub fn run() {
             let initial_mode = loaded_settings.last_mode;
             let initial_listening_mode = loaded_settings.listening_mode.clone();
             let initial_onboarding_version = loaded_settings.onboarding_version;
+            let initial_shortcut_bindings = loaded_settings.shortcuts.clone();
             // Capture streamer fields before move so we can apply after manage.
             let streamer_enabled_at_start = loaded_settings.streamer_enabled;
             let streamer_port_at_start = loaded_settings.streamer_port;
@@ -367,8 +371,9 @@ pub fn run() {
             // cursor flag + check items all line up before first paint.
             apply_mode(&app_handle, initial_mode);
 
-            // Ctrl+Alt+L cycles edit -> locked -> ghost -> edit.
-            register_hotkey(&app_handle)?;
+            if let Err(error) = shortcuts::apply_bindings(&app_handle, &initial_shortcut_bindings) {
+                eprintln!("[shortcut] startup registration failed: {error}");
+            }
 
             // Belt + suspenders: tauri.conf.json sets `visible: false` on
             // the main (dev console) window, but Tauri dev hot-reload paths
@@ -481,6 +486,8 @@ pub fn run() {
             get_settings,
             update_settings,
             reset_settings,
+            set_shortcut_binding,
+            reset_shortcuts,
             open_settings_window,
             set_update_status,
             set_update_banner_visible,
@@ -742,86 +749,73 @@ fn build_tray(
 }
 
 fn build_global_shortcut_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
-    use tauri::Emitter;
-    use tauri_plugin_global_shortcut::{Builder, Code, Modifiers, Shortcut, ShortcutState};
-
-    let cycle_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyL);
-    let nudge_back = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::BracketLeft);
-    let nudge_fwd = Shortcut::new(
-        Some(Modifiers::CONTROL | Modifiers::ALT),
-        Code::BracketRight,
-    );
-    let toggle_blur = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyB);
-    let toggle_transparent = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyT);
-    let toggle_media = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyH);
-
-    Builder::new()
-        .with_handler(move |app, shortcut, event| {
-            if event.state() != ShortcutState::Pressed {
-                return;
-            }
-            if shortcut == &cycle_shortcut {
-                if let Some(state) = app.try_state::<SharedMode>() {
-                    let next = OverlayMode::from_u8(state.load(Ordering::Acquire)).next();
-                    apply_mode(app, next);
-                }
-            } else if shortcut == &nudge_back {
-                // Pull lyrics earlier (audio is ahead of lyrics).
-                let _ = app.emit("lyric-offset-nudge", -250i32);
-            } else if shortcut == &nudge_fwd {
-                // Push lyrics later (lyrics are running ahead of audio).
-                let _ = app.emit("lyric-offset-nudge", 250i32);
-            } else if shortcut == &toggle_blur {
-                // Toggle the blurred album-art background. Handler is sync;
-                // settings.write() is async, so the flip + persist + emit
-                // chain runs on the async runtime. Mirrors the pattern in
-                // settings::persist_last_mode.
-                if let Some(state) = app.try_state::<SharedSettings>() {
-                    let state = state.inner().clone();
-                    let app2 = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let mut s = state.write().await;
-                        s.blur_album_art_background = !s.blur_album_art_background;
-                        let snapshot = s.clone();
-                        drop(s);
-                        settings::save_to_store(&app2, &snapshot);
-                        let _ = app2.emit("settings-changed", &snapshot);
-                    });
-                }
-            } else if shortcut == &toggle_transparent {
-                // Transparent mode: flip bg_hidden, persist, drop/restore the
-                // DWM backdrop, and notify the overlay to suppress every
-                // background layer.
-                if let Some(state) = app.try_state::<SharedSettings>() {
-                    let state = state.inner().clone();
-                    let app2 = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let mut s = state.write().await;
-                        s.bg_hidden = !s.bg_hidden;
-                        let snapshot = s.clone();
-                        drop(s);
-                        settings::save_to_store(&app2, &snapshot);
-                        reapply_effective_backdrop(&app2, &snapshot);
-                        let _ = app2.emit("settings-changed", &snapshot);
-                    });
-                }
-            } else if shortcut == &toggle_media {
-                // Show/hide the metadata column ("media player").
-                if let Some(state) = app.try_state::<SharedSettings>() {
-                    let state = state.inner().clone();
-                    let app2 = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let mut s = state.write().await;
-                        s.show_media = !s.show_media;
-                        let snapshot = s.clone();
-                        drop(s);
-                        settings::save_to_store(&app2, &snapshot);
-                        let _ = app2.emit("settings-changed", &snapshot);
-                    });
-                }
-            }
-        })
+    tauri_plugin_global_shortcut::Builder::new()
+        .with_handler(shortcuts::handle_keyboard_shortcut)
         .build()
+}
+
+pub(crate) fn execute_shortcut_action(app: &tauri::AppHandle, action: ShortcutAction) {
+    match action {
+        ShortcutAction::CycleMode => {
+            if let Some(state) = app.try_state::<SharedMode>() {
+                let next = OverlayMode::from_u8(state.load(Ordering::Acquire)).next();
+                apply_mode(app, next);
+            }
+        }
+        ShortcutAction::TimingEarlier => {
+            let _ = app.emit("lyric-offset-nudge", -250i32);
+        }
+        ShortcutAction::TimingLater => {
+            let _ = app.emit("lyric-offset-nudge", 250i32);
+        }
+        ShortcutAction::ViewPrevious
+        | ShortcutAction::ViewNext
+        | ShortcutAction::ToggleBlur
+        | ShortcutAction::ToggleTransparent
+        | ShortcutAction::ToggleMedia => {
+            let Some(state) = app.try_state::<SharedSettings>() else {
+                return;
+            };
+            let state = state.inner().clone();
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut settings = state.write().await;
+                match action {
+                    ShortcutAction::ViewPrevious | ShortcutAction::ViewNext => {
+                        let direction = if action == ShortcutAction::ViewPrevious {
+                            ViewDirection::Previous
+                        } else {
+                            ViewDirection::Next
+                        };
+                        let (shape, layout) = shortcuts::cycle_view(
+                            &settings.overlay_shape,
+                            &settings.layout_mode,
+                            direction,
+                        );
+                        settings.overlay_shape = shape.to_string();
+                        settings.layout_mode = layout.to_string();
+                    }
+                    ShortcutAction::ToggleBlur => {
+                        settings.blur_album_art_background = !settings.blur_album_art_background;
+                    }
+                    ShortcutAction::ToggleTransparent => {
+                        settings.bg_hidden = !settings.bg_hidden;
+                    }
+                    ShortcutAction::ToggleMedia => {
+                        settings.show_media = !settings.show_media;
+                    }
+                    _ => return,
+                }
+                let snapshot = settings.clone();
+                drop(settings);
+                settings::save_to_store(&app, &snapshot);
+                if action == ShortcutAction::ToggleTransparent {
+                    reapply_effective_backdrop(&app, &snapshot);
+                }
+                let _ = app.emit("settings-changed", &snapshot);
+            });
+        }
+    }
 }
 
 /// Apply the backdrop that matches the current settings (None in transparent
@@ -834,32 +828,6 @@ fn reapply_effective_backdrop(app: &tauri::AppHandle, s: &settings::Settings) {
             eprintln!("backdrop: re-apply on transparent toggle failed: {error}");
         }
     }
-}
-
-fn register_hotkey(app: &tauri::AppHandle) -> tauri::Result<()> {
-    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
-    let cycle_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyL);
-    let nudge_back = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::BracketLeft);
-    let nudge_fwd = Shortcut::new(
-        Some(Modifiers::CONTROL | Modifiers::ALT),
-        Code::BracketRight,
-    );
-    let toggle_blur = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyB);
-    let toggle_transparent = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyT);
-    let toggle_media = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyH);
-    for (name, sc) in [
-        ("Ctrl+Alt+L", cycle_shortcut),
-        ("Ctrl+Alt+[", nudge_back),
-        ("Ctrl+Alt+]", nudge_fwd),
-        ("Ctrl+Alt+B", toggle_blur),
-        ("Ctrl+Alt+T", toggle_transparent),
-        ("Ctrl+Alt+H", toggle_media),
-    ] {
-        if let Err(e) = app.global_shortcut().register(sc) {
-            eprintln!("[hotkey] failed to register {name}: {e}");
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -16,10 +16,18 @@ import type {
   WindowBackdrop,
 } from "./types";
 import { PROMO_CARD_DESCRIPTION, PROMO_CARD_LABEL } from "./promo-policy";
+import {
+  displayShortcut,
+  SHORTCUT_ROWS,
+  triggerFromKeyboardInput,
+  triggerFromMouseInput,
+  type ShortcutActionId,
+} from "./shortcut-config";
 
 const ACCENT = "#d4af37";
 type TrustAction = "license" | "updates" | TrustDestination | "diagnostics";
 type TrustFeedback = { tone: "success" | "error"; message: string };
+type ShortcutFeedback = { tone: "success" | "error"; message: string };
 
 export default function SettingsView() {
   const [s, setS] = useState<Settings | null>(null);
@@ -30,6 +38,8 @@ export default function SettingsView() {
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [trustAction, setTrustAction] = useState<TrustAction | null>(null);
   const [trustFeedback, setTrustFeedback] = useState<TrustFeedback | null>(null);
+  const [recordingShortcut, setRecordingShortcut] = useState<ShortcutActionId | null>(null);
+  const [shortcutFeedback, setShortcutFeedback] = useState<ShortcutFeedback | null>(null);
   // Track in-flight pending writes so slider drags coalesce.
   const writeTimer = useRef<number | null>(null);
   const pendingPatch = useRef<Partial<Settings>>({});
@@ -69,6 +79,45 @@ export default function SettingsView() {
     };
   }, [loadAttempt]);
 
+  useEffect(() => {
+    if (!recordingShortcut) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.code === "Escape") {
+        event.preventDefault();
+        setRecordingShortcut(null);
+        setShortcutFeedback(null);
+        return;
+      }
+      const trigger = triggerFromKeyboardInput(event);
+      if (!trigger) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void saveShortcut(recordingShortcut, trigger);
+    };
+    const onMouseDown = (event: MouseEvent) => {
+      const trigger = triggerFromMouseInput(event);
+      if (!trigger) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void saveShortcut(recordingShortcut, trigger);
+    };
+    const preventRecordedMouseNavigation = (event: MouseEvent) => {
+      if ((event.button === 3 || event.button === 4) && event.ctrlKey && event.altKey) {
+        event.preventDefault();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("mousedown", onMouseDown, true);
+    window.addEventListener("auxclick", preventRecordedMouseNavigation, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("mousedown", onMouseDown, true);
+      window.removeEventListener("auxclick", preventRecordedMouseNavigation, true);
+    };
+  }, [recordingShortcut]);
+
   function update<K extends keyof Settings>(key: K, value: Settings[K]) {
     if (!s) return;
     setS({ ...s, [key]: value });
@@ -90,6 +139,33 @@ export default function SettingsView() {
     pendingPatch.current = {};
     writeTimer.current = null;
     invoke<Settings>("update_settings", { patch }).catch(console.error);
+  }
+
+  async function saveShortcut(action: ShortcutActionId, trigger: string) {
+    setRecordingShortcut(null);
+    setShortcutFeedback(null);
+    try {
+      const settings = await invoke<Settings>("set_shortcut_binding", { action, trigger });
+      setS(settings);
+      setShortcutFeedback({
+        tone: "success",
+        message: `${displayShortcut(trigger)} is ready.`,
+      });
+    } catch (error: unknown) {
+      setShortcutFeedback({ tone: "error", message: safeActionError(error) });
+    }
+  }
+
+  async function restoreShortcutDefaults() {
+    setRecordingShortcut(null);
+    setShortcutFeedback(null);
+    try {
+      const settings = await invoke<Settings>("reset_shortcuts");
+      setS(settings);
+      setShortcutFeedback({ tone: "success", message: "Default shortcuts restored." });
+    } catch (error: unknown) {
+      setShortcutFeedback({ tone: "error", message: safeActionError(error) });
+    }
   }
 
   function reset() {
@@ -178,7 +254,9 @@ export default function SettingsView() {
           />
         </Row>
         {shortcutHelp ? (
-          <Hint>Hotkey to cycle modes: Ctrl+Alt+L (system-wide).</Hint>
+          <Hint>
+            Hotkey to cycle modes: {displayShortcut(s.shortcuts.cycle_mode)} (system-wide).
+          </Hint>
         ) : null}
         {platformInfo.services.autostart ? (
           <>
@@ -195,6 +273,75 @@ export default function SettingsView() {
           </>
         ) : null}
       </Section>
+
+      {shortcutHelp ? (
+        <Section title="Global shortcuts">
+          <Hint>
+            Every shortcut keeps Ctrl + Alt so it works globally without taking over normal app
+            controls. Click a binding, then press Ctrl + Alt with any supported key
+            {platformInfo.platform === "windows" ? " or Mouse 4 / Mouse 5" : ""}. Escape cancels.
+          </Hint>
+          <div style={{ marginTop: 12, borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+            {SHORTCUT_ROWS.map(({ action, label, detail }) => {
+              const recording = recordingShortcut === action;
+              return (
+                <div
+                  key={action}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 18,
+                    minHeight: 58,
+                    borderBottom: "1px solid rgba(255,255,255,0.07)",
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{label}</div>
+                    <div style={{ marginTop: 3, fontSize: 11, opacity: 0.48 }}>{detail}</div>
+                  </div>
+                  <button
+                    type="button"
+                    aria-pressed={recording}
+                    onClick={() => {
+                      setShortcutFeedback(null);
+                      setRecordingShortcut(recording ? null : action);
+                    }}
+                    style={{
+                      ...inputStyle,
+                      minWidth: 190,
+                      cursor: "pointer",
+                      borderColor: recording ? ACCENT : inputStyle.borderColor,
+                      color: recording ? "#f4d66d" : inputStyle.color,
+                    }}
+                  >
+                    {recording ? "Press Ctrl + Alt + ..." : displayShortcut(s.shortcuts[action])}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          {shortcutFeedback ? (
+            <div
+              role="status"
+              style={{
+                marginTop: 12,
+                color: shortcutFeedback.tone === "error" ? "#f18c8c" : "#91d7a4",
+                fontSize: 12,
+              }}
+            >
+              {shortcutFeedback.message}
+            </div>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => void restoreShortcutDefaults()}
+            style={{ ...inputStyle, marginTop: 12, cursor: "pointer" }}
+          >
+            Restore shortcut defaults
+          </button>
+        </Section>
+      ) : null}
 
       <Section title="Lyrics timing">
         <Row label="Listening mode">
@@ -234,7 +381,7 @@ export default function SettingsView() {
           step={25}
           value={s.anticipate_ms}
           onChange={(v) => update("anticipate_ms", v)}
-          help={`Fine-tunes every listening mode. Positive values show lyrics earlier, while negative values show them later.${shortcutHelp ? " Temporary per-song adjustment is Ctrl+Alt+[ or Ctrl+Alt+]." : ""}`}
+          help={`Fine-tunes every listening mode. Positive values show lyrics earlier, while negative values show them later.${shortcutHelp ? ` Temporary per-song adjustment is ${displayShortcut(s.shortcuts.timing_earlier)} or ${displayShortcut(s.shortcuts.timing_later)}.` : ""}`}
         />
         <Slider
           label="Seek-jitter tolerance"
@@ -340,7 +487,7 @@ export default function SettingsView() {
           background color renders on top so the opacity slider still tints
           the result. No effect on tracks without art.
           {shortcutHelp ? (
-            <> Toggle on the fly with <code>Ctrl+Alt+B</code>.</>
+            <> Toggle on the fly with <code>{displayShortcut(s.shortcuts.toggle_blur)}</code>.</>
           ) : null}
         </Hint>
         {platformInfo.window.supported_backdrops.length > 0 ? (
@@ -365,7 +512,9 @@ export default function SettingsView() {
           background paint, and the window backdrop, so only the lyrics, art,
           and media info float over the desktop.
           {shortcutHelp ? (
-            <> Toggle on the fly with <code>Ctrl+Alt+T</code>.</>
+            <>
+              Toggle on the fly with <code>{displayShortcut(s.shortcuts.toggle_transparent)}</code>.
+            </>
           ) : null}
         </Hint>
       </Section>
@@ -428,7 +577,7 @@ export default function SettingsView() {
           Shows the track details, progress bar, and source. They sit beside the
           horizontal ribbon and along the bottom of the square view.
           {shortcutHelp ? (
-            <> Toggle on the fly with <code>Ctrl+Alt+H</code>.</>
+            <> Toggle on the fly with <code>{displayShortcut(s.shortcuts.toggle_media)}</code>.</>
           ) : null}
         </Hint>
         <Toggle

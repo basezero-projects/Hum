@@ -385,11 +385,11 @@ function ControlsStep() {
       </div>
       <div className="shortcut-board">
         <div><kbd>Ctrl</kbd><b>+</b><kbd>Alt</kbd><b>+</b><kbd>L</kbd><span>Cycle overlay mode</span></div>
-        <div><kbd>Ctrl</kbd><b>+</b><kbd>Alt</kbd><b>+</b><kbd>[</kbd><span>Pull lyrics earlier</span></div>
-        <div><kbd>Ctrl</kbd><b>+</b><kbd>Alt</kbd><b>+</b><kbd>]</kbd><span>Push lyrics later</span></div>
-        <div><kbd>Ctrl</kbd><b>+</b><kbd>Alt</kbd><b>+</b><kbd>B</kbd><span>Toggle album blur</span></div>
+        <div><kbd>Ctrl</kbd><b>+</b><kbd>Alt</kbd><b>+</b><kbd>Left</kbd><span>Pull lyrics earlier</span></div>
+        <div><kbd>Ctrl</kbd><b>+</b><kbd>Alt</kbd><b>+</b><kbd>Right</kbd><span>Push lyrics later</span></div>
+        <div><kbd>Ctrl</kbd><b>+</b><kbd>Alt</kbd><b>+</b><kbd>Up / Down</kbd><span>Change lyric view</span></div>
       </div>
-      <div className="finish-note"><LockIcon /><span>Finish leaves Hum in Locked mode. Use Ctrl + Alt + L whenever you want to move it again.</span></div>
+      <div className="finish-note"><LockIcon /><span>Finish leaves Hum in Locked mode. All shortcuts can be changed later in Settings.</span></div>
     </div>
   );
 }

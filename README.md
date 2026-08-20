@@ -2,7 +2,7 @@
 
 Hum is a Windows lyric overlay for listeners and streamers. It follows the active media session, resolves synchronized lyrics, and keeps the current line above the apps the listener already uses. The desktop overlay has compact ribbon and square presentations. A local server provides the same playback state to an OBS browser source.
 
-Current development version: v0.13.79
+Current development version: v0.13.80
 
 Hum is still working toward its paid 1.0 release. The phase order and release gates live in the [1.0 roadmap](docs/ROADMAP.md).
 
@@ -48,7 +48,7 @@ Saved timing uses this equation:
 saved_offset_ms = anticipate_ms - selected_profile_delay_ms
 ```
 
-Wired defaults to 0 ms, Speakers to 250 ms, and Bluetooth to 350 ms. `Ctrl+Alt+[` and `Ctrl+Alt+]` apply a session-only 250 ms nudge to the current track. That temporary nudge resets on track change and currently affects only the desktop overlay.
+Wired defaults to 0 ms, Speakers to 250 ms, and Bluetooth to 350 ms. `Ctrl+Alt+Left` and `Ctrl+Alt+Right` apply a session-only 250 ms nudge to the current track. That temporary nudge resets on track change and currently affects only the desktop overlay. Every global shortcut keeps `Ctrl+Alt`, but its final key can be changed in Settings. Windows users can also assign Mouse 4 or Mouse 5.
 
 The full timing and source-authority rules are in [Media and timing](docs/systems/media-and-timing.md).
 

@@ -6,6 +6,14 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.80] - 2026-08-20
+
+### Added
+- **Global shortcuts can now be customized in Settings.** The new Global shortcuts section lists timing, lyric view, interaction mode, album blur, transparent mode, and media-detail actions. Click a binding and press a new key while holding Ctrl + Alt. Windows users can also assign Mouse 4 or Mouse 5. Hum rejects duplicate, unsupported, or unavailable bindings and keeps the previous working set if registration fails.
+
+### Changed
+- **The default shortcuts now stay together on the arrow keys.** Ctrl + Alt + Left pulls lyrics earlier, Ctrl + Alt + Right pushes them later, and Ctrl + Alt + Up or Down moves through Three-line, Single-line, Full-page, and Square lyric views. Ctrl + Alt remains required for every custom global shortcut so normal keys and mouse buttons stay available to other apps.
+
 ## [0.13.79] - 2026-08-20
 
 ### Fixed

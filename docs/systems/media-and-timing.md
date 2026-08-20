@@ -130,7 +130,7 @@ desktop_lookup_ms = max(
 )
 ```
 
-`Ctrl+Alt+[` and `Ctrl+Alt+]` change the temporary value in 250 ms steps. It resets when the track changes. OBS does not receive that session-only value, so its lookup uses the saved equation.
+`Ctrl+Alt+Left` and `Ctrl+Alt+Right` change the temporary value in 250 ms steps. It resets when the track changes. OBS does not receive that session-only value, so its lookup uses the saved equation. The final trigger for each shortcut is customizable in Settings, while `Ctrl+Alt` remains fixed for global use. On Windows, Mouse 4 and Mouse 5 are valid triggers.
 
 The desktop accepts small forward timeline drift inside `jitter_tolerance_ms` instead of snapping backward. Larger changes, seeks, and track transitions replace the interpolated position with the new native observation.
 

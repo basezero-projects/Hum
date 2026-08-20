@@ -1,3 +1,5 @@
+import type { ShortcutBindings } from "./shortcut-config";
+
 export type CurrentTrack = {
   title: string;
   artist: string;
@@ -110,6 +112,7 @@ export type Settings = {
   line_padding_px: number;
   layout_mode: LayoutMode;
   overlay_shape: OverlayShape;
+  shortcuts: ShortcutBindings;
   show_album_art: boolean;
   show_translation: boolean;
   tint_bg_from_album_art: boolean;
@@ -121,11 +124,11 @@ export type Settings = {
   show_artist_info_panel: boolean;
   ad_break_promos_enabled: boolean;
   launch_on_startup: boolean;
-  // Transparent mode (Ctrl+Alt+T): suppress every background layer, including blurred
+  // Transparent mode: suppress every background layer, including blurred
   // album art, service-color background, album tint, bg paint, AND the DWM
   // window backdrop, so only the lyrics/art/metadata float over the desktop.
   bg_hidden: boolean;
-  // Show the right-hand metadata column ("media player"). Toggle: Ctrl+Alt+H.
+  // Show the right-hand metadata column ("media player").
   show_media: boolean;
 };
 
