@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.73] - 2026-08-19
+
+### Fixed
+- **Private release proofs now use the updater files Tauri actually builds.** Hum's Windows updater uses the signed NSIS installer itself, paired with its `.exe.sig` signature. Release metadata now points to that installer instead of expecting an obsolete `.nsis.zip` archive, so successful signed builds can produce `latest.json` and the private audit artifact.
+
 ## [0.13.72] - 2026-08-19
 
 ### Fixed

@@ -168,11 +168,10 @@ export async function prepareRelease({
   const expectedBase = `Hum_${version}_x64-setup`;
   const installer = exactArtifact(files, (file) => file.endsWith(".exe"), "installer");
   if (installer !== `${expectedBase}.exe`) fail(`Unexpected installer filename: ${installer}`);
-  const updater = exactArtifact(files, (file) => file.endsWith(".nsis.zip"), "updater archive");
-  if (updater !== `${expectedBase}.nsis.zip`) fail(`Unexpected updater filename: ${updater}`);
+  const updater = installer;
   const signature = exactArtifact(
     files,
-    (file) => file.endsWith(".nsis.zip.sig"),
+    (file) => file.endsWith(".exe.sig"),
     "updater signature",
   );
   if (signature !== `${updater}.sig`) fail(`Unexpected updater signature filename: ${signature}`);
@@ -181,7 +180,7 @@ export async function prepareRelease({
   signatureKeyId(signatureText, "signature");
   await mkdir(outputDir, { recursive: true });
   await Promise.all(
-    [installer, updater, signature].map((file) =>
+    [installer, signature].map((file) =>
       cp(path.join(artifactsDir, file), path.join(outputDir, file)),
     ),
   );

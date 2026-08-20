@@ -2,13 +2,13 @@
 
 Date: 2026-08-19
 Status: Implementation complete, signed proof pending
-Target version: 0.13.72 repair candidate, final closeout follows signed proof
+Target version: 0.13.73 repair candidate, final closeout follows signed proof
 Related phase: [HUM-10](../../roadmap/1.0/HUM-10-purchase-trust-first-run.md)
 Progress ledger: [HUM-10 ledger](../../roadmap/1.0/HUM-10-progress-ledger.md)
 
 ## Outcome
 
-Hum can build an Azure Trusted Signing Windows installer and a Tauri-signed updater package from one release workflow. A manual update check always tells the customer whether Hum is checking, current, ready to update, downloading, installing, restarting, or needs a retry.
+Hum can build an Azure Trusted Signing Windows installer and its Tauri updater signature from one release workflow. A manual update check always tells the customer whether Hum is checking, current, ready to update, downloading, installing, restarting, or needs a retry.
 
 The workflow supports a manual nonpublishing proof run. Only a matching `vX.Y.Z` tag can publish a GitHub Release and replace `latest.json`. This prevents ordinary roadmap pushes from becoming customer releases.
 
@@ -49,7 +49,7 @@ External setup is part of this slice, but secrets never enter the repository:
 - Azure Trusted Signing runs inside Tauri's Windows `signCommand`, before updater signatures are created. The final NSIS installer and bundled executable therefore carry Authenticode signatures before Tauri signs the updater bytes.
 - A key probe refuses to build when the private updater key does not match the public key compiled into Hum.
 - The workflow verifies a valid Authenticode signature and produces one checked `latest.json` entry for `windows-x86_64`.
-- Every successful run uploads a private Actions artifact containing the installer, updater signature, metadata, and proof record.
+- Every successful run uploads a private Actions artifact containing the installer, its updater signature, metadata, and proof record.
 - Only a matching version tag publishes those files to GitHub Releases. Manual proof runs never modify the public updater feed.
 
 ## Customer update flow

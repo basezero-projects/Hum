@@ -6,9 +6,9 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 
 - Slice: HUM-10E, signed updates and update states
 - Step: Repair candidate closeout and signed workflow proof
-- Next action: pass the full v0.13.72 gate, push the installer-payload verifier repair, dispatch the private signed workflow, and audit its artifacts before the final closeout patch
+- Next action: pass the full v0.13.73 gate, push the updater-file contract repair, dispatch the private signed workflow, and audit its artifacts before the final closeout patch
 - Blocker: None for local implementation. Live purchase proof still requires a Polar organization and Hum product.
-- Last updated: 2026-08-19 17:28 MDT
+- Last updated: 2026-08-19 17:59 MDT
 - Last completed plan: `docs/superpowers/plans/2026-08-19-hum-10d-first-run-setup.md`
 - Current plan: `docs/superpowers/plans/2026-08-19-hum-10e-signed-updates.md`
 
@@ -101,3 +101,4 @@ This file is the durable execution cursor for HUM-10. Update it at every slice b
 - 2026-08-19 16:37 MDT: The v0.13.69 proof passed the complete gate and signed both production targets, then the separate Authenticode step failed to parse `$target:` in its error message. A red-first workflow contract now requires the explicit `${target}:` boundary. The v0.13.70 repair is entering the complete local gate.
 - 2026-08-19 17:02 MDT: The v0.13.70 proof passed the complete gate and Azure reported successful signatures for Hum and its installer, but PowerShell returned `NotSigned` for `hum.exe`. A red-first workflow contract now requires the Windows SDK SignTool to verify both files with Authenticode policy and rejects every nonzero exit code. The v0.13.71 repair is entering the complete local gate.
 - 2026-08-19 17:28 MDT: The v0.13.71 proof passed the complete gate and signing, then SignTool confirmed that Tauri's restored development executable is intentionally unsigned. Tauri had already packaged the signed executable into NSIS before restoring the original build output. A red-first workflow contract now extracts the completed installer, requires exactly one installed `hum.exe`, and verifies that customer payload plus the installer. The v0.13.72 repair is entering the complete local gate.
+- 2026-08-19 17:59 MDT: The v0.13.72 proof passed the full gate, Azure signing, installer extraction, and strict SignTool verification for both the installed `hum.exe` and the completed installer. Metadata preparation then found that current Tauri pairs the installer with `.exe.sig` instead of building a separate `.nsis.zip`. A red-first release-contract repair now uses the installer as the Windows updater payload. The v0.13.73 repair is entering the complete local gate.

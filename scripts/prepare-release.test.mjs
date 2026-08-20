@@ -46,12 +46,9 @@ async function fixture(options = {}) {
   if (options.installer !== false) {
     await writeFile(path.join(artifactsDir, `Hum_${VERSION}_x64-setup.exe`), "installer");
   }
-  if (options.archive !== false) {
-    await writeFile(path.join(artifactsDir, `Hum_${VERSION}_x64-setup.nsis.zip`), "updater");
-  }
   if (options.signature !== false) {
     await writeFile(
-      path.join(artifactsDir, `Hum_${VERSION}_x64-setup.nsis.zip.sig`),
+      path.join(artifactsDir, `Hum_${VERSION}_x64-setup.exe.sig`),
       options.signatureText ?? validSignature(),
     );
   }
@@ -107,14 +104,16 @@ test("valid release input creates exact Windows metadata and proof", async () =>
     platforms: {
       "windows-x86_64": {
         signature: validSignature(),
-        url: `https://github.com/basezero-projects/Hum/releases/download/v${VERSION}/Hum_${VERSION}_x64-setup.nsis.zip`,
+        url: `https://github.com/basezero-projects/Hum/releases/download/v${VERSION}/Hum_${VERSION}_x64-setup.exe`,
       },
     },
   });
   const proof = JSON.parse(await readFile(path.join(outputDir, "release-proof.json"), "utf8"));
   assert.equal(proof.version, VERSION);
   assert.equal(proof.installer.file, `Hum_${VERSION}_x64-setup.exe`);
-  assert.equal(proof.updater.file, `Hum_${VERSION}_x64-setup.nsis.zip`);
+  assert.equal(proof.updater.file, `Hum_${VERSION}_x64-setup.exe`);
+  assert.equal(proof.updater.signature_file, `Hum_${VERSION}_x64-setup.exe.sig`);
+  assert.equal(proof.updater.sha256, proof.installer.sha256);
   assert.match(proof.installer.sha256, /^[a-f0-9]{64}$/);
   assert.match(proof.updater.sha256, /^[a-f0-9]{64}$/);
 });
