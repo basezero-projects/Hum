@@ -6,6 +6,11 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.83] - 2026-08-20
+
+### Fixed
+- **A successful lyric lookup can no longer leave the overlay stuck on No lyrics.** Hum now finishes subscribing to lyric updates before reading its startup snapshot. If fresh lyrics arrive while that snapshot is loading, the newer event wins instead of being replaced by an older error. This fixes songs such as The Neighbourhood's `Sweater Weather`, where word-timed lyrics were already downloaded but the overlay kept showing the failed state.
+
 ## [0.13.82] - 2026-08-20
 
 ### Fixed

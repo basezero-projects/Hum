@@ -30,6 +30,7 @@ import type {
 import { fmtMs, loadPlatformInfoWithRetry, loadSettingsWithRetry } from "./types";
 import { DEFAULT_AD_BREAK_PROMOS_ENABLED } from "./promo-policy";
 import { resolveOverlayTextAppearance } from "./overlay-appearance";
+import { hydrateSubscribedState } from "./live-state-hydration";
 import {
   canInstallUpdate,
   clampDownloadProgress,
@@ -367,13 +368,24 @@ export default function Overlay() {
       settingsHydratedRef.current = true;
     }
 
+    let lyricsRevision = 0;
+    const applyLyricsEvent = (lyrics: CurrentLyrics) => {
+      lyricsRevision += 1;
+      applyLyrics(lyrics);
+    };
+
+    const lyricUnlisteners: Array<Promise<() => void>> = [
+      listen<CurrentLyrics>("lyrics-state", (e) => applyLyricsEvent(e.payload)),
+      listen<CurrentLyrics>("lyrics-loaded", (e) => applyLyricsEvent(e.payload)),
+      listen<CurrentLyrics>("lyrics-not-found", (e) =>
+        applyLyricsEvent(e.payload),
+      ),
+    ];
     const unlisteners: Array<Promise<() => void>> = [
       listen<CurrentTrack>("track-changed", (e) => applyTrack(e.payload, "track")),
       listen<CurrentTrack>("timeline-changed", (e) => applyTrack(e.payload, "timeline")),
       listen<CurrentTrack>("playback-state-changed", (e) => applyTrack(e.payload, "state")),
-      listen<CurrentLyrics>("lyrics-state", (e) => applyLyrics(e.payload)),
-      listen<CurrentLyrics>("lyrics-loaded", (e) => applyLyrics(e.payload)),
-      listen<CurrentLyrics>("lyrics-not-found", (e) => applyLyrics(e.payload)),
+      ...lyricUnlisteners,
       listen<OverlayMode>("mode-changed", (e) => setMode(e.payload)),
       listen<Settings>("settings-changed", (e) => applySettings(e.payload)),
       listen<{ title: string; artist: string; data_url: string }>(
@@ -407,9 +419,13 @@ export default function Overlay() {
     invoke<CurrentTrack>("get_current_track")
       .then((t) => applyTrack(t, "track"))
       .catch(() => {});
-    invoke<CurrentLyrics>("get_current_lyrics")
-      .then(applyLyrics)
-      .catch(() => {});
+    void hydrateSubscribedState({
+      subscriptionsReady: Promise.all(lyricUnlisteners),
+      readSnapshot: () => invoke<CurrentLyrics>("get_current_lyrics"),
+      currentRevision: () => lyricsRevision,
+      applySnapshot: applyLyrics,
+      isActive: () => active,
+    }).catch(() => {});
     // Pull whatever album art the backend has already fetched. Closes the
     // startup race where the backend's emit_full → spawn_art_fetch chain
     // fires `album-art-loaded` BEFORE the listen() above has finished
