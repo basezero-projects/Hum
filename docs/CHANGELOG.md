@@ -6,6 +6,12 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.85] - 2026-08-20
+
+### Fixed
+- **Lyrics remain readable when the desktop is visible behind the overlay.** A zero-opacity ribbon now keeps bright current and surrounding lines with a dark shadow. Auto contrast can choose dark text only when Hum paints the background itself, so an outside screen sample can no longer turn lyrics black over unrelated desktop pixels.
+- **Chrome song changes no longer clear working lyrics during a temporary media-session gap.** Hum retries Windows media-session attachment during YouTube and browser autoplay transitions. If a replacement-session event arrives during that retry window, Hum preserves the current snapshot and processes the replacement instead of briefly dropping to an empty track.
+
 ## [0.13.84] - 2026-08-20
 
 ### Fixed

@@ -1,7 +1,7 @@
 export type OverlayTextAppearanceInput = {
   autoContrast: boolean;
   surfaceIsLight: boolean | null;
-  backgroundHidden: boolean;
+  backgroundOwned: boolean;
   textColor: string;
   textColorDim: string;
 };
@@ -19,12 +19,23 @@ const LIGHT_TEXT_SHADOW =
 const DARK_TEXT_SHADOW =
   "0 1px 2px rgba(255,255,255,0.9), 0 3px 10px rgba(255,255,255,0.55)";
 
+export function ownsReadableBackground(input: {
+  backgroundHidden: boolean;
+  blurVisible: boolean;
+  opacityPct: number;
+}): boolean {
+  return (
+    !input.backgroundHidden &&
+    (input.blurVisible || input.opacityPct >= 75)
+  );
+}
+
 export function resolveOverlayTextAppearance(
   input: OverlayTextAppearanceInput,
 ): OverlayTextAppearance {
   const autoColorActive = input.autoContrast && input.surfaceIsLight !== null;
   const useDarkText =
-    autoColorActive && input.surfaceIsLight === true && !input.backgroundHidden;
+    autoColorActive && input.surfaceIsLight === true && input.backgroundOwned;
 
   if (!autoColorActive) {
     return {

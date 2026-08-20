@@ -109,6 +109,9 @@ enum Msg {
     PlaybackChanged,
 }
 
+const SESSION_ATTACH_ATTEMPTS: usize = 20;
+const SESSION_ATTACH_RETRY_DELAY_MS: u64 = 150;
+
 /// Owns the per-session event-handler registrations. Dropping it removes them.
 struct SessionHooks {
     session: GlobalSystemMediaTransportControlsSession,
@@ -345,10 +348,22 @@ async fn run(
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                 while rx.try_recv().is_ok() {}
                 eprintln!("[smtc] Msg::SessionChanged (debounced)");
-                hooks = match attach_session(&manager, &tx) {
+                hooks = match retry_transient(
+                    || attach_session(&manager, &tx),
+                    SESSION_ATTACH_ATTEMPTS,
+                    std::time::Duration::from_millis(SESSION_ATTACH_RETRY_DELAY_MS),
+                )
+                .await
+                {
                     Ok(h) => Some(h),
                     Err(e) => {
                         eprintln!("[smtc] session-change attach_session failed: {e:#}");
+                        if drain_has_session_change(&mut rx) {
+                            eprintln!(
+                                "[smtc] replacement session queued, preserving snapshot and retrying"
+                            );
+                            continue;
+                        }
                         None
                     }
                 };
@@ -482,6 +497,33 @@ async fn run(
     }
 
     Ok(())
+}
+
+async fn retry_transient<T, E, F>(
+    mut operation: F,
+    attempts: usize,
+    delay: std::time::Duration,
+) -> Result<T, E>
+where
+    F: FnMut() -> Result<T, E>,
+{
+    let attempts = attempts.max(1);
+    for attempt in 1..=attempts {
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(error) if attempt == attempts => return Err(error),
+            Err(_) => tokio::time::sleep(delay).await,
+        }
+    }
+    unreachable!("the retry loop always returns on its final attempt")
+}
+
+fn drain_has_session_change(rx: &mut mpsc::UnboundedReceiver<Msg>) -> bool {
+    let mut found = false;
+    while let Ok(message) = rx.try_recv() {
+        found |= matches!(message, Msg::SessionChanged);
+    }
+    found
 }
 
 fn attach_session(
@@ -1296,6 +1338,73 @@ mod is_spotify_ad_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn transient_session_attachment_retries_before_giving_up() {
+        let mut calls = 0;
+        let result = retry_transient(
+            || {
+                calls += 1;
+                if calls < 3 {
+                    Err("session is changing")
+                } else {
+                    Ok("attached")
+                }
+            },
+            4,
+            std::time::Duration::ZERO,
+        )
+        .await;
+
+        assert_eq!(result, Ok("attached"));
+        assert_eq!(calls, 3);
+    }
+
+    #[tokio::test]
+    async fn transient_session_attachment_stops_after_the_attempt_limit() {
+        let mut calls = 0;
+        let result: Result<(), &str> = retry_transient(
+            || {
+                calls += 1;
+                Err("still unavailable")
+            },
+            3,
+            std::time::Duration::ZERO,
+        )
+        .await;
+
+        assert_eq!(result, Err("still unavailable"));
+        assert_eq!(calls, 3);
+    }
+
+    #[test]
+    fn browser_session_handoff_has_a_multi_second_retry_window() {
+        let retry_window_ms =
+            (SESSION_ATTACH_ATTEMPTS.saturating_sub(1) as u64) * SESSION_ATTACH_RETRY_DELAY_MS;
+
+        assert!(retry_window_ms >= 2_500);
+    }
+
+    #[test]
+    fn queued_replacement_session_prevents_transient_snapshot_clear() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        tx.send(Msg::MediaChanged).unwrap();
+        tx.send(Msg::SessionChanged).unwrap();
+        tx.send(Msg::TimelineChanged).unwrap();
+
+        assert!(drain_has_session_change(&mut rx));
+        assert!(rx.is_empty());
+    }
+
+    #[test]
+    fn stale_session_events_do_not_prevent_real_snapshot_clear() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        tx.send(Msg::MediaChanged).unwrap();
+        tx.send(Msg::PlaybackChanged).unwrap();
+
+        assert!(!drain_has_session_change(&mut rx));
+        assert!(rx.is_empty());
+    }
 
     #[test]
     fn primary_artist_token_strips_feat_variants() {

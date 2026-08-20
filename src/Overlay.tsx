@@ -29,7 +29,10 @@ import type {
 } from "./types";
 import { fmtMs, loadPlatformInfoWithRetry, loadSettingsWithRetry } from "./types";
 import { DEFAULT_AD_BREAK_PROMOS_ENABLED } from "./promo-policy";
-import { resolveOverlayTextAppearance } from "./overlay-appearance";
+import {
+  ownsReadableBackground,
+  resolveOverlayTextAppearance,
+} from "./overlay-appearance";
 import { hydrateSubscribedState } from "./live-state-hydration";
 import {
   canInstallUpdate,
@@ -884,38 +887,12 @@ export default function Overlay() {
   }, [settings.show_artist_info_panel]);
 
   const layoutMode: LayoutMode = settings.layout_mode;
-  // Auto-contrast override: when the toggle is on AND we have a luminance
-  // read for the OVERLAY SURFACE (not the screen behind — see the
-  // composited-luminance useEffect below), replace the user's text colors
-  // with high-contrast values.
-  const textAppearance = resolveOverlayTextAppearance({
-    autoContrast: settings.auto_contrast,
-    surfaceIsLight,
-    backgroundHidden: settings.bg_hidden,
-    textColor: settings.text_color,
-    textColorDim: settings.text_color_dim,
-  });
-  const {
-    autoColorActive,
-    textColor: effectiveTextColor,
-    textColorDim: effectiveTextColorDim,
-    textShadow: effectiveTextShadow,
-    useDarkLogo,
-  } = textAppearance;
   // Ribbon scaling follows width, preserving its existing behavior. Square
   // scaling follows its tighter dimension so resized square windows keep the
   // full composition visible.
   const scale = settings.overlay_shape === "square"
     ? Math.max(0.58, Math.min(winSize.w, winSize.h) / SQUARE_WINDOW_SIZE_PX)
     : Math.max(0.4, winSize.w / BASELINE_WINDOW_W_PX);
-  const baseSettings = autoColorActive
-    ? { ...settings, text_color: effectiveTextColor, text_color_dim: effectiveTextColorDim }
-    : settings;
-  const settingsForRender: Settings = {
-    ...baseSettings,
-    font_size_px: baseSettings.font_size_px * scale,
-    line_padding_px: Math.max(0, Math.round(baseSettings.line_padding_px * scale)),
-  };
   // When tint is on AND we have a color extracted from the current art, blend
   // the user's bg_color with the tint at 50/50 in RGB. Force a minimum 22%
   // opacity so the toggle is visibly doing something even when the user has
@@ -948,6 +925,37 @@ export default function Overlay() {
     !!artMatchTrack &&
     albumArt.title === artMatchTrack.title &&
     albumArt.artist === artMatchTrack.artist;
+  // Auto contrast may use dark text only when Hum paints the pixels behind
+  // the lyrics. At zero opacity with no matched blur, the desktop remains
+  // visible and an outside screen sample cannot describe the exact pixels
+  // under each glyph. Bright text plus a dark shadow stays readable there.
+  const backgroundOwned = ownsReadableBackground({
+    backgroundHidden: settings.bg_hidden,
+    blurVisible: showBlurBg,
+    opacityPct: effectiveOpacity,
+  });
+  const textAppearance = resolveOverlayTextAppearance({
+    autoContrast: settings.auto_contrast,
+    surfaceIsLight,
+    backgroundOwned,
+    textColor: settings.text_color,
+    textColorDim: settings.text_color_dim,
+  });
+  const {
+    autoColorActive,
+    textColor: effectiveTextColor,
+    textColorDim: effectiveTextColorDim,
+    textShadow: effectiveTextShadow,
+    useDarkLogo,
+  } = textAppearance;
+  const baseSettings = autoColorActive
+    ? { ...settings, text_color: effectiveTextColor, text_color_dim: effectiveTextColorDim }
+    : settings;
+  const settingsForRender: Settings = {
+    ...baseSettings,
+    font_size_px: baseSettings.font_size_px * scale,
+    line_padding_px: Math.max(0, Math.round(baseSettings.line_padding_px * scale)),
+  };
   // When the blur is active we drop the container's own bg paint and
   // render bgRgba as a layered absolute div above the blur instead.
   // Otherwise it'd cover the blur entirely (bg paints under flex
