@@ -34,6 +34,18 @@ import {
   resolveOverlayTextAppearance,
 } from "./overlay-appearance";
 import { hydrateSubscribedState } from "./live-state-hydration";
+import { wordFillPercent } from "./karaoke-presentation";
+import {
+  lyricPresentationCursorIndex,
+  lyricPresentationThresholdMs,
+} from "./lyric-presentation";
+import {
+  ribbonAlbumArtSize,
+  ribbonCompositionMaxWidth,
+  ribbonContentHeight,
+  ribbonLineFontSize,
+  stableRibbonLineMetrics,
+} from "./ribbon-composition";
 import {
   canInstallUpdate,
   clampDownloadProgress,
@@ -118,12 +130,6 @@ export default function Overlay() {
   // Dominant color extracted from the current album art's data URL — fed
   // into the overlay background when tint_bg_from_album_art is on.
   const [tintColor, setTintColor] = useState<{ r: number; g: number; b: number } | null>(null);
-  // Measured pixel height of the lyrics column. Drives the side-by-side
-  // album art's size so it's exactly as tall as the lyrics next to it
-  // (CSS `align-self: stretch + aspect-ratio: 1` was off by a few px in
-  // practice — the row height was driven by the image's intrinsic size).
-  const [lyricsColEl, setLyricsColEl] = useState<HTMLDivElement | null>(null);
-  const [artSize, setArtSize] = useState<number>(80);
   // Raw screen-behind-the-window color sample from contrast.rs's screen-
   // capture worker. Null until the first sample arrives. Carries RGB so
   // we can compute both luminance AND saturation downstream — a tan/gold
@@ -223,21 +229,7 @@ export default function Overlay() {
     }
 
     function snapCursorToCurrentPosition(lines: LyricLine[]): number {
-      if (lines.length === 0) return -1;
-      const pos = lookupPositionMs();
-      let lo = 0;
-      let hi = lines.length;
-      let found = -1;
-      while (lo < hi) {
-        const mid = (lo + hi) >> 1;
-        if (lines[mid].time_ms <= pos) {
-          found = mid;
-          lo = mid + 1;
-        } else {
-          hi = mid;
-        }
-      }
-      return found;
+      return lyricPresentationCursorIndex(lines, lookupPositionMs());
     }
 
     let rafId = 0;
@@ -248,9 +240,15 @@ export default function Overlay() {
         const lines = l.lines;
         let idx = indexRef.current;
         // Advance forward (the usual case during normal playback)
-        while (idx + 1 < lines.length && lines[idx + 1].time_ms <= pos) idx++;
+        while (
+          idx + 1 < lines.length &&
+          lyricPresentationThresholdMs(lines, idx + 1) <= pos
+        ) idx++;
         // Rewind backward (user seeked / new track loaded)
-        while (idx >= 0 && lines[idx].time_ms > pos) idx--;
+        while (
+          idx >= 0 &&
+          lyricPresentationThresholdMs(lines, idx) > pos
+        ) idx--;
         if (idx !== indexRef.current) {
           indexRef.current = idx;
           wordIdxRef.current = -1;
@@ -466,9 +464,9 @@ export default function Overlay() {
   // (Window sizing — both the width→font tracking and the height-fit — is
   // handled by the single content-keyed effect below.)
 
-  // 500ms progress-bar repaint. Cheap because the bar reads
+  // 500ms Square progress-footer repaint. Cheap because the footer reads
   // `track.position_ms + Date.now()-last_update` inline at render and only
-  // the metadata column subtree re-renders meaningfully. Stops the tick
+  // the playback subtree re-renders meaningfully. Stops the tick
   // when nothing's playing so a paused/closed app doesn't cost a wake
   // every half-second indefinitely.
   useEffect(() => {
@@ -680,25 +678,6 @@ export default function Overlay() {
     }
   }
 
-  // Sync the album art's size to the lyrics column's measured height.
-  // useLayoutEffect for the initial measure (before browser paint, so no
-  // flash). ResizeObserver for live updates (font-size slider, line wrap,
-  // line-padding slider, layout-mode change).
-  useLayoutEffect(() => {
-    if (!lyricsColEl) return;
-    const h = lyricsColEl.getBoundingClientRect().height;
-    if (h > 0) setArtSize(Math.round(h));
-  }, [lyricsColEl]);
-  useEffect(() => {
-    if (!lyricsColEl) return;
-    const ro = new ResizeObserver((entries) => {
-      const h = entries[0]?.contentRect.height;
-      if (h && h > 0) setArtSize(Math.round(h));
-    });
-    ro.observe(lyricsColEl);
-    return () => ro.disconnect();
-  }, [lyricsColEl]);
-
   // Aspect lock is enforced at the OS level (aspect_lock.rs captures the
   // window's current ratio on WM_ENTERSIZEMOVE and corrects WM_SIZING). JS
   // tracks dimensions for font scaling but never calls setSize from a resize
@@ -740,14 +719,6 @@ export default function Overlay() {
       overlayShapeRef.current = "square";
     } else {
       overlayShapeRef.current = "ribbon";
-      if (
-        previousShape === null &&
-        storedRibbonSizeAtStartup === null &&
-        isValidRibbonSize(current)
-      ) {
-        ribbonSizeRef.current = current;
-        writeStoredRibbonSize(current);
-      }
       target = ribbonSizeRef.current;
     }
 
@@ -887,12 +858,12 @@ export default function Overlay() {
   }, [settings.show_artist_info_panel]);
 
   const layoutMode: LayoutMode = settings.layout_mode;
-  // Ribbon scaling follows width, preserving its existing behavior. Square
-  // scaling follows its tighter dimension so resized square windows keep the
-  // full composition visible.
+  // Ribbon scaling follows height so its native width can stay compact without
+  // shrinking the lyrics. The native aspect lock keeps both dimensions in
+  // sync during manual resizing. Square follows its tighter dimension.
   const scale = settings.overlay_shape === "square"
     ? Math.max(0.58, Math.min(winSize.w, winSize.h) / SQUARE_WINDOW_SIZE_PX)
-    : Math.max(0.4, winSize.w / BASELINE_WINDOW_W_PX);
+    : Math.max(0.4, winSize.h / DEFAULT_RIBBON_WINDOW_H_PX);
   // When tint is on AND we have a color extracted from the current art, blend
   // the user's bg_color with the tint at 50/50 in RGB. Force a minimum 22%
   // opacity so the toggle is visibly doing something even when the user has
@@ -1006,13 +977,11 @@ export default function Overlay() {
   // Outer frame for all layouts: full window, visual chrome, vertical centering
   // of the inner content. The inner row (3-line / single-line) OR the inner
   // scrolling column (full-page) controls horizontal layout.
-  // Hum brand mark. Centered ghost watermark — gets captured no matter how
-  // the streamer pulls Hum onto stream (OBS browser source, window capture,
-  // display capture). Always visible for now; the eventual Pro tier will
-  // toggle this from Settings (free tier keeps the mark, Pro hides it).
-  // Transparent PNG so the white logo paints cleanly over any background
-  // without a hard-edged box.
-  const watermark = (
+  // Full-page keeps a centered ghost mark because the lyric column itself
+  // fills the window. Ribbon layouts use a smaller inline mark below so it
+  // stays connected to the lyric composition instead of floating in empty
+  // desktop space.
+  const fullPageWatermark = (
     <img
       // Match the lyric color when Hum owns the visible background. Fully
       // transparent overlays keep the white mark and a dark shadow.
@@ -1022,12 +991,7 @@ export default function Overlay() {
       style={{
         position: "absolute",
         top: "50%",
-        // When the metadata column is hidden through its global shortcut,
-        // slide the ghost mark right into the space the column vacated so the
-        // composition stays balanced; slide it back when the column returns.
-        // full_page has no metadata column, so it always stays centered.
-        left:
-          settings.show_media || layoutMode === "full_page" ? "50%" : "85%",
+        left: "50%",
         transform: "translate(-50%, -50%)",
         // Ribbon windows can be resized unusually tall while in Edit mode.
         // Cap the mark at its intended ribbon scale so the taller bird shape
@@ -1038,9 +1002,37 @@ export default function Overlay() {
         opacity: 0.18,
         pointerEvents: "none",
         userSelect: "none",
-        transition: "left 280ms ease",
       }}
     />
+  );
+
+  const ribbonBrandSize = Math.max(34, Math.min(54 * scale, 64));
+  const ribbonWatermark = (
+    <div
+      aria-hidden="true"
+      style={{
+        alignSelf: "stretch",
+        display: "grid",
+        placeItems: "center",
+        flex: `0 0 ${ribbonBrandSize + 8}px`,
+        minWidth: 0,
+        pointerEvents: "none",
+      }}
+    >
+      <img
+        src={useDarkLogo ? "/hum-logo-dark.png" : "/hum-logo.png"}
+        alt=""
+        draggable={false}
+        style={{
+          display: "block",
+          width: ribbonBrandSize,
+          height: ribbonBrandSize,
+          objectFit: "contain",
+          opacity: 0.16,
+          userSelect: "none",
+        }}
+      />
+    </div>
   );
 
   const containerStyle: React.CSSProperties = {
@@ -1075,12 +1067,28 @@ export default function Overlay() {
   // positioned blurred album-art background layer when that's enabled.
   // Without positioning, CSS paint order puts absolute siblings on top of
   // static flex children regardless of DOM order.
+  const compactRibbonMaxWidth = ribbonCompositionMaxWidth({
+    availableWidth: winSize.w - 32 * scale,
+    scale,
+  });
+  const ribbonRowHeight = ribbonContentHeight({
+    windowHeight: winSize.h,
+    scale,
+  });
+  const ribbonArtSideSize = ribbonAlbumArtSize({
+    windowHeight: winSize.h,
+    scale,
+  });
   const innerRowStyle: React.CSSProperties = {
-    display: "flex",
-    flexDirection: "row",
+    display: "grid",
+    gridTemplateColumns: showArt && albumArt
+      ? `${ribbonArtSideSize}px minmax(0, 1fr) ${ribbonBrandSize + 8}px`
+      : `minmax(0, 1fr) ${ribbonBrandSize + 8}px`,
     alignItems: "center",
-    gap: showArt && albumArt ? 14 : 0,
-    width: "100%",
+    columnGap: 14,
+    width: compactRibbonMaxWidth,
+    maxWidth: compactRibbonMaxWidth,
+    height: layoutMode === "three_line" ? ribbonRowHeight : undefined,
     minHeight: 0,
     position: "relative",
   };
@@ -1095,7 +1103,7 @@ export default function Overlay() {
   const outerStackStyle: React.CSSProperties = {
     display: "flex",
     flexDirection: "column",
-    alignItems: "stretch",
+    alignItems: "flex-start",
     gap: 4,
     width: "100%",
     minHeight: 0,
@@ -1105,13 +1113,14 @@ export default function Overlay() {
   const lyricsColStyle: React.CSSProperties = {
     display: "flex",
     flexDirection: "column",
-    flex: 1,
+    width: "100%",
+    maxWidth: "100%",
     minWidth: 0, // allows ellipsis on overflowing lines inside the flex child
-    // Stretch each line to the full column width (text alignment is handled
-    // by LineRow's own `textAlign`). This gives LineRow a stable available
-    // width to measure against for its shrink-to-fit, instead of the line
-    // box collapsing to content width.
+    // Stretch each line to one shared column width. LineRow keeps fixed role
+    // sizes and clips overflow, so advancing lyrics cannot change the type scale.
     alignItems: "stretch",
+    alignSelf: layoutMode === "three_line" ? "start" : "center",
+    justifyContent: "flex-start",
     gap: settingsForRender.line_padding_px,
   };
 
@@ -1183,9 +1192,9 @@ export default function Overlay() {
         <UpdateBanner state={updateState} onAction={handleUpdateAction} />
         <div {...dragProps} style={innerRowStyle}>
           {showArt && albumArt ? (
-            <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} dragRegion={isEdit} onClick={openArtistPanel} />
+            <AlbumArtSide dataUrl={albumArt.data_url} size={ribbonArtSideSize} dragRegion={isEdit} onClick={openArtistPanel} />
           ) : null}
-          <div {...dragProps} ref={setLyricsColEl} style={lyricsColStyle}>
+          <div {...dragProps} style={lyricsColStyle}>
             {lyrics?.status === "ad" && settingsForRender.ad_break_promos_enabled ? (
               <PromoCard
                 promo={lyrics.promo ?? null}
@@ -1216,6 +1225,7 @@ export default function Overlay() {
                   kind="cur"
                   dragRegion={isEdit}
                   settings={settingsForRender}
+                  stableSlot
                   karaoke={curKaraoke}
                   textShadow={effectiveTextShadow}
                 />
@@ -1225,20 +1235,8 @@ export default function Overlay() {
               </>
             )}
           </div>
-          {track && settings.show_media ? (
-            <MetadataColumn
-              track={track}
-              textColor={effectiveTextColor}
-              textColorDim={effectiveTextColorDim}
-              textShadow={effectiveTextShadow}
-              source={null}
-              alignRight
-              dragRegion={isEdit}
-              adActive={adActive}
-            />
-          ) : null}
+          {ribbonWatermark}
         </div>
-        {watermark}
       </div>
     );
   }
@@ -1309,7 +1307,7 @@ export default function Overlay() {
             textShadow={effectiveTextShadow}
           />
         )}
-        {watermark}
+        {fullPageWatermark}
       </div>
     );
   }
@@ -1333,9 +1331,9 @@ export default function Overlay() {
         ) : null}
         <div {...dragProps} style={innerRowStyle}>
           {showArt && albumArt ? (
-            <AlbumArtSide dataUrl={albumArt.data_url} size={artSize} dragRegion={isEdit} onClick={openArtistPanel} />
+            <AlbumArtSide dataUrl={albumArt.data_url} size={ribbonArtSideSize} dragRegion={isEdit} onClick={openArtistPanel} />
           ) : null}
-          <div {...dragProps} ref={setLyricsColEl} style={lyricsColStyle}>
+          <div {...dragProps} style={lyricsColStyle}>
           {lyrics?.status === "ad" && settingsForRender.ad_break_promos_enabled ? (
             <PromoCard
               promo={lyrics.promo ?? null}
@@ -1361,38 +1359,27 @@ export default function Overlay() {
             />
           ) : (
             <>
-              <LineRow text={prev?.text} kind="prev" dragRegion={isEdit} settings={settingsForRender} textShadow={effectiveTextShadow} />
+              <LineRow text={prev?.text} kind="prev" dragRegion={isEdit} settings={settingsForRender} stableSlot textShadow={effectiveTextShadow} />
               <LineRow
                 text={middleText}
                 kind="cur"
                 dragRegion={isEdit}
                 settings={settingsForRender}
+                stableSlot
                 karaoke={curKaraoke}
                 textShadow={effectiveTextShadow}
               />
               {translationText ? (
                 <TranslationRow text={translationText} settings={settingsForRender} textShadow={effectiveTextShadow} />
               ) : (
-                <LineRow text={next?.text} kind="next" dragRegion={isEdit} settings={settingsForRender} textShadow={effectiveTextShadow} />
+                <LineRow text={next?.text} kind="next" dragRegion={isEdit} settings={settingsForRender} stableSlot textShadow={effectiveTextShadow} />
               )}
             </>
           )}
           </div>
-          {track && settings.show_media ? (
-            <MetadataColumn
-              track={track}
-              textColor={effectiveTextColor}
-              textColorDim={effectiveTextColorDim}
-              textShadow={effectiveTextShadow}
-              source={null}
-              alignRight
-              dragRegion={isEdit}
-              adActive={adActive}
-            />
-          ) : null}
+          {ribbonWatermark}
         </div>
       </div>
-      {watermark}
     </div>
   );
 }
@@ -2025,27 +2012,19 @@ function SquareLyricLine({
         {useKaraoke
           ? karaoke!.words.map((word, index) => {
               const current = karaoke!.currentWordIdx;
-              const position = wordFillPosition(
+              const fillPercent = wordFillPercent(
                 index,
                 current,
                 karaoke!.currentWordProgress,
               );
               return (
-                <span
+                <KaraokeWord
                   key={`${word.time_ms}-${index}`}
-                  style={{
-                    background: `linear-gradient(to right, ${settings.text_color} 0%, ${settings.text_color} 50%, ${settings.text_color_dim} 50%, ${settings.text_color_dim} 100%)`,
-                    backgroundSize: "200% 100%",
-                    backgroundPosition: `${position}% 0%`,
-                    backgroundClip: "text",
-                    WebkitBackgroundClip: "text",
-                    color: "transparent",
-                    WebkitTextFillColor: "transparent",
-                    transition: "none",
-                  }}
-                >
-                  {word.text}
-                </span>
+                  text={word.text}
+                  fillPercent={fillPercent}
+                  textColor={settings.text_color}
+                  textColorDim={settings.text_color_dim}
+                />
               );
             })
           : text}
@@ -2575,305 +2554,6 @@ function PromoCard({
       }}>
         {cta}
       </div>
-    </div>
-  );
-}
-
-// Right-side metadata column shown to the right of the lyrics in
-// three_line + single_line layouts. Stacks three small read-only widgets:
-//   1. Artist · Song · Album text line (top, dim, ellipsis on overflow)
-//   2. Interpolated progress bar with `m:ss / m:ss` time readout (middle)
-//   3. Source badge — short label of which app the metadata is coming
-//      from (bottom, e.g. "Spotify", "Chrome", "Pandora")
-// All driven entirely by data already on the snapshot — no Rust changes.
-function MetadataColumn({
-  track,
-  textColor,
-  textColorDim,
-  textShadow,
-  source,
-  alignRight: _alignRight,
-  dragRegion,
-  adActive,
-}: {
-  track: CurrentTrack;
-  textColor: string;
-  textColorDim: string;
-  textShadow: string;
-  // Optional override: when set, prefer this label over source_app_id
-  // (e.g. lyrics resolver knows the bridge surfaced "pandora-web" but
-  // the OS still says "Chrome.exe"). Falsy → fall back to source_app_id.
-  source: string | null;
-  // Deprecated — column now always centers items on the progress-bar's
-  // centerline regardless of which side of the overlay the column sits
-  // on. Kept on the type to avoid touching every caller; underscore
-  // prefix marks it as intentionally unused.
-  alignRight: boolean;
-  dragRegion: boolean;
-  adActive: boolean;
-}) {
-  const hasMeta =
-    !!(track.title || track.artist || track.album);
-  const hasDuration = track.duration_ms > 0;
-  if (!hasMeta && !hasDuration) return null;
-  const metaParts = [track.artist, track.title, track.album]
-    .map((s) => (s || "").trim())
-    .filter((s) => s.length > 0);
-  const metaText = metaParts.join(" · ");
-  const drag = dragRegion ? { "data-tauri-drag-region": true } : {};
-
-  return (
-    <div
-      {...drag}
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        // Items centered horizontally within the column so the metadata
-        // text + source badge align to the progress-bar's centerline.
-        // The column itself sits on the right edge of the overlay
-        // (parent flex layout puts it there); this is internal layout
-        // for the column's contents.
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 4,
-        flexShrink: 0,
-        // Cap width so a long Artist · Song · Album doesn't steal width from
-        // the lyrics (the primary content). The metadata line ellipsis-
-        // truncates within this cap; the progress bar + source badge below
-        // are the real point of this column.
-        maxWidth: "20ch",
-        minWidth: 0,
-        // Self-applied gap so the column always has breathing room from
-        // the lyrics column regardless of whether the row's flex `gap`
-        // is set (the row's gap is only 14 when album art is showing —
-        // 0 otherwise — and would otherwise sit flush against the lyrics).
-        marginLeft: 14,
-      }}
-    >
-      {/* Artist line: hidden during ads so it doesn't clash with the promo card.
-          Uses a stronger halo shadow than the lyric `textShadow` so it stays
-          legible over bright blurred-art backgrounds (the lyric column has
-          the lyrics' own larger fonts to help; the metadata is small dim text
-          that disappears against busy backgrounds without a halo). */}
-      {!adActive && metaText ? (
-        <div
-          title={metaText}
-          style={{
-            fontSize: 11,
-            letterSpacing: 0.3,
-            color: textColorDim,
-            textShadow: "0 1px 2px rgba(0,0,0,1), 0 0 6px rgba(0,0,0,0.85), 0 3px 10px rgba(0,0,0,0.55)",
-            opacity: 0.85,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            maxWidth: "100%",
-            textAlign: "center",
-          }}
-        >
-          {metaText}
-        </div>
-      ) : null}
-      {hasDuration ? (
-        <ProgressBar
-          track={track}
-          textColor={textColor}
-          textColorDim={textColorDim}
-        />
-      ) : null}
-      {adActive ? (
-        <AdBreakChip textShadow={textShadow} />
-      ) : (
-        <SourceBadge
-          appId={track.source_app_id}
-          overrideLabel={source}
-          textColorDim={textColorDim}
-          textShadow={textShadow}
-        />
-      )}
-    </div>
-  );
-}
-
-// Interpolates `track.position_ms` against wall time while playing so the
-// bar visibly advances between server-pushed `timeline-changed` ticks
-// (which arrive every 2 s). Re-renders every 500 ms via the parent's
-// progressTick state — no internal timer here.
-function ProgressBar({
-  track,
-  textColor,
-  textColorDim,
-}: {
-  track: CurrentTrack;
-  textColor: string;
-  textColorDim: string;
-}) {
-  const duration = Math.max(0, track.duration_ms);
-  // Wall-clock interpolation while playing; freeze at the reported
-  // position when paused / stopped / etc. so the bar doesn't keep
-  // creeping forward after a pause.
-  let pos = track.position_ms;
-  if (track.state === "playing") {
-    pos = track.position_ms + Math.max(0, Date.now() - track.last_update_unix_ms);
-  }
-  pos = Math.max(0, Math.min(duration || pos, pos));
-  const pct = duration > 0 ? Math.min(1, pos / duration) : 0;
-
-  return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "stretch",
-        gap: 3,
-        width: 160,
-        maxWidth: "100%",
-      }}
-    >
-      <div
-        style={{
-          fontSize: 10,
-          color: textColorDim,
-          textShadow: "0 1px 2px rgba(0,0,0,1), 0 0 6px rgba(0,0,0,0.85), 0 3px 10px rgba(0,0,0,0.55)",
-          fontVariantNumeric: "tabular-nums",
-          letterSpacing: 0.4,
-          opacity: 0.85,
-          display: "flex",
-          justifyContent: "space-between",
-        }}
-      >
-        <span>{fmtMs(pos)}</span>
-        <span>{fmtMs(duration)}</span>
-      </div>
-      <div
-        style={{
-          position: "relative",
-          height: 2,
-          width: "100%",
-          background: "rgba(127,127,127,0.35)",
-          borderRadius: 1,
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
-            bottom: 0,
-            width: `${(pct * 100).toFixed(2)}%`,
-            background: textColor,
-            opacity: 0.85,
-            transition: "width 480ms linear",
-          }}
-        />
-      </div>
-    </div>
-  );
-}
-
-// Small "where is this playing from" chip. Maps a Windows SMTC app ID
-// (usually a .exe or a UWP package family name) to a short human label.
-// Bridge-resolved tracks (Pandora web/desktop) pass an explicit override.
-function SourceBadge({
-  appId,
-  overrideLabel,
-  textColorDim,
-  textShadow,
-}: {
-  appId: string | null;
-  overrideLabel: string | null;
-  textColorDim: string;
-  textShadow: string;
-}) {
-  const label = sourceLabel(appId, overrideLabel);
-  if (!label) return null;
-  const logoSlug = serviceLogoSlug(label);
-  const brand = serviceBrandColor(label);
-  // Show the brand logo when we have one — paints in the brand color
-  // via mask. Falls back to uppercase text otherwise.
-  if (logoSlug) {
-    return (
-      <div
-        title={label}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: "4px 8px",
-          borderRadius: 8,
-          background: "rgba(127,127,127,0.18)",
-          border: "1px solid rgba(127,127,127,0.25)",
-          opacity: 0.9,
-          height: 26,
-        }}
-      >
-        <div
-          aria-hidden
-          style={{
-            width: 18,
-            height: 18,
-            backgroundColor: brand ?? textColorDim,
-            WebkitMaskImage: `url(/logos/${logoSlug}.svg)`,
-            maskImage: `url(/logos/${logoSlug}.svg)`,
-            WebkitMaskRepeat: "no-repeat",
-            maskRepeat: "no-repeat",
-            WebkitMaskPosition: "center",
-            maskPosition: "center",
-            WebkitMaskSize: "contain",
-            maskSize: "contain",
-            filter: `drop-shadow(0 0 4px ${brand ?? "rgba(255,255,255,0.4)"}88)`,
-            transition: "background-color 220ms ease",
-          }}
-        />
-      </div>
-    );
-  }
-  return (
-    <div
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 4,
-        padding: "1px 6px",
-        borderRadius: 8,
-        fontSize: 9.5,
-        letterSpacing: 0.6,
-        textTransform: "uppercase",
-        color: textColorDim,
-        textShadow,
-        background: "rgba(127,127,127,0.18)",
-        border: "1px solid rgba(127,127,127,0.25)",
-        opacity: 0.85,
-        whiteSpace: "nowrap",
-      }}
-    >
-      {label}
-    </div>
-  );
-}
-
-function AdBreakChip({ textShadow }: { textShadow: string }) {
-  return (
-    <div
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 4,
-        padding: "1px 6px",
-        borderRadius: 8,
-        fontSize: 9.5,
-        letterSpacing: 0.6,
-        textTransform: "uppercase",
-        color: "rgba(212, 175, 55, 0.95)",
-        textShadow,
-        background: "rgba(212, 175, 55, 0.12)",
-        border: "1px solid rgba(212, 175, 55, 0.5)",
-        opacity: 0.95,
-        whiteSpace: "nowrap",
-      }}
-    >
-      Ad Break
     </div>
   );
 }
@@ -3426,6 +3106,7 @@ function LineRow({
   kind,
   dragRegion,
   settings,
+  stableSlot = false,
   scrollIntoView,
   karaoke,
   textShadow,
@@ -3434,6 +3115,7 @@ function LineRow({
   kind: "prev" | "cur" | "next";
   dragRegion: boolean;
   settings: Settings;
+  stableSlot?: boolean;
   scrollIntoView?: boolean;
   karaoke?: {
     words: WordSpan[];
@@ -3450,67 +3132,49 @@ function LineRow({
       ref.current.scrollIntoView({ behavior: "smooth", block: "center" });
     }
   }, [scrollIntoView]);
-  // Single-line for ALL rows (prev / cur / next). Wrapping the cur row to 2
-  // lines made long-line songs readable but caused the lyrics column height
-  // — and therefore the side-by-side album art height — to jitter every
-  // time a long line came up. Long lines now ellipsis-truncate instead.
-  // Trade-off: catches truncated for line-stability + constant art size.
-  const wrapStyle: React.CSSProperties = {
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-  };
+  // Every role keeps one stable size throughout the song. Long lines are
+  // clipped with an ellipsis instead of shrinking, which keeps the active
+  // line and album art from jumping in size as lyrics advance.
   const drag = dragRegion ? { "data-tauri-drag-region": true } : {};
   const useKaraoke = isCur && !!karaoke && !!text;
-  // settings.font_size_px is already pre-scaled by the window-resize
-  // factor in Overlay (settingsForRender). Just apply the prev/next dim
-  // shrink ratio on top.
-  const sizePx = isCur ? settings.font_size_px : Math.max(8, settings.font_size_px * 0.6);
-  // Shrink-to-fit: instead of truncating a long line, scale its font down
-  // just enough to fit on one line. The row stretches each LineRow to the
-  // full lyrics-column width, so `clientWidth` is the true available width;
-  // we measure the text's natural width at base size and apply the ratio
-  // (floored at 0.5× so it never gets unreadably small — the nowrap/ellipsis
-  // below still catches pathological lines at the floor). Keeps the column
-  // height stable (always one line) so the album art doesn't jitter.
-  const measureRef = useRef<HTMLSpanElement | null>(null);
-  const [availW, setAvailW] = useState(0);
-  const [fittedSize, setFittedSize] = useState(sizePx);
-  // Track the available width (the row stretches each LineRow to the full
-  // lyrics-column width, so the div's clientWidth IS the column width and is
-  // independent of the applied font size — no feedback loop).
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => setAvailW(el.clientWidth));
-    ro.observe(el);
-    setAvailW(el.clientWidth);
-    return () => ro.disconnect();
-  }, []);
-  // Measure the line's true rendered width via a hidden sibling rendered at
-  // BASE size with the same font/weight/letter-spacing (so the measurement
-  // includes letter-spacing and the actual loaded font — canvas measureText
-  // missed both and under-reported, so long lines never shrank). The hidden
-  // span stays at base size regardless of the fitted result, so this can't
-  // oscillate.
-  useLayoutEffect(() => {
-    const natural = measureRef.current?.offsetWidth ?? 0;
-    if (!text || !natural || !availW) {
-      setFittedSize(sizePx);
-      return;
-    }
-    setFittedSize(
-      natural > availW
-        ? Math.max(sizePx * 0.5, (availW * 0.97) / natural * sizePx)
-        : sizePx,
-    );
-  }, [text, availW, sizePx, isCur, settings.font_weight, settings.font_family]);
+  // settings.font_size_px is already scaled once for the window. The current
+  // line always uses that exact size, while adjacent lines use one consistent
+  // secondary size.
+  const role = isCur ? "current" : "adjacent";
+  const sizePx = ribbonLineFontSize({
+    baseSize: settings.font_size_px,
+    role,
+  });
+  const stableMetrics = stableRibbonLineMetrics({
+    baseSize: settings.font_size_px,
+    role,
+  });
+  const wrapStyle: React.CSSProperties = stableSlot
+    ? {
+        overflow: "hidden",
+      }
+    : {
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+      };
+  const contentStyle: React.CSSProperties = stableSlot
+    ? {
+        display: "-webkit-box",
+        width: "100%",
+        overflow: "hidden",
+        overflowWrap: "anywhere",
+        whiteSpace: "normal",
+        WebkitBoxOrient: "vertical",
+        WebkitLineClamp: stableMetrics.maxLines,
+      }
+    : { display: "inline-block" };
   return (
     <div
       ref={ref}
       {...drag}
       style={{
-        fontSize: fittedSize,
+        fontSize: sizePx,
         fontWeight: isCur ? settings.font_weight : 400,
         // When karaoke is on, the per-word spans own their color. The container
         // color still matters for any leftover non-span text (none in practice).
@@ -3523,7 +3187,7 @@ function LineRow({
         transition: useKaraoke
           ? "opacity 220ms ease"
           : "opacity 220ms ease, color 220ms ease",
-        lineHeight: 1.2,
+        lineHeight: stableSlot ? `${stableMetrics.lineHeight}px` : 1.2,
         // 100% of the lyrics column (single/three-line) or the padded
         // container (full-page) — NOT 92vw, which let a long line spill out
         // of its flex column and paint over the metadata column on the right.
@@ -3536,26 +3200,6 @@ function LineRow({
         ...wrapStyle,
       }}
     >
-      {/* Hidden measurer: same text at BASE size + matching weight/letter-
-          spacing, out of flow so it doesn't affect layout. Its offsetWidth is
-          the line's true natural width, used for shrink-to-fit above. */}
-      <span
-        ref={measureRef}
-        aria-hidden
-        style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          visibility: "hidden",
-          pointerEvents: "none",
-          whiteSpace: "nowrap",
-          fontSize: sizePx,
-          fontWeight: isCur ? settings.font_weight : 400,
-          letterSpacing: isCur ? 0.2 : 0,
-        }}
-      >
-        {text}
-      </span>
       {/* Wrapper span is keyed by the rendered line text so that whenever a
           line advances (prev/cur/next all update), the wrapper remounts
           and the `hum-line-in` CSS animation fires — a brief lift-from-
@@ -3564,40 +3208,24 @@ function LineRow({
       <span
         key={text ?? ""}
         className="hum-line-in"
-        style={{ display: "inline-block" }}
+        style={contentStyle}
       >
         {useKaraoke
           ? karaoke!.words.map((w, i) => {
               const idx = karaoke!.currentWordIdx;
-              const bgPos = wordFillPosition(
+              const fillPercent = wordFillPercent(
                 i,
                 idx,
                 karaoke!.currentWordProgress,
               );
-              // Karaoke wipe: each word is filled with a two-stop gradient
-              // (lit on the left half, dim on the right half) clipped to
-              // the text glyphs via background-clip: text. background-
-              // position slides the gradient under the glyphs:
-              //   past    → 0% 0%   (lit half covers the word)
-              //   current → animates 100% → 0% (left-to-right sweep)
-              //   future  → 100% 0% (dim half covers the word)
-              // Smooth fill instead of the old abrupt dim→lit step.
               return (
-                <span
+                <KaraokeWord
                   key={i}
-                  style={{
-                    background: `linear-gradient(to right, ${settings.text_color} 0%, ${settings.text_color} 50%, ${settings.text_color_dim} 50%, ${settings.text_color_dim} 100%)`,
-                    backgroundSize: "200% 100%",
-                    backgroundPosition: `${bgPos}% 0%`,
-                    backgroundClip: "text",
-                    WebkitBackgroundClip: "text",
-                    color: "transparent",
-                    WebkitTextFillColor: "transparent",
-                    transition: "none",
-                  }}
-                >
-                  {w.text}
-                </span>
+                  text={w.text}
+                  fillPercent={fillPercent}
+                  textColor={settings.text_color}
+                  textColorDim={settings.text_color_dim}
+                />
               );
             })
           : text || "♪"}
@@ -3631,14 +3259,43 @@ function wordProgressAtPosition(
   return Math.max(0, Math.min(1, (positionMs - word.time_ms) / duration));
 }
 
-function wordFillPosition(
-  wordIndex: number,
-  currentIndex: number,
-  currentProgress: number,
-): number {
-  if (wordIndex < currentIndex) return 0;
-  if (wordIndex > currentIndex) return 100;
-  return 100 * (1 - Math.max(0, Math.min(1, currentProgress)));
+function KaraokeWord({
+  text,
+  fillPercent,
+  textColor,
+  textColorDim,
+}: {
+  text: string;
+  fillPercent: number;
+  textColor: string;
+  textColorDim: string;
+}) {
+  return (
+    <span
+      style={{
+        position: "relative",
+        display: "inline-block",
+        color: textColorDim,
+        whiteSpace: "pre",
+      }}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: `${fillPercent}%`,
+          overflow: "hidden",
+          color: textColor,
+          whiteSpace: "pre",
+          pointerEvents: "none",
+        }}
+      >
+        {text}
+      </span>
+      {text}
+    </span>
+  );
 }
 
 function selectedProfileDelayMs(settings: Settings): number {
@@ -3832,19 +3489,15 @@ function alignToFlex(a: TextAlign): React.CSSProperties["alignItems"] {
   return "center";
 }
 
-// The overlay window is resizable via the edit-mode drag corners. We want
-// the lyric text + gaps + album art to scale WITH the window — both width
-// AND height — so dragging it smaller shrinks the whole composition
-// instead of just cropping. The slider value in Settings is the literal
-// pixel size at the baseline 720×200 window. Smaller window scales down,
-// larger scales up; whichever dimension is the tighter constraint wins
-// (so text never overflows when only the width is dragged narrower).
-const DEFAULT_RIBBON_WINDOW_W_PX = 1100;
+// The overlay window remains resizable in Edit mode. Ribbon typography follows
+// its height so a compact width does not make the lyrics tiny. Square follows
+// its tighter dimension so the complete composition remains visible.
+const DEFAULT_RIBBON_WINDOW_W_PX = 640;
 const DEFAULT_RIBBON_WINDOW_H_PX = 130;
 const SQUARE_WINDOW_SIZE_PX = 620;
-const RIBBON_SIZE_STORAGE_KEY = "hum.overlay.ribbon-size.v1";
+const RIBBON_SIZE_STORAGE_KEY = "hum.overlay.ribbon-size.v3";
 const BASELINE_WINDOW_W_PX = DEFAULT_RIBBON_WINDOW_W_PX;
-const BASELINE_WINDOW_H_PX = 200;
+const BASELINE_WINDOW_H_PX = DEFAULT_RIBBON_WINDOW_H_PX;
 
 function isValidRibbonSize(size: { w: number; h: number }): boolean {
   return Number.isFinite(size.w) &&

@@ -1492,13 +1492,14 @@ fn rank_netease_candidates(
     requested_duration_ms: u64,
 ) -> Vec<NeteaseSong> {
     let artist_l = normalize_for_match(artist);
-    let title_l = normalize_for_match(title);
+    let exact_title_l = normalize_for_match(title);
+    let title_l = normalize_for_match(&clean_title(title));
     let tolerance_ms: i64 = 5_000;
 
     let mut candidates: Vec<NeteaseSong> = songs
         .into_iter()
         .filter(|s| {
-            let s_title = normalize_for_match(&s.name);
+            let s_title = normalize_for_match(&clean_title(&s.name));
             if title_l.is_empty() || s_title != title_l {
                 return false;
             }
@@ -1524,11 +1525,13 @@ fn rank_netease_candidates(
         .collect();
 
     candidates.sort_by_key(|s| {
-        if requested_duration_ms == 0 {
-            0
+        let exact_title_rank = usize::from(normalize_for_match(&s.name) != exact_title_l);
+        let duration_distance = if requested_duration_ms == 0 {
+            0i64
         } else {
             (s.duration as i64 - requested_duration_ms as i64).abs()
-        }
+        };
+        (exact_title_rank, duration_distance)
     });
     candidates
 }
@@ -2689,6 +2692,32 @@ mod tests {
     }
 
     #[test]
+    fn netease_picker_matches_provider_feature_credit_to_clean_title() {
+        let candidate = NeteaseSong {
+            id: 2_076_504_095,
+            name: "I Remember Everything (feat. Kacey Musgraves)".into(),
+            duration: 227_195,
+            artists: vec![
+                NeteaseArtist {
+                    name: "Zach Bryan".into(),
+                },
+                NeteaseArtist {
+                    name: "Kacey Musgraves".into(),
+                },
+            ],
+        };
+
+        let picked = pick_best_netease(
+            vec![candidate],
+            "Zach Bryan",
+            "I Remember Everything",
+            227_241,
+        );
+
+        assert!(picked.is_some());
+    }
+
+    #[test]
     fn netease_picker_without_artist_still_requires_duration_match() {
         let candidate = NeteaseSong {
             id: 3_795_680,
@@ -2761,6 +2790,7 @@ mod tests {
             ("Lady Gaga", "Always Remember Us This Way", 241_000, true),
             ("Goo Goo Dolls", "Iris", 215_561, false),
             ("Train", "Drops Of Jupiter (Tell Me)", 259_560, false),
+            ("Zach Bryan", "I Remember Everything", 227_241, false),
         ] {
             let (cached, source) = fetch_netease(artist, title, duration_ms)
                 .await

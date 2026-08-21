@@ -670,13 +670,13 @@ export default function SettingsView() {
           onChange={(v) => update("show_album_art", v)}
         />
         <Toggle
-          label="Show media info column"
+          label="Show playback details in Square view"
           checked={s.show_media}
           onChange={(v) => update("show_media", v)}
         />
         <Hint>
-          Shows the track details, progress bar, and source. They sit beside the
-          horizontal ribbon and along the bottom of the square view.
+          Shows the track details and progress footer along the bottom of the
+          Square view. Ribbon layouts stay focused on lyrics only.
           {shortcutHelp ? (
             <> Toggle on the fly with <code>{displayShortcut(s.shortcuts.toggle_media)}</code>.</>
           ) : null}

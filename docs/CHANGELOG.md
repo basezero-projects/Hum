@@ -6,6 +6,17 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.86] - 2026-08-20
+
+### Changed
+- **Ribbon is now a focused lyrics-only view.** Playback details no longer sit off to the right of the lyric stack. Album art, a fixed-width lyric column, and a smaller Hum bird each have their own stable zone inside the new default 640 by 130 window. The logo stays anchored while lyric lengths change, and the playback-details setting now applies only to the Square footer.
+- **Ribbon typography no longer changes size or position from line to line.** The active line always starts at the same point and keeps the configured font size, while previous and next lines keep one consistent secondary size. A short active lyric uses one line with the next lyric directly beneath it. A long active lyric expands downward to a second line without shrinking, moving the upcoming line only as far as needed and leaving no artificial blank row.
+- **Lyric changes now move gently before the next vocal begins.** Slow lines start a restrained 560 ms fade and lift up to 420 ms before their timestamp. Faster sequences automatically shorten that lead, reaching 90 ms for lyrics spaced 500 ms apart, so rapid songs stay accurate without making normal songs feel abrupt.
+
+### Fixed
+- **Word-timed lyrics no longer become transparent or appear black.** Ribbon and Square views now render every karaoke word with a readable dim text layer and a clipped bright layer that follows playback. This replaces the WebView gradient clipping that could drop the glyph fill while keeping the word-by-word sweep.
+- **Provider feature credits no longer hide valid lyrics.** Songs such as `I Remember Everything (feat. Kacey Musgraves)` now match the clean requested title while exact studio titles still rank ahead of live variants. Hum can therefore use NetEase word timing for decorated video and feature-credit metadata instead of incorrectly showing No lyrics.
+
 ## [0.13.85] - 2026-08-20
 
 ### Fixed
