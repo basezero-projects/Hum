@@ -1550,6 +1550,45 @@ fn pick_best_netease(
 
 // ─── Title cleaner ─────────────────────────────────────────────────────────
 
+// Uploader quality / mastering tokens, as ONE shared vocabulary.
+//
+// These are the tokens that broke the cleaner repeatedly. Every previous fix
+// pinned them to a fixed slot: `(?:\d{1,2}k\s+)?remaster` accepted `4K
+// Remastered` but not `Remastered 4K`; the video terminal had to be the LAST
+// word in the bracket, so `(Official Video 4K)` survived whole; each quality
+// token was its own alternative, so `[4K UHD 60FPS]` matched at most one of
+// the three and kept the bracket.
+//
+// Uploaders stack these freely and in any order. Treating them as a set that
+// can repeat, rather than as terminals in fixed positions, is what makes the
+// cleaner robust to combinations nobody has seen yet. Shared by the bracketed,
+// pipe, and bare-trailing cleaners so all three recognize the same set.
+//
+// `\d{3,4}p` (not a literal 1080p/1440p/2160p list) covers every resolution
+// width including ones not invented yet, while staying narrow enough that a
+// two-digit token like `22p` is not mistaken for one.
+const QUALITY_TOKEN: &str = r"(?:
+    \d{1,2}\s*k |
+    \d{3,4}p |
+    \d{2,3}\s*fps |
+    uhd | hd | hq |
+    remaster(?:ed)?(?:\s+\d{4})? |
+    \d{4}\s+remaster(?:ed)?
+)";
+
+// Same set minus `hq`, and without the tolerant `\s*` inside the numeric
+// tokens. Used ONLY for bare (unbracketed) trailing runs, where a false
+// positive eats real title text instead of uploader chrome. `HQ` unbracketed
+// is a plausible word in a real title; inside brackets it never is.
+const QUALITY_TOKEN_BARE: &str = r"(?:
+    \d{1,2}k |
+    \d{3,4}p |
+    \d{2,3}fps |
+    uhd | hd |
+    remaster(?:ed)?(?:\s+\d{4})? |
+    \d{4}\s+remaster(?:ed)?
+)";
+
 fn cleaner() -> &'static Regex {
     static C: OnceLock<Regex> = OnceLock::new();
     C.get_or_init(|| {
@@ -1573,39 +1612,52 @@ fn cleaner() -> &'static Regex {
         // The remaining alternatives (lyrics, feat./ft., remaster, live at,
         // demo, acoustic, edit, etc.) stay as bounded vocabularies — they
         // genuinely are finite sets and don't benefit from loosening.
-        Regex::new(
+        //
+        // Second structural rule, added because the first one was not enough:
+        // the bracket body may be followed by a REPEATED run of quality
+        // tokens (`QUALITY_TOKEN`), and a run of quality tokens may itself BE
+        // the whole body. That is what lets `(Official Video 4K)`, `[4K UHD
+        // 60FPS]` and `[Remastered 4K]` all collapse. Previously the video
+        // terminal had to be the bracket's last word and quality tokens could
+        // not stack, so every new uploader permutation needed its own patch.
+        //
+        // The old standalone remaster branches are gone; `QUALITY_TOKEN`
+        // carries that vocabulary now, in either token order.
+        Regex::new(&format!(
             r"(?ix)
               \s*[\[\(]\s*
               (?:
-                  (?:[\w'\-]+\s+)*video |
-                  (?:[\w'\-]+\s+)*audio |
-                  (?:[\w'\-]+\s+)*visualizer |
-                  lyrics? |
-                  feat\.?\s.* |
-                  ft\.?\s.* |
-                  featuring\s.* |
-                  with\s.* |
-                  (?:\d{1,2}k\s+)?remaster(?:ed)?(?:\s\d{2,4})? |
-                  \d{2,4}\s+remaster(?:ed)? |
-                  re-?recorded(?:\s\d{2,4})? |
-                  from\s+.* |
-                  live(?:\s+(?:at|from|in)\s+.*)? |
-                  acoustic |
-                  unplugged |
-                  demo |
-                  single\s+version |
-                  album\s+version |
-                  radio\s+(?:edit|version|mix) |
-                  extended\s+(?:mix|version) |
-                  original\s+(?:mix|version) |
-                  edit |
-                  bonus\s+track |
-                  \d{1,2}k |
-                  hd | uhd | mv | 1080p | 1440p | 2160p | 60fps | 30fps | hq
+                  (?:
+                      (?:[\w'\-]+\s+)*video |
+                      (?:[\w'\-]+\s+)*audio |
+                      (?:[\w'\-]+\s+)*visualizer |
+                      lyrics? |
+                      feat\.?\s.* |
+                      ft\.?\s.* |
+                      featuring\s.* |
+                      with\s.* |
+                      re-?recorded(?:\s\d{{2,4}})? |
+                      from\s+.* |
+                      live(?:\s+(?:at|from|in)\s+.*)? |
+                      acoustic |
+                      unplugged |
+                      demo |
+                      single\s+version |
+                      album\s+version |
+                      radio\s+(?:edit|version|mix) |
+                      extended\s+(?:mix|version) |
+                      original\s+(?:mix|version) |
+                      edit |
+                      bonus\s+track |
+                      mv |
+                      {quality}
+                  )
+                  (?:\s+{quality})*
               )
               \s*[\]\)]
             ",
-        )
+            quality = QUALITY_TOKEN,
+        ))
         .unwrap()
     })
 }
@@ -1619,26 +1671,55 @@ fn cleaner() -> &'static Regex {
 fn pipe_tag_cleaner() -> &'static Regex {
     static C: OnceLock<Regex> = OnceLock::new();
     C.get_or_init(|| {
-        Regex::new(
+        Regex::new(&format!(
             r"(?ix)
               \s*\|\s*
               (?:
-                  (?:official\s+)?(?:music\s+|lyric\s+|hd\s+|animated\s+)?video |
-                  (?:official\s+)?(?:music\s+)?audio |
-                  (?:official\s+)?visualizer |
-                  music\s+video |
-                  lyric\s+video |
-                  lyrics? |
-                  hd | uhd | mv | 4k | 8k
+                  (?:
+                      (?:[\w'\-]+\s+)*video |
+                      (?:[\w'\-]+\s+)*audio |
+                      (?:[\w'\-]+\s+)*visualizer |
+                      lyrics? |
+                      mv |
+                      {quality}
+                  )
+                  (?:\s+{quality})*
               )
               \s*$
             ",
-        )
+            quality = QUALITY_TOKEN,
+        ))
         .unwrap()
     })
 }
 
 pub fn clean_title(title: &str) -> String {
+    // Run the strip pipeline to a fixed point (bounded at 4 rounds).
+    //
+    // The steps are ordered, and a later step can reveal work for an earlier
+    // one. Concrete case: decorative-symbol stripping runs LAST, so a title
+    // like `Song 4K` followed by a trailing music-note emoji reaches the
+    // bare-tag cleaner with the emoji still on the end, the `\s*$` anchor
+    // fails, and `4K` survives the whole pipeline even though the very next
+    // step removes what was blocking it. A single pass cannot fix that no
+    // matter how the steps are ordered, because the reveal can go in either
+    // direction.
+    //
+    // Every step is idempotent and only ever shortens the string, so the loop
+    // converges. The bound is a safety net, not a real limit: two rounds
+    // settle every case seen in the wild.
+    let mut out = title.to_string();
+    for _ in 0..4 {
+        let next = clean_title_once(&out);
+        if next == out {
+            break;
+        }
+        out = next;
+    }
+    out
+}
+
+fn clean_title_once(title: &str) -> String {
     // 1. Strip trailing video/audio file extensions. YouTube uploads of legacy
     //    files often keep the original filename verbatim — e.g.
     //    `"Follow Me Uncle Kracker Lyrics.wmv"`. The extension shields the
@@ -1745,7 +1826,7 @@ fn file_extension_stripper() -> &'static Regex {
 fn bare_trailing_tag_cleaner() -> &'static Regex {
     static C: OnceLock<Regex> = OnceLock::new();
     C.get_or_init(|| {
-        Regex::new(
+        Regex::new(&format!(
             r"(?ix)
               (.*?\S)
               (?:
@@ -1758,12 +1839,13 @@ fn bare_trailing_tag_cleaner() -> &'static Regex {
                       official\s+(?:music\s+)?video |
                       official\s+audio |
                       official\s+visualizer |
-                      hd | uhd | 4k | 8k | 1080p | 1440p | 2160p
+                      {quality}
                   )
               )+
               \s*$
             ",
-        )
+            quality = QUALITY_TOKEN_BARE,
+        ))
         .unwrap()
     })
 }
@@ -2416,8 +2498,81 @@ mod tests {
         // false positives expected; vocabulary is restricted to file-format
         // container extensions, none of which look like English words.)
         assert_eq!(clean_title("Plain Title"), "Plain Title");
-        // Extension in the middle of the title (not trailing) is left alone
-        assert_eq!(clean_title("Song.mp3 (Live)"), "Song.mp3");
+        // An extension that is not trailing on the FIRST pass becomes
+        // trailing once the bracketed tag is gone, and the fixed-point loop
+        // then strips it. That is the outcome we want: `.mp3` in a title is
+        // always an uploader filename artifact, never part of a released
+        // song name, and `Song` is a better lyric query than `Song.mp3`.
+        // Before the loop existed this returned `Song.mp3`.
+        assert_eq!(clean_title("Song.mp3 (Live)"), "Song");
+
+        // ── v0.13.87 ── stacked / reordered quality tokens ───────────────
+        //
+        // The previous cleaner only matched quality tokens (4K, UHD, HD,
+        // 60FPS, Remastered) in fixed positions and never more than one per
+        // bracket. YouTube uploaders stack and reorder them freely, so the
+        // whole tag survived and poisoned the LRCLib query. All four of the
+        // cases below are real chart titles that returned "no lyrics found".
+
+        // 1. Quality token AFTER the video/audio terminal inside the bracket.
+        //    `(?:[\w'\-]+\s+)*video` could not reach the closing paren.
+        assert_eq!(clean_title("As It Was (Official Video 4K)"), "As It Was");
+        assert_eq!(clean_title("Song (Official Music Video HD)"), "Song");
+        assert_eq!(clean_title("Song (Official Video 4K 60fps)"), "Song");
+        assert_eq!(clean_title("Song [Official Audio HQ]"), "Song");
+
+        // 2. Bracket that is nothing but a run of quality tokens. Each token
+        //    was its own alternative, so only single-token brackets matched.
+        assert_eq!(
+            clean_title("BIRDS OF A FEATHER (Official Music Video) [4K UHD 60FPS]"),
+            "BIRDS OF A FEATHER"
+        );
+        assert_eq!(clean_title("Song [4K UHD]"), "Song");
+        assert_eq!(clean_title("Song (HD 1080p)"), "Song");
+
+        // 3. Remaster with the quality token AFTER it. The old branch was
+        //    `(?:\d{1,2}k\s+)?remaster(?:ed)?`, so `4K Remastered` matched
+        //    but `Remastered 4K` did not.
+        assert_eq!(
+            clean_title("Yellow (Official Video) [Remastered 4K]"),
+            "Yellow"
+        );
+        assert_eq!(clean_title("Song [Remastered 2011 HD]"), "Song");
+
+        // 4. Bare trailing quality run with a remaster token in it. The bare
+        //    cleaner had no remaster vocabulary and required the quality
+        //    token to be last.
+        assert_eq!(
+            clean_title("Lose Yourself [HD] 4K Remastered"),
+            "Lose Yourself"
+        );
+        assert_eq!(clean_title("Song 4K 60fps"), "Song");
+        assert_eq!(clean_title("Song Remastered 2019"), "Song");
+
+        // ── Safeguards: quality-looking tokens that are real title text ──
+        //
+        // A title that IS the tag survives (nothing but chrome left over
+        // would leave an empty query, which is worse than no strip).
+        assert_eq!(clean_title("4K"), "4K");
+        assert_eq!(clean_title("Remastered"), "Remastered");
+        // Interior quality tokens are never touched, only trailing runs.
+        assert_eq!(clean_title("4K Runner Up"), "4K Runner Up");
+        // Numbers that are part of the song name survive.
+        assert_eq!(clean_title("1979"), "1979");
+        assert_eq!(clean_title("Song 1979"), "Song 1979");
+        assert_eq!(clean_title("Level 7"), "Level 7");
+        // `p` suffix only strips at real resolution widths.
+        assert_eq!(clean_title("Song 22p"), "Song 22p");
+
+        // Fixed-point pipeline: decorative symbols are stripped LAST, so a
+        // quality token sitting behind a trailing emoji is invisible to the
+        // bare-tag cleaner until the second round.
+        assert_eq!(clean_title("Song 4K 🎵"), "Song");
+        assert_eq!(clean_title("Song (Official Video) 4K ♪"), "Song");
+        assert_eq!(clean_title("Song HD ►"), "Song");
+        // Convergence guard: a title that is nothing but chrome plus
+        // decoration must not collapse to an empty query.
+        assert_eq!(clean_title("🎵 4K 🎵"), "4K");
     }
 
     #[test]

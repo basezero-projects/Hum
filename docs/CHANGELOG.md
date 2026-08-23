@@ -6,6 +6,17 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.87] - 2026-08-23
+
+### Fixed
+- **Songs from YouTube stop coming back as "No lyrics found" when the video title carries stacked quality tags.** Uploaders decorate titles with things like `(Official Video 4K)`, `[4K UHD 60FPS]`, `[Remastered 4K]`, and `[HD] 4K Remastered`. Hum was only able to recognize those tags in one fixed position and one at a time, so the whole tag survived title cleanup, went into the lyric search as if it were part of the song name, and the search missed. Real titles that failed before this fix and work now: Harry Styles "As It Was (Official Video 4K)", Billie Eilish "BIRDS OF A FEATHER (Official Music Video) [4K UHD 60FPS]", Coldplay "Yellow (Official Video) [Remastered 4K]", and Eminem "Lose Yourself [HD] 4K Remastered". There is no new UI for this. It shows up as the Ribbon and Square overlays filling in with lyrics on tracks that previously sat empty.
+
+  Technically: quality and mastering tokens (`4K`, `8K`, `HD`, `UHD`, `HQ`, any `NNNp` resolution, any `NNfps` frame rate, `Remaster`, `Remastered`, `Remastered NNNN`, `NNNN Remastered`) are now one shared vocabulary in `lyrics.rs`, matched as a repeatable, order-independent set instead of as terminals in fixed slots. The bracketed cleaner accepts a run of them after the video/audio/visualizer terminal and also accepts a bracket made of nothing but quality tokens. The pipe-tag and bare-trailing cleaners use the same set, with the bare variant excluding `HQ` because it is a plausible word in a real title when it is not inside brackets.
+
+- **Uploader chrome hiding behind a trailing emoji is now removed too.** Titles like `Song 4K` followed by a music-note emoji kept the `4K`, because Hum stripped decorative symbols as its last step and nothing looked at the title again afterward. Title cleanup now repeats until the title stops changing (bounded at four rounds), so a strip that reveals more chrome gets a second look.
+
+  Side effect worth knowing: a media file extension that was not at the end of the title on the first pass now gets stripped once the tag in front of it is gone. `Song.mp3 (Live)` cleans to `Song` where it used to clean to `Song.mp3`. That is the better lyric query, since `.mp3` is always an upload artifact and never part of a released song name.
+
 ## [0.13.86] - 2026-08-20
 
 ### Changed
