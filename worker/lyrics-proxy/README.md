@@ -47,6 +47,25 @@ are never cached and come back as a 502, because Hum treats "could not reach
 the service" and "this track has no lyrics" as very different answers and
 inventing a miss here would undo that.
 
+## Zone gotcha: Browser Integrity Check
+
+Cloudflare's Browser Integrity Check is on zone-wide for `syvr.dev`, and it
+403s clients whose User-Agent looks scripted (Cloudflare error code 1010). Hum's
+own User-Agent happens to pass, but relying on that is a trap: the heuristics
+are Cloudflare's to change, and a desktop app is exactly the kind of caller they
+could decide to challenge. If that happened, every user on a filtered network
+would silently lose lyrics again.
+
+BIC is disabled for this host by a configuration rule in the `syvr.dev` zone,
+shared with `arc.syvr.dev`:
+
+```
+(http.host eq "arc.syvr.dev" or http.host eq "lyrics.syvr.dev")  ->  set_config { bic: false }
+```
+
+If another SYVR API host starts 403ing script clients, extend that rule's
+expression rather than turning BIC off across the zone.
+
 ## Working on it
 
 ```bash
