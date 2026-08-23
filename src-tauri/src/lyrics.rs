@@ -38,6 +38,66 @@ const USER_AGENT: &str = concat!(
     " (desktop lyrics overlay; https://github.com/basezero-projects/Hum)"
 );
 
+/// LRCLib, contacted directly. Always tried first.
+const LRCLIB_DIRECT_BASE: &str = "https://lrclib.net";
+
+/// SYVR-hosted front for the same LRCLib endpoints, used only when the direct
+/// route cannot be reached.
+///
+/// Some networks block `lrclib.net` at the TLS layer, keyed on the hostname in
+/// the ClientHello. Confirmed by handshaking one Cloudflare IP with different
+/// SNI values: `www.cloudflare.com` and `example.com` complete at TLS 1.3
+/// while `lrclib.net` is dropped on the same IP and port, identically through
+/// schannel and OpenSSL. No client-side setting escapes that, because the
+/// hostname is visible before any HTTP exists. Requesting through a hostname
+/// of ours puts `lyrics.syvr.dev` in the ClientHello instead, which those
+/// filters have no rule for.
+///
+/// Direct stays first on purpose. Only users who are actually blocked send
+/// their track titles through our infrastructure, and LRCLib keeps serving its
+/// own traffic for everyone else.
+const LRCLIB_PROXY_BASE: &str = "https://lyrics.syvr.dev";
+
+/// How long to stop attempting the direct route after it fails at the
+/// transport layer.
+///
+/// A network that blocks LRCLib blocks it for as long as the user is on that
+/// network, so retrying every lookup would spend a doomed connection attempt
+/// on every track for nothing. Ten minutes is short enough that moving to an
+/// unfiltered network recovers on its own without a restart.
+const DIRECT_SUPPRESSION: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// When set, the direct route failed recently and should be skipped until this
+/// instant. Cleared as soon as a direct request succeeds.
+static DIRECT_BLOCKED_UNTIL: std::sync::Mutex<Option<std::time::Instant>> =
+    std::sync::Mutex::new(None);
+
+fn direct_is_suppressed() -> bool {
+    let guard = DIRECT_BLOCKED_UNTIL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    match *guard {
+        Some(until) => std::time::Instant::now() < until,
+        None => false,
+    }
+}
+
+fn suppress_direct() {
+    let mut guard = DIRECT_BLOCKED_UNTIL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    *guard = Some(std::time::Instant::now() + DIRECT_SUPPRESSION);
+}
+
+fn clear_direct_suppression() {
+    let mut guard = DIRECT_BLOCKED_UNTIL
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if guard.is_some() {
+        *guard = None;
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WordSpan {
     pub time_ms: u32,
@@ -1038,6 +1098,82 @@ async fn fetch_lrclib(
     }
 }
 
+/// Outcome of one LRCLib HTTP call, after route selection.
+struct LrcHttpResponse {
+    status: reqwest::StatusCode,
+    body: String,
+}
+
+/// Issue a GET against LRCLib, trying the direct host first and the SYVR front
+/// only if the direct route fails to answer.
+///
+/// "Fails to answer" means a transport error or a 5xx. A 4xx is a real answer
+/// (LRCLib saying it has nothing, or that the query was unparseable) and is
+/// returned as-is, because retrying it through the proxy would produce the
+/// same 4xx one round trip later.
+///
+/// `params` is passed through `Url::parse_with_params` rather than formatted,
+/// so titles containing `&`, `?`, `#` or non-ASCII are escaped correctly.
+async fn lrclib_request(
+    client: &reqwest::Client,
+    path: &str,
+    params: &[(&str, &str)],
+) -> Result<LrcHttpResponse> {
+    let mut first_err: Option<anyhow::Error> = None;
+
+    let skip_direct = direct_is_suppressed();
+    let bases: &[&str] = if skip_direct {
+        &[LRCLIB_PROXY_BASE]
+    } else {
+        &[LRCLIB_DIRECT_BASE, LRCLIB_PROXY_BASE]
+    };
+
+    for (idx, base) in bases.iter().enumerate() {
+        let is_direct = *base == LRCLIB_DIRECT_BASE;
+        let url = reqwest::Url::parse_with_params(&format!("{base}{path}"), params)
+            .with_context(|| format!("build {base}{path} url"))?;
+
+        match client.get(url).send().await {
+            Ok(resp) => {
+                let status = resp.status();
+                if status.is_server_error() && idx + 1 < bases.len() {
+                    // Upstream is up but unhealthy. Worth one try on the other
+                    // route, but NOT worth suppressing direct: a 5xx means the
+                    // connection itself is fine, so the network is not blocking
+                    // us and future lookups should keep preferring direct.
+                    first_err = Some(anyhow::anyhow!("{base}{path} returned {status}"));
+                    continue;
+                }
+                if is_direct {
+                    clear_direct_suppression();
+                }
+                let body = resp
+                    .text()
+                    .await
+                    .with_context(|| format!("read {base}{path} body"))?;
+                return Ok(LrcHttpResponse { status, body });
+            }
+            Err(e) => {
+                if is_direct {
+                    // Transport failure on the direct route. On a filtered
+                    // network this is every request, so stop paying for it for
+                    // a while and go straight to the front.
+                    suppress_direct();
+                    eprintln!(
+                        "[lyrics] direct lrclib unreachable ({e}); using {LRCLIB_PROXY_BASE} for the next {}s",
+                        DIRECT_SUPPRESSION.as_secs()
+                    );
+                }
+                if first_err.is_none() {
+                    first_err = Some(anyhow::Error::new(e).context(format!("GET {base}{path}")));
+                }
+            }
+        }
+    }
+
+    Err(first_err.unwrap_or_else(|| anyhow::anyhow!("no route available for {path}")))
+}
+
 /// Returns Ok(Some(rec)) on a 200 hit, Ok(None) on any 4xx, Err on 5xx/network.
 ///
 /// `/api/get` requires exact-match artist + title to be useful — when artist
@@ -1063,20 +1199,16 @@ async fn try_get_lrclib(
     if !album.trim().is_empty() {
         params.push(("album_name", album));
     }
-    let url = reqwest::Url::parse_with_params("https://lrclib.net/api/get", &params)
-        .context("build /api/get url")?;
 
-    let resp = client.get(url).send().await.context("GET /api/get")?;
-    let status = resp.status();
-    if status.is_success() {
-        let body = resp.text().await.context("read /api/get body")?;
-        let rec: LrcRecord = serde_json::from_str(&body).context("parse /api/get json")?;
+    let resp = lrclib_request(client, "/api/get", &params).await?;
+    if resp.status.is_success() {
+        let rec: LrcRecord = serde_json::from_str(&resp.body).context("parse /api/get json")?;
         return Ok(Some(rec));
     }
-    if status.is_client_error() {
+    if resp.status.is_client_error() {
         return Ok(None);
     }
-    anyhow::bail!("/api/get returned {status}");
+    anyhow::bail!("/api/get returned {}", resp.status);
 }
 
 /// Single LRCLib `/api/search` call. Returns Ok(records) (possibly empty)
@@ -1098,20 +1230,15 @@ async fn try_get_lrclib(
 /// only; moved to `fetch_lrclib` so it also fires when records came back
 /// but pick_best filtered them all out.
 async fn try_search_lrclib_once(client: &reqwest::Client, title: &str) -> Result<Vec<LrcRecord>> {
-    let url =
-        reqwest::Url::parse_with_params("https://lrclib.net/api/search", &[("track_name", title)])
-            .context("build /api/search url")?;
-
-    let resp = client.get(url).send().await.context("GET /api/search")?;
-    let status = resp.status();
-    if status.is_client_error() {
+    let resp = lrclib_request(client, "/api/search", &[("track_name", title)]).await?;
+    if resp.status.is_client_error() {
         return Ok(Vec::new());
     }
-    if !status.is_success() {
-        anyhow::bail!("/api/search returned {status}");
+    if !resp.status.is_success() {
+        anyhow::bail!("/api/search returned {}", resp.status);
     }
-    let body = resp.text().await.context("read /api/search body")?;
-    let records: Vec<LrcRecord> = serde_json::from_str(&body).context("parse /api/search json")?;
+    let records: Vec<LrcRecord> =
+        serde_json::from_str(&resp.body).context("parse /api/search json")?;
     Ok(records)
 }
 
@@ -2481,6 +2608,49 @@ mod tests {
             parked.next_at > std::time::Instant::now() + std::time::Duration::from_secs(3600),
             "an exhausted retry must not come due again during playback"
         );
+    }
+
+    // The direct route is preferred so that only users on filtered networks
+    // send track titles through SYVR infrastructure. That preference is only
+    // worth anything if the suppression window actually expires, so a user who
+    // leaves a filtered network recovers without restarting Hum.
+    #[test]
+    fn direct_route_suppression_sets_and_clears() {
+        // This test owns a process-global, so leave it the way it was found.
+        let saved = *DIRECT_BLOCKED_UNTIL.lock().unwrap();
+
+        clear_direct_suppression();
+        assert!(!direct_is_suppressed(), "cleared state must allow direct");
+
+        suppress_direct();
+        assert!(
+            direct_is_suppressed(),
+            "a transport failure must skip direct"
+        );
+
+        clear_direct_suppression();
+        assert!(
+            !direct_is_suppressed(),
+            "a direct success must restore the preferred route immediately"
+        );
+
+        // An elapsed window reopens the direct route on its own, with no
+        // success needed to clear it. This is what lets a laptop that moves
+        // from a filtered network to an open one go back to talking to LRCLib
+        // directly instead of routing through us forever.
+        *DIRECT_BLOCKED_UNTIL.lock().unwrap() =
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        assert!(
+            !direct_is_suppressed(),
+            "suppression must lapse once the window passes"
+        );
+
+        assert!(
+            DIRECT_SUPPRESSION >= std::time::Duration::from_secs(60),
+            "too short a window means retrying a doomed connection on every track"
+        );
+
+        *DIRECT_BLOCKED_UNTIL.lock().unwrap() = saved;
     }
 
     #[test]

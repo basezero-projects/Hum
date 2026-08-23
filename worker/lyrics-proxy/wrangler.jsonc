@@ -1,0 +1,10 @@
+{
+  "$schema": "https://raw.githubusercontent.com/cloudflare/workers-sdk/main/packages/wrangler/config-schema.json",
+  "name": "syvr-hum-lyrics-proxy",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-22",
+  "observability": { "enabled": true },
+  "routes": [
+    { "pattern": "lyrics.syvr.dev", "custom_domain": true }
+  ]
+}

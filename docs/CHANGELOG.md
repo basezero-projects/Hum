@@ -6,6 +6,20 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.89] - 2026-08-23
+
+### Fixed
+- **Lyrics now work on networks that block LRCLib.** Some networks (certain ISPs, schools, workplaces) drop connections to `lrclib.net` outright, which left Hum with almost no lyrics at all: LRCLib carries nearly all English-language catalog, and the remaining fallback service carries very little of it. Hum now reaches LRCLib through `lyrics.syvr.dev` when the direct connection fails. There is no new setting and nothing to turn on. Tracks that showed "error fetching lyrics" or "no lyrics for <track>" on a blocked network now just show lyrics.
+
+  Hum still contacts LRCLib directly first, every time. Only a connection failure moves it to the fallback route, and it then skips the direct attempt for ten minutes so a blocked network does not cost a wasted connection on every single track. Any successful direct connection clears that straight away, so a laptop that moves from a blocked network to an open one goes back to talking to LRCLib itself with no restart. On a normal network nothing changes and nothing is routed through SYVR.
+
+  Measured on a blocked network: lyric lookups went from failing entirely to returning in about 200ms, with word-timed lyrics intact. That is faster than the 8 to 10 seconds LRCLib took directly even back when it was reachable, because the new route caches results at the edge.
+
+  Technically: the block is SNI-based, confirmed by handshaking a single Cloudflare IP with different SNI values (`www.cloudflare.com` completes at TLS 1.3, `lrclib.net` on the same IP and port is dropped, identically through schannel and OpenSSL, with DNS resolving correctly throughout). No client setting escapes that, since the hostname is visible before any HTTP exists. `lyrics.rs` gains `lrclib_request`, which owns route selection: a 4xx is a real answer and returned as-is, while transport failures and 5xx move to the other route. Only transport failures suppress the direct route, since a 5xx proves the connection itself is fine.
+
+### Added
+- **New Cloudflare Worker at `worker/lyrics-proxy`, deployed to `lyrics.syvr.dev`.** Proxies exactly two read-only LRCLib paths (`/api/get`, `/api/search`) to one fixed upstream. Anything else returns 404, non-GET returns 405, and query parameters outside LRCLib's own are dropped rather than forwarded. Deliberately unauthenticated, since a token shipped inside a desktop binary is public the moment someone opens the file; the path and upstream limits are the actual containment. Responses are cached at the edge for a day on hits and fifteen minutes on misses, the shorter miss window because LRCLib is community-contributed and a track with nothing today may have lyrics tomorrow. Transport failures and upstream 5xx are never cached and surface as 502, so a reachability problem can never be mistaken for a genuine "no lyrics" answer.
+
 ## [0.13.88] - 2026-08-23
 
 ### Fixed
