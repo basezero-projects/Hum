@@ -185,6 +185,12 @@ pub fn start(
             LruCache::new(NonZeroUsize::new(LYRICS_CACHE_CAP).expect("cap > 0")),
         ));
         let mut last_key = String::new();
+        // Retry schedule for tracks whose resolution ERRORED (primary source
+        // unreachable). Without this, `last_key` pins the failure: the track
+        // resolves once, errors, claims the key, and never resolves again for
+        // the rest of the song no matter how quickly the network recovers.
+        // NotFound and successful results are final and are not retried.
+        let mut error_retry: Option<ErrorRetry> = None;
         // Wait-for-bridge state. When a foreground YouTube track is detected
         // but the bridge hasn't yet published normalized metadata, hold off
         // resolving the raw channel/decorated title for a short grace window
@@ -331,7 +337,17 @@ pub fn start(
 
             let key = cache_key(&effective_artist, &effective_title, snap.duration_ms);
             if key == last_key {
-                continue;
+                // Same track we already resolved. Normally nothing to do, but
+                // a resolution that ERRORED is not a final answer, so let it
+                // back through once its backoff has elapsed. The loop already
+                // wakes on `timeline-changed` (~1Hz while playing), so this
+                // needs no timer of its own.
+                let retry_due = error_retry
+                    .as_ref()
+                    .is_some_and(|r| r.key == key && std::time::Instant::now() >= r.next_at);
+                if !retry_due {
+                    continue;
+                }
             }
 
             // Wait-for-bridge gate. A foreground YouTube track arrives via
@@ -473,7 +489,25 @@ pub fn start(
             }
 
             let outcome = resolve_lyrics(&app, &client, &mem, &track, &key).await;
+            let errored = outcome.source == "error";
             apply_outcome(&app, &shared, &key, &track, outcome).await;
+
+            if errored {
+                error_retry = Some(match error_retry.take() {
+                    Some(r) if r.key == key => r.advance(),
+                    _ => ErrorRetry::first(key.clone()),
+                });
+                if let Some(r) = error_retry.as_ref() {
+                    if r.exhausted() {
+                        eprintln!(
+                            "[lyrics] giving up on '{}' after {} attempts",
+                            track.title, r.attempts
+                        );
+                    }
+                }
+            } else {
+                error_retry = None;
+            }
         }
     });
 }
@@ -539,12 +573,22 @@ async fn resolve_lyrics(
     }
 
     let mut errors: Vec<String> = Vec::new();
-    // Did at least one source authoritatively reply "no match" (vs erroring)?
-    // If yes, we treat the overall result as NotFound even when other sources
-    // errored — a peer's network blip doesn't downgrade an authoritative miss
-    // to a generic "fetch failed." Only when *every* source errored is this
-    // a real fetch failure that warrants `Status::Error`.
-    let mut any_clean_notfound = false;
+    // Did the PRIMARY source (LRCLib) authoritatively reply "no match", as
+    // opposed to failing to answer at all?
+    //
+    // This used to be `any_clean_notfound`: any source replying "no match"
+    // was enough to call the whole resolution an authoritative miss, on the
+    // theory that a peer's network blip should not downgrade a real miss to a
+    // generic fetch failure. That reasoning is backwards when the source that
+    // blipped is the one carrying the coverage. LRCLib holds almost all
+    // Western catalog; NetEase holds very little of it. So "LRCLib
+    // unreachable + NetEase says no" was rendering as a confident "no lyrics
+    // found" on songs that plainly have lyrics, and the user had no way to
+    // tell a real miss from an unreachable provider.
+    //
+    // Only LRCLib answering cleanly can make the result authoritative. A
+    // NetEase miss on its own means nothing when LRCLib never spoke.
+    let mut lrclib_clean_miss = false;
 
     let (lrclib_result, netease_result) = tokio::join!(
         fetch_lrclib(
@@ -579,7 +623,9 @@ async fn resolve_lyrics(
             netease_line_fallback = Some((cached, source));
         }
         Ok(Ok(_)) => {
-            any_clean_notfound = true;
+            // Clean NetEase miss. Deliberately does NOT mark the resolution
+            // authoritative: NetEase not having a Western track is the normal
+            // case, not evidence the track has no lyrics.
         }
         Ok(Err(e)) => {
             eprintln!("[lyrics] netease failed for '{cleaned_title}' / '{cleaned_artist}': {e:#}");
@@ -601,7 +647,7 @@ async fn resolve_lyrics(
             };
         }
         Ok(_) => {
-            any_clean_notfound = true;
+            lrclib_clean_miss = true;
         }
         Err(e) => {
             eprintln!("[lyrics] lrclib failed for '{cleaned_title}' / '{cleaned_artist}': {e:#}");
@@ -619,21 +665,34 @@ async fn resolve_lyrics(
         };
     }
 
-    if any_clean_notfound {
-        // At least one authoritative miss — show NotFound. Errors (if any)
-        // still pass through to `CurrentLyrics.errors` so the dev console can
-        // surface the peer timeout for debugging, but the user-facing status
-        // is the clean miss, not a generic "error fetching lyrics."
+    miss_outcome(lrclib_clean_miss, errors)
+}
+
+/// Final decision when no source produced lyrics.
+///
+/// Pure and separated from `resolve_lyrics` on purpose: the rule it encodes is
+/// exactly the one that was wrong before, and getting it wrong is invisible in
+/// normal use. A false "no lyrics found" looks identical to a real one, so the
+/// only thing standing between a regression and weeks of misdiagnosis is a
+/// test that states the invariant outright.
+///
+/// The invariant: only the PRIMARY source can make a miss authoritative. If
+/// LRCLib never answered we do not know whether the track has lyrics, and
+/// saying "no lyrics found" would be a claim we cannot support.
+fn miss_outcome(lrclib_clean_miss: bool, errors: Vec<String>) -> Outcome {
+    if lrclib_clean_miss {
+        // The primary answered and had nothing. Show NotFound. Peer errors
+        // (if any) still pass through to `CurrentLyrics.errors` so the dev
+        // console can surface them, but the user-facing status is the clean
+        // miss, not a generic "error fetching lyrics."
         //
         // Don't cache NotFound in memory either. Combined with the symmetric
         // disk-cache change in v0.10.15 (read_store discards NotFound,
         // write_store skips NotFound), this means every track change re-runs
         // the resolver against an unfindable track. The algorithm is still
-        // evolving — every recent release added new YouTube-noise patterns,
-        // punctuation normalization, or duration tweaks — and caching
-        // NotFound was masking those improvements within a session. Cost:
-        // ~1-2s of parallel API calls per replay of an unfindable track,
-        // which runs in the background and doesn't block the overlay UI.
+        // evolving, so caching NotFound was masking improvements within a
+        // session. Cost is ~1-2s of parallel API calls per replay of an
+        // unfindable track, in the background, not blocking the overlay.
         Outcome {
             cached: CachedLyrics::NotFound,
             source: "all-sources".into(),
@@ -641,9 +700,69 @@ async fn resolve_lyrics(
             errors,
         }
     } else {
-        // Every source errored — a true fetch failure. Don't cache; surface
-        // as Status::Error so the user knows to wait it out.
+        // The primary never answered, so the track's lyric status is unknown.
+        // Don't cache; surface as Status::Error so the user sees "error
+        // fetching lyrics" rather than a false "no lyrics found", and so the
+        // retry schedule in `start` picks it back up.
         Outcome::error(errors)
+    }
+}
+
+/// Backoff schedule for a track whose resolution errored.
+///
+/// Kept deliberately small: the resolver loop already wakes roughly once a
+/// second on `timeline-changed`, so this only has to say "not yet" until the
+/// delay has passed. Delays climb so a genuinely unreachable provider is not
+/// hammered for the length of every song, and stop entirely after
+/// `MAX_ATTEMPTS` so a persistently blocked source costs a bounded number of
+/// requests per track rather than one per second.
+struct ErrorRetry {
+    key: String,
+    attempts: u32,
+    next_at: std::time::Instant,
+}
+
+impl ErrorRetry {
+    const MAX_ATTEMPTS: u32 = 5;
+    /// Delay before attempt N+1, indexed by attempts already made.
+    const BACKOFF_SECS: [u64; 5] = [2, 5, 15, 45, 120];
+
+    /// Seconds to wait before the next attempt. `attempts` counts resolutions
+    /// already tried for this key, so the delay is `BACKOFF_SECS[attempts - 1]`.
+    /// Clamped at both ends: `max(1)` guards the subtraction, `min(len - 1)`
+    /// repeats the longest delay instead of running off the table.
+    fn delay_secs_for(attempts: u32) -> u64 {
+        let idx = (attempts.max(1) as usize - 1).min(Self::BACKOFF_SECS.len() - 1);
+        Self::BACKOFF_SECS[idx]
+    }
+
+    fn schedule(key: String, attempts: u32) -> Self {
+        let delay = std::time::Duration::from_secs(Self::delay_secs_for(attempts));
+        Self {
+            key,
+            attempts,
+            next_at: std::time::Instant::now() + delay,
+        }
+    }
+
+    fn first(key: String) -> Self {
+        Self::schedule(key, 1)
+    }
+
+    fn advance(self) -> Self {
+        if self.attempts >= Self::MAX_ATTEMPTS {
+            // Exhausted. Park it far enough out that the gate never reopens
+            // for this track, without needing a separate "gave up" state.
+            return Self {
+                next_at: std::time::Instant::now() + std::time::Duration::from_secs(86_400),
+                ..self
+            };
+        }
+        Self::schedule(self.key, self.attempts + 1)
+    }
+
+    fn exhausted(&self) -> bool {
+        self.attempts >= Self::MAX_ATTEMPTS
     }
 }
 
@@ -2289,6 +2408,80 @@ fn write_store(app: &AppHandle, key: &str, cached: &CachedLyrics) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The rule these tests pin down is the one that was inverted before
+    // v0.13.88: a NetEase miss was allowed to make the whole resolution an
+    // authoritative "no lyrics found" even when LRCLib had errored and never
+    // answered. LRCLib carries nearly all Western catalog; NetEase carries
+    // very little of it, so that combination produced confident false misses
+    // on hugely popular songs, and hid a network fault for weeks because a
+    // fabricated miss is indistinguishable from a real one on screen.
+    #[test]
+    fn only_the_primary_source_can_make_a_miss_authoritative() {
+        // Primary answered and had nothing: a real miss.
+        let out = miss_outcome(true, Vec::new());
+        assert!(matches!(out.cached, CachedLyrics::NotFound));
+        assert_eq!(out.source, "all-sources");
+        assert!(!out.persist, "a miss must never be cached");
+
+        // Primary answered and had nothing, peer blew up: still a real miss,
+        // and the peer error is kept for the dev console.
+        let out = miss_outcome(true, vec!["netease: timed out".into()]);
+        assert!(matches!(out.cached, CachedLyrics::NotFound));
+        assert_eq!(out.source, "all-sources");
+        assert_eq!(out.errors, vec!["netease: timed out".to_string()]);
+
+        // Primary never answered: unknown, NOT a miss. This is the case that
+        // used to render as "no lyrics found".
+        let out = miss_outcome(false, vec!["lrclib: connection closed".into()]);
+        assert_eq!(out.source, "error");
+        assert!(!out.persist);
+        assert_eq!(out.errors, vec!["lrclib: connection closed".to_string()]);
+
+        // Primary never answered and nothing was recorded: still unknown.
+        // Silence from the primary is never evidence of absence.
+        let out = miss_outcome(false, Vec::new());
+        assert_eq!(out.source, "error");
+    }
+
+    #[test]
+    fn error_retry_backs_off_then_gives_up() {
+        // Delay before attempt N+1 is BACKOFF_SECS[N-1].
+        assert_eq!(ErrorRetry::delay_secs_for(1), 2);
+        assert_eq!(ErrorRetry::delay_secs_for(2), 5);
+        assert_eq!(ErrorRetry::delay_secs_for(3), 15);
+        assert_eq!(ErrorRetry::delay_secs_for(4), 45);
+        assert_eq!(ErrorRetry::delay_secs_for(5), 120);
+        // Past the end of the table the longest delay repeats rather than
+        // panicking on an out-of-range index.
+        assert_eq!(ErrorRetry::delay_secs_for(99), 120);
+        // Guards the `attempts - 1` arithmetic against underflow.
+        assert_eq!(ErrorRetry::delay_secs_for(0), 2);
+
+        // A fresh failure is scheduled, not exhausted.
+        let r = ErrorRetry::first("k".into());
+        assert_eq!(r.attempts, 1);
+        assert!(!r.exhausted());
+        assert!(r.next_at > std::time::Instant::now());
+
+        // Repeated failures climb to the cap and then stop retrying.
+        let mut r = ErrorRetry::first("k".into());
+        for expected in 2..=ErrorRetry::MAX_ATTEMPTS {
+            r = r.advance();
+            assert_eq!(r.attempts, expected);
+            assert_eq!(r.key, "k", "retry must stay bound to its track key");
+        }
+        assert!(r.exhausted());
+
+        // Advancing an exhausted schedule parks it far out instead of
+        // reopening the gate every wake.
+        let parked = r.advance();
+        assert!(parked.exhausted());
+        assert!(
+            parked.next_at > std::time::Instant::now() + std::time::Duration::from_secs(3600),
+            "an exhausted retry must not come due again during playback"
+        );
+    }
 
     #[test]
     fn cleans_titles() {

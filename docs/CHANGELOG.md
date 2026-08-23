@@ -6,6 +6,19 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.88] - 2026-08-23
+
+### Fixed
+- **Hum no longer says "no lyrics for <track>" when it simply could not reach the lyrics service.** The overlay status line now reads "error fetching lyrics" in that situation, which is the honest answer, and the not-found message is reserved for tracks the primary lyrics service actually answered about. Before this, a song could show a confident "no lyrics" even though nothing had checked properly, and there was no way to tell the two apart on screen.
+
+  Why it mattered: Hum asks two services, LRCLib and NetEase. LRCLib holds nearly all English-language and Western catalog; NetEase holds very little of it. The old rule let ANY service replying "no match" settle the question, so "LRCLib unreachable plus NetEase says no" rendered as a real miss. On a network that blocks LRCLib, that turned into "no lyrics found" for huge, obviously-lyricked songs. Only the primary service can settle it now. A NetEase miss on its own means nothing, because NetEase not carrying a Western track is the normal case rather than evidence the track has no lyrics.
+
+  Technically: `lyrics.rs::resolve_lyrics` replaces the `any_clean_notfound` flag with `lrclib_clean_miss`, and the final decision moves into a pure `miss_outcome` helper so the rule is unit-tested rather than buried in an async network path.
+
+- **A lyrics fetch that fails mid-song now retries instead of staying broken until the next track.** If the network hiccups while a song is loading, Hum tries again a few times while that song is still playing and fills the lyrics in when it succeeds. Previously the first failure stuck for the rest of the track no matter how quickly the connection recovered, because the resolver marked the track as handled and never revisited it.
+
+  Retries back off at 2, 5, 15, 45, then 120 seconds and stop after five, so a genuinely unreachable service costs a bounded number of requests per track rather than one per second. Successful and genuine not-found results are final and are never retried. No new setting and no new UI: the status line simply moves from "error fetching lyrics" to lyrics on its own.
+
 ## [0.13.87] - 2026-08-23
 
 ### Fixed
