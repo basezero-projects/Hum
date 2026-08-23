@@ -4,7 +4,6 @@ Out-of-scope-to-fix-right-now things noticed during work. Each line should have 
 
 ## Open
 
-- **Worker observability logs track titles for users on filtered networks.** `worker/lyrics-proxy` has `observability: { enabled: true }`, and request URLs carry `track_name` / `artist_name`, so those land in Cloudflare logs. Users on unfiltered networks never touch the Worker (Hum tries LRCLib directly first), so only blocked users are affected. Decide before public launch whether to keep it, sample it down, or strip query strings from logs.
 
 - **The Privacy policy action depends on an unregistered domain.** HUM-10F safely fixes the destination to `https://humlyrics.com/privacy`, but the page cannot serve customers until `humlyrics.com` is registered and the purchase site is deployed there. HUM-10G owns that launch work.
 - **Promotional links still use the broad frontend opener permission.** HUM-10F routes support and privacy through fixed Rust-owned destinations, but `Overlay.tsx` still opens remote promotional URLs through `opener:default`. Move promo clicks behind a validated Rust allowlist in a later security-hardening slice.
