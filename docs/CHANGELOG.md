@@ -6,6 +6,25 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.90] - 2026-08-23
+
+### Added
+- **New COVERAGE panel in the Dev Console showing how often Hum actually finds lyrics.** It sits between CURRENT TRACK and LYRICS, and leads with a single big percentage ("94.2% lyrics found") over a line reading "128 tracks 341 plays". Under that is a colour-coded breakdown: green for **synced** and **word-timed**, grey for **instrumental**, amber for **not found**, red for **errored**, dim grey for **unsupported**. The tally refreshes when the window opens and every 30 seconds after, so a long unattended listening session can be checked at a glance without restarting anything.
+
+  The percentage counts found lyrics over found plus not-found plus instrumental. Errored and unsupported are deliberately left out, and the panel says so underneath: a provider Hum could not reach is not evidence about catalog coverage, and a source that publishes no readable metadata was never looked up in the first place. Rolling those into one "failure" number is exactly the mistake that hid a network fault for weeks.
+
+- **"Export CSV" button in the same panel.** Writes `hum-lyric-report.csv` to the Desktop and shows the full path underneath in green (or the error in red). Failures are sorted to the top of the file, so with hundreds of rows the interesting ones are not scattered through the successes. Columns: outcome, provider, plays, raw artist, raw title, cleaned artist, cleaned title, duration, line count, word-timed, source app, bridge source, page URL, search URL, and any provider errors.
+
+  `raw title` next to `cleaned title` is the pair that matters when reading a miss: it shows at a glance whether a track failed because of how Hum parsed the video title or because the lyrics genuinely are not out there.
+
+- **Every lyric resolution is now recorded, successes included**, in `lyric-resolutions.json` beside the lyric cache (`%APPDATA%\com.syvr.hum\`). One row per distinct track, holding the newest 5,000. Replays and retries update the existing row and bump its play count rather than appending, so a song left on loop cannot crowd out everything else, and a track that starts failing and later succeeds is not still counted as a miss. Outcomes recorded are `synced`, `plain`, `instrumental`, `not_found`, `error`, and `unsupported`, each alongside the provider that produced it (`lrclib`, `lrclib-search`, `netease`, `memory`, `store`, `all-sources`, `error`, `mashup-skip`).
+
+  Successes are recorded because the useful number is a rate, not a count. "Forty misses" means nothing on its own; "forty out of six hundred" is something you can act on.
+
+- **YouTube video URLs are captured when the tab is in the foreground.** Recorded per track and included in the CSV as `page_url`. Read from Chrome's address bar with a single targeted accessibility lookup against a window Hum has already located, rather than a tree walk. A `search_url` (a YouTube search for the artist and title) is always filled in as well, so any track can be found again even when no address bar was readable.
+
+  Known limitation, in plain terms: the address bar only ever shows the tab you are looking at. A song playing in a background tab records whatever the visible tab happens to be, so a URL that disagrees with the track title means the song was in the background, not that something is broken. Once a good URL has been captured for a track, a later background play will not erase it.
+
 ## [0.13.89] - 2026-08-23
 
 ### Fixed

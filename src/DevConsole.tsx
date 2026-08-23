@@ -17,13 +17,61 @@ type LogEntry = {
   color: string;
 };
 
+type LyricReport = {
+  tracks: number;
+  plays: number;
+  resolved: number;
+  synced: number;
+  word_timed: number;
+  not_found: number;
+  errored: number;
+  unsupported: number;
+  instrumental: number;
+  hit_rate_pct: number;
+};
+
 const MAX_LOG = 80;
 
 export default function DevConsole() {
   const [track, setTrack] = useState<CurrentTrack | null>(null);
   const [lyrics, setLyrics] = useState<CurrentLyrics | null>(null);
   const [log, setLog] = useState<LogEntry[]>([]);
+  const [report, setReport] = useState<LyricReport | null>(null);
+  const [exported, setExported] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
+
+  // Refresh the coverage tally on open and every 30s after, so a long
+  // unattended listening session can be checked at a glance without
+  // restarting anything.
+  useEffect(() => {
+    let alive = true;
+    const pull = () => {
+      invoke<LyricReport>("get_lyric_report")
+        .then((r) => alive && setReport(r))
+        .catch(() => {});
+    };
+    pull();
+    const id = setInterval(pull, 30_000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+
+  const onExport = async () => {
+    setBusy(true);
+    setExported(null);
+    try {
+      const path = await invoke<string>("export_lyric_report");
+      setExported(path);
+      setReport(await invoke<LyricReport>("get_lyric_report"));
+    } catch (e) {
+      setExported(`Export failed: ${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   useEffect(() => {
     const pushLog = (entry: Omit<LogEntry, "ts">) => {
@@ -152,6 +200,102 @@ export default function DevConsole() {
           </>
         ) : (
           <div style={{ color: "#666" }}>Waiting for an active session…</div>
+        )}
+      </section>
+
+      <section
+        style={{
+          background: "#15151c",
+          border: "1px solid #2a2a36",
+          borderRadius: 8,
+          padding: 16,
+          marginBottom: 12,
+        }}
+      >
+        <div
+          style={{
+            fontSize: 11,
+            color: "#888",
+            marginBottom: 8,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <span>COVERAGE</span>
+          <button
+            onClick={onExport}
+            disabled={busy}
+            style={{
+              background: busy ? "#23232e" : "#2a2a36",
+              color: busy ? "#777" : "#ddd",
+              border: "1px solid #3a3a48",
+              borderRadius: 5,
+              padding: "4px 10px",
+              fontSize: 11,
+              cursor: busy ? "default" : "pointer",
+            }}
+          >
+            {busy ? "Exporting…" : "Export CSV"}
+          </button>
+        </div>
+        {report === null || report.tracks === 0 ? (
+          <div style={{ color: "#666" }}>Nothing resolved yet.</div>
+        ) : (
+          <>
+            <div style={{ fontSize: 22, fontWeight: 600 }}>
+              {report.hit_rate_pct}%{" "}
+              <span style={{ fontSize: 12, color: "#888", fontWeight: 400 }}>
+                lyrics found
+              </span>
+            </div>
+            <div style={{ fontSize: 12, color: "#aaa", marginTop: 6 }}>
+              {report.tracks} tracks · {report.plays} plays
+            </div>
+            <div
+              style={{
+                fontSize: 12,
+                marginTop: 8,
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 12,
+              }}
+            >
+              <span style={{ color: "#7bd88f" }}>
+                {report.synced} synced
+              </span>
+              <span style={{ color: "#7bd88f" }}>
+                {report.word_timed} word-timed
+              </span>
+              <span style={{ color: "#888" }}>
+                {report.instrumental} instrumental
+              </span>
+              <span style={{ color: "#e0c060" }}>
+                {report.not_found} not found
+              </span>
+              <span style={{ color: "#f18c8c" }}>{report.errored} errored</span>
+              <span style={{ color: "#666" }}>
+                {report.unsupported} unsupported
+              </span>
+            </div>
+            <div style={{ fontSize: 11, color: "#666", marginTop: 8 }}>
+              Hit rate counts found over found plus not-found plus
+              instrumental. Errored and unsupported are excluded: an
+              unreachable provider is not a coverage gap.
+            </div>
+          </>
+        )}
+        {exported && (
+          <div
+            style={{
+              fontSize: 11,
+              color: exported.startsWith("Export failed") ? "#f18c8c" : "#7bd88f",
+              marginTop: 8,
+              wordBreak: "break-all",
+            }}
+          >
+            {exported}
+          </div>
         )}
       </section>
 

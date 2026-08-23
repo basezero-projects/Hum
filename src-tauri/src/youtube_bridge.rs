@@ -138,6 +138,7 @@ impl WebPlayerProbe for YouTubeProbe {
                 .unwrap_or(0);
 
             return Ok(Some(WebBridgeTrack {
+                page_url: None,
                 title: String::new(),
                 artist: String::new(),
                 album: String::new(),
@@ -181,7 +182,13 @@ impl WebPlayerProbe for YouTubeProbe {
         // timeline for YouTube. blend_bridge_into_snapshot only overwrites
         // those fields when they're Some, so SMTC's real position survives
         // while this supplies just the cleaned title/artist.
+        // Diagnostics only, and only on the real-track path: an ad has no page
+        // worth recording, and the resolver never reads this. Costs one
+        // targeted UIA lookup against a window we have already located.
+        let page_url = crate::web_bridge::read_chromium_address_bar(hwnd);
+
         Ok(Some(WebBridgeTrack {
+            page_url,
             title,
             artist,
             album: String::new(),

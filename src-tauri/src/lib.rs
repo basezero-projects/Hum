@@ -476,6 +476,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_current_track,
             get_current_lyrics,
+            lyrics::get_lyric_report,
+            lyrics::export_lyric_report,
             get_current_album_art,
             get_overlay_mode,
             set_overlay_mode,

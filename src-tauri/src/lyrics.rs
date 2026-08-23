@@ -32,6 +32,23 @@ const LYRICS_CACHE_CAP: usize = 256;
 use crate::media::{CurrentTrack, SharedSnapshot};
 
 const STORE_FILE: &str = "lyrics-cache.json";
+
+/// Per-track log of how every lyric resolution turned out, kept beside the
+/// lyric cache in the app data dir (`%APPDATA%\com.syvr.hum\`).
+///
+/// Records SUCCESSES as well as failures, because the question worth answering
+/// is a rate, not a count. "Forty misses" means nothing on its own; "forty
+/// misses out of six hundred" is a decision. It also means a miss can be read
+/// in context: the raw title next to the cleaned title next to the provider
+/// that answered is usually enough to tell a title-parsing problem from a
+/// genuine catalog gap without reproducing anything.
+const RESOLUTION_LOG_FILE: &str = "lyric-resolutions.json";
+
+/// Keep the newest N distinct tracks. Sized for an all-day unattended session:
+/// continuous playback at roughly three and a half minutes a track is about
+/// 400 tracks in 24 hours, so this holds several days without pruning, and
+/// still cannot grow without bound on a user's machine.
+const RESOLUTION_LOG_CAP: usize = 5_000;
 const USER_AGENT: &str = concat!(
     "hum/",
     env!("CARGO_PKG_VERSION"),
@@ -169,6 +186,16 @@ pub struct TrackEcho {
     pub artist: String,
     pub album: String,
     pub duration_ms: u64,
+    /// Which app is playing, e.g. `chrome.exe` or `Spotify.exe`. Diagnostics
+    /// only. Defaulted on deserialize so older persisted payloads still load.
+    #[serde(default)]
+    pub source_app_id: Option<String>,
+    /// Which browser bridge supplied the metadata, e.g. `youtube-web`.
+    #[serde(default)]
+    pub bridge_source: Option<String>,
+    /// Address-bar URL when a probe could read it. Foreground tab only.
+    #[serde(default)]
+    pub page_url: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Default, PartialEq, Eq)]
@@ -464,6 +491,9 @@ pub fn start(
                                 artist: effective_artist.clone(),
                                 album: effective_album.clone(),
                                 duration_ms: snap.duration_ms,
+                                source_app_id: snap.source_app_id.clone(),
+                                bridge_source: None,
+                                page_url: None,
                             },
                             promo: None,
                         };
@@ -477,11 +507,27 @@ pub fn start(
 
             last_key = key.clone();
 
+            // Read the bridge once more purely for diagnostics. The resolver
+            // does not use these; they exist so the resolution log can say
+            // which app and which page a result came from.
+            #[cfg(windows)]
+            let (bridge_source, page_url) = {
+                let b = web_bridge.read().await;
+                b.as_ref()
+                    .map(|t| (Some(t.source.clone()), t.page_url.clone()))
+                    .unwrap_or((None, None))
+            };
+            #[cfg(not(windows))]
+            let (bridge_source, page_url): (Option<String>, Option<String>) = (None, None);
+
             let track = TrackEcho {
                 title: effective_title.clone(),
                 artist: effective_artist.clone(),
                 album: effective_album.clone(),
                 duration_ms: snap.duration_ms,
+                source_app_id: snap.source_app_id.clone(),
+                bridge_source,
+                page_url,
             };
 
             if unreliable_no_bridge || is_video_bridge {
@@ -847,6 +893,320 @@ impl Outcome {
     }
 }
 
+/// How one distinct track resolved. Repeats update the entry in place.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct LyricResolution {
+    first_seen_unix_ms: u64,
+    last_seen_unix_ms: u64,
+    /// How many times this track has been resolved. Replays and retries bump
+    /// this instead of appending, so one song on loop cannot crowd the log.
+    plays: u32,
+
+    // ---- outcome ----
+    /// `synced`, `plain`, `instrumental`, `not_found`, `error`, or
+    /// `unsupported`. `synced` and `plain` are the successes.
+    outcome: String,
+    /// Which path produced it: `lrclib`, `lrclib-search`, `netease`, `memory`,
+    /// `store`, `all-sources`, `error`, `mashup-skip`, or a bridge id.
+    provider: String,
+    line_count: usize,
+    /// Whether the lyrics carried per-word timing, not just per-line.
+    word_timed: bool,
+    /// Per-provider failures, when there were any.
+    errors: Vec<String>,
+
+    // ---- identity ----
+    /// Exactly what the source reported, uncleaned. This is the field that
+    /// shows whether a miss is really a title-parsing problem.
+    raw_title: String,
+    raw_artist: String,
+    /// What actually went to the lyric providers.
+    cleaned_title: String,
+    cleaned_artist: String,
+    album: String,
+    duration_ms: u64,
+    /// e.g. `chrome.exe`, `Spotify.exe`.
+    source_app_id: Option<String>,
+    /// e.g. `youtube-web`, when a browser bridge supplied the metadata.
+    bridge_source: Option<String>,
+    /// Address-bar URL when a probe could read it. Foreground tab only.
+    page_url: Option<String>,
+    /// Always present, so a track can be found again even with no `page_url`.
+    search_url: String,
+}
+
+/// Summary of the resolution log, plus the rows behind it.
+#[derive(Clone, Debug, Serialize)]
+pub struct LyricReport {
+    /// Distinct tracks seen.
+    tracks: usize,
+    /// Total resolutions, counting replays.
+    plays: u32,
+    /// Tracks that produced usable lyrics (`synced` or `plain`).
+    resolved: usize,
+    /// Of those, how many had line timing.
+    synced: usize,
+    /// Of the synced ones, how many had per-word timing.
+    word_timed: usize,
+    /// Answered, but the track has no lyrics to find.
+    not_found: usize,
+    /// Never got an answer. NOT a coverage signal: these are unreachable
+    /// providers, and lumping them in with `not_found` is the mistake that hid
+    /// a network fault for weeks.
+    errored: usize,
+    /// Source published no readable metadata, so nothing was ever looked up.
+    /// Excluded from the hit rate because there was no track to resolve.
+    unsupported: usize,
+    /// Instrumentals. Counted apart from misses: correctly identifying a track
+    /// as having no vocals is a success, not a gap.
+    instrumental: usize,
+    /// `resolved` over everything that was genuinely attempted, as a
+    /// percentage. Excludes `unsupported` and `errored`.
+    hit_rate_pct: f64,
+    /// Every row, oldest to newest by last sighting.
+    entries: Vec<LyricResolution>,
+}
+
+/// Read back the resolution log with a summary on top.
+///
+/// The counts deliberately keep `not_found`, `errored`, and `unsupported`
+/// apart instead of folding them into one failure number. They mean different
+/// things: only `not_found` says anything about catalog coverage, `errored`
+/// points at the network, and `unsupported` means no lookup ever happened.
+#[tauri::command]
+pub fn get_lyric_report(app: AppHandle) -> LyricReport {
+    let entries: Vec<LyricResolution> = app
+        .store(RESOLUTION_LOG_FILE)
+        .ok()
+        .and_then(|s| s.get("resolutions"))
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+
+    let count = |name: &str| entries.iter().filter(|e| e.outcome == name).count();
+    let synced = count("synced");
+    let plain = count("plain");
+    let not_found = count("not_found");
+    let errored = count("error");
+    let unsupported = count("unsupported");
+    let instrumental = count("instrumental");
+    let resolved = synced + plain;
+
+    let attempted = resolved + not_found + instrumental;
+    let hit_rate_pct = if attempted == 0 {
+        0.0
+    } else {
+        (resolved as f64 / attempted as f64) * 100.0
+    };
+
+    LyricReport {
+        tracks: entries.len(),
+        plays: entries.iter().map(|e| e.plays).sum(),
+        resolved,
+        synced,
+        word_timed: entries.iter().filter(|e| e.word_timed).count(),
+        not_found,
+        errored,
+        unsupported,
+        instrumental,
+        hit_rate_pct: (hit_rate_pct * 10.0).round() / 10.0,
+        entries,
+    }
+}
+
+/// Write the resolution log to a CSV on the desktop and return its path.
+///
+/// CSV because the point is to sort and filter a few hundred rows by outcome,
+/// which a spreadsheet does in one click and a JSON blob does not.
+#[tauri::command]
+pub fn export_lyric_report(app: AppHandle) -> Result<String, String> {
+    use std::fmt::Write as _;
+
+    let report = get_lyric_report(app.clone());
+
+    let mut csv = String::new();
+    csv.push_str(
+        "outcome,provider,plays,raw_artist,raw_title,cleaned_artist,cleaned_title,duration_ms,line_count,word_timed,source_app_id,bridge_source,page_url,search_url,errors
+",
+    );
+
+    // Failures first: with hundreds of rows, the interesting ones should not
+    // be scattered through the successes.
+    let rank = |o: &str| match o {
+        "error" => 0,
+        "not_found" => 1,
+        "unsupported" => 2,
+        _ => 3,
+    };
+    let mut rows = report.entries.clone();
+    rows.sort_by_key(|e| rank(&e.outcome));
+
+    let esc = |v: &str| format!("\"{}\"", v.replace('"', "\"\""));
+
+    for e in &rows {
+        let _ = writeln!(
+            csv,
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            esc(&e.outcome),
+            esc(&e.provider),
+            e.plays,
+            esc(&e.raw_artist),
+            esc(&e.raw_title),
+            esc(&e.cleaned_artist),
+            esc(&e.cleaned_title),
+            e.duration_ms,
+            e.line_count,
+            e.word_timed,
+            esc(e.source_app_id.as_deref().unwrap_or("")),
+            esc(e.bridge_source.as_deref().unwrap_or("")),
+            esc(e.page_url.as_deref().unwrap_or("")),
+            esc(&e.search_url),
+            esc(&e.errors.join(" | ")),
+        );
+    }
+
+    let dir = app
+        .path()
+        .desktop_dir()
+        .or_else(|_| app.path().app_data_dir())
+        .map_err(|e| format!("no writable directory: {e}"))?;
+    let path = dir.join("hum-lyric-report.csv");
+    std::fs::write(&path, csv).map_err(|e| format!("write {}: {e}", path.display()))?;
+
+    eprintln!(
+        "[lyrics] report: {} tracks, {} plays, {} resolved, {} not_found, {} error, {:.1}% hit rate -> {}",
+        report.tracks,
+        report.plays,
+        report.resolved,
+        report.not_found,
+        report.errored,
+        report.hit_rate_pct,
+        path.display()
+    );
+
+    Ok(path.display().to_string())
+}
+
+/// Record how one resolution turned out. Best-effort: diagnostics must never
+/// disturb playback, so every failure here is swallowed.
+fn log_resolution(app: &AppHandle, track: &TrackEcho, out: &Outcome) {
+    let (outcome, line_count, word_timed) = match &out.cached {
+        CachedLyrics::Synced { lines, .. } => ("synced", lines.len(), has_valid_word_timing(lines)),
+        CachedLyrics::Plain { text } => ("plain", text.lines().count(), false),
+        CachedLyrics::Instrumental => ("instrumental", 0, false),
+        CachedLyrics::Unsupported => ("unsupported", 0, false),
+        CachedLyrics::NotFound => {
+            if out.source == "error" {
+                ("error", 0, false)
+            } else {
+                ("not_found", 0, false)
+            }
+        }
+    };
+
+    // A blank title means no track is really playing. Logging those would bury
+    // the real rows in noise.
+    if track.title.trim().is_empty() {
+        return;
+    }
+
+    let Ok(store) = app.store(RESOLUTION_LOG_FILE) else {
+        return;
+    };
+
+    let entries: Vec<LyricResolution> = store
+        .get("resolutions")
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+
+    let (cleaned_artist, cleaned_title) = canonical_provider_metadata(&track.title, &track.artist);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+
+    let search_url = format!(
+        "https://www.youtube.com/results?search_query={}",
+        urlencoding::encode(
+            &format!("{} {}", track.artist, track.title)
+                .trim()
+                .to_lowercase()
+        )
+    );
+
+    let merged = merge_resolution(
+        entries,
+        LyricResolution {
+            first_seen_unix_ms: now,
+            last_seen_unix_ms: now,
+            plays: 1,
+            outcome: outcome.into(),
+            provider: out.source.clone(),
+            line_count,
+            word_timed,
+            errors: out.errors.clone(),
+            raw_title: track.title.clone(),
+            raw_artist: track.artist.clone(),
+            cleaned_title,
+            cleaned_artist,
+            album: track.album.clone(),
+            duration_ms: track.duration_ms,
+            source_app_id: track.source_app_id.clone(),
+            bridge_source: track.bridge_source.clone(),
+            page_url: track.page_url.clone(),
+            search_url,
+        },
+        RESOLUTION_LOG_CAP,
+    );
+
+    if let Ok(v) = serde_json::to_value(&merged) {
+        store.set("resolutions", v);
+        let _ = store.save();
+    }
+}
+
+/// Fold one resolution into the existing log.
+///
+/// Split out from `log_resolution` so the part with actual behavior can be
+/// tested without an `AppHandle`. Three things matter and none is obvious from
+/// the call site: a repeat of the same track updates in place and bumps
+/// `plays` rather than appending (so one song on loop cannot crowd out
+/// distinct tracks), `first_seen_unix_ms` is carried forward from the original
+/// sighting, and the cap drops from the FRONT so the newest survive.
+fn merge_resolution(
+    mut entries: Vec<LyricResolution>,
+    new: LyricResolution,
+    cap: usize,
+) -> Vec<LyricResolution> {
+    let previous = entries
+        .iter()
+        .position(|e| e.raw_title == new.raw_title && e.raw_artist == new.raw_artist)
+        .map(|idx| entries.remove(idx));
+
+    let (plays, first_seen) = match &previous {
+        Some(p) => (p.plays.saturating_add(1), p.first_seen_unix_ms),
+        None => (1, new.first_seen_unix_ms),
+    };
+
+    entries.push(LyricResolution {
+        plays,
+        first_seen_unix_ms: first_seen,
+        // Keep a page_url we already had if this sighting could not read one.
+        // The address bar is only readable when the tab is in the foreground,
+        // so a later background play would otherwise erase a good URL.
+        page_url: new
+            .page_url
+            .clone()
+            .or_else(|| previous.and_then(|p| p.page_url)),
+        ..new
+    });
+
+    if cap > 0 && entries.len() > cap {
+        let overflow = entries.len() - cap;
+        entries.drain(0..overflow);
+    }
+    entries
+}
+
 async fn apply_outcome(
     app: &AppHandle,
     shared: &SharedLyrics,
@@ -857,6 +1217,7 @@ async fn apply_outcome(
     if out.persist {
         write_store(app, key, &out.cached);
     }
+    log_resolution(app, track, &out);
     let mut s = shared.write().await;
     s.track_key = key.to_string();
     s.source = Some(out.source.clone());
@@ -959,6 +1320,9 @@ async fn ad_break_outcome(
             artist: String::new(),
             album: String::new(),
             duration_ms: snap.duration_ms,
+            source_app_id: snap.source_app_id.clone(),
+            bridge_source: None,
+            page_url: None,
         },
         promo: picked,
     }
@@ -2651,6 +3015,71 @@ mod tests {
         );
 
         *DIRECT_BLOCKED_UNTIL.lock().unwrap() = saved;
+    }
+
+    #[test]
+    fn resolution_log_dedupes_by_track_and_keeps_the_newest() {
+        let entry = |title: &str, at: u64, outcome: &str| LyricResolution {
+            first_seen_unix_ms: at,
+            last_seen_unix_ms: at,
+            plays: 1,
+            outcome: outcome.into(),
+            provider: "lrclib".into(),
+            line_count: 0,
+            word_timed: false,
+            errors: Vec::new(),
+            raw_title: title.into(),
+            raw_artist: "Artist".into(),
+            cleaned_title: title.into(),
+            cleaned_artist: "Artist".into(),
+            album: String::new(),
+            duration_ms: 1000,
+            source_app_id: None,
+            bridge_source: None,
+            page_url: None,
+            search_url: String::new(),
+        };
+
+        // Replaying a track updates in place and bumps the count rather than
+        // appending. Without this, one song left on loop overnight would push
+        // every distinct track out of a capped log.
+        let log = merge_resolution(Vec::new(), entry("Song A", 1, "synced"), 10);
+        let log = merge_resolution(log, entry("Song A", 2, "synced"), 10);
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].plays, 2);
+        assert_eq!(log[0].last_seen_unix_ms, 2, "newest sighting wins");
+        assert_eq!(log[0].first_seen_unix_ms, 1, "original sighting is kept");
+
+        // The latest outcome wins, so a track that starts failing and later
+        // succeeds is not still counted as a miss.
+        let log = merge_resolution(log, entry("Song A", 3, "not_found"), 10);
+        assert_eq!(log[0].outcome, "not_found");
+        assert_eq!(log[0].plays, 3);
+
+        // A different track is its own entry.
+        let log = merge_resolution(log, entry("Song B", 4, "synced"), 10);
+        assert_eq!(log.len(), 2);
+
+        // A good URL survives a later play that could not read one, because
+        // the address bar is only readable while the tab is in the foreground.
+        let mut with_url = entry("Song C", 5, "synced");
+        with_url.page_url = Some("https://www.youtube.com/watch?v=abc".into());
+        let log = merge_resolution(log, with_url, 10);
+        let log = merge_resolution(log, entry("Song C", 6, "synced"), 10);
+        assert_eq!(
+            log.last().unwrap().page_url.as_deref(),
+            Some("https://www.youtube.com/watch?v=abc"),
+            "a background replay must not erase a URL we already captured"
+        );
+
+        // The cap drops from the front, keeping the newest.
+        let mut log = Vec::new();
+        for i in 0..10 {
+            log = merge_resolution(log, entry(&format!("Song {i}"), i as u64, "synced"), 3);
+        }
+        assert_eq!(log.len(), 3);
+        assert_eq!(log[0].raw_title, "Song 7");
+        assert_eq!(log[2].raw_title, "Song 9");
     }
 
     #[test]
