@@ -193,9 +193,16 @@ pub struct TrackEcho {
     /// Which browser bridge supplied the metadata, e.g. `youtube-web`.
     #[serde(default)]
     pub bridge_source: Option<String>,
-    /// Address-bar URL when a probe could read it. Foreground tab only.
+    /// Theuntouched title the media source published, before any bridge
+    /// normalization or cleaning. On YouTube this is the actual video title,
+    /// e.g. `Kygo - Freeze (Official Video)`.
+    ///
+    /// Kept separate from `title` because the bridge rewrites that one: by the
+    /// time the resolver sees a YouTube track, `title` is already normalized
+    /// to `Freeze` with the artist split off. Diagnosing a miss needs the
+    /// string a human would recognize from the page.
     #[serde(default)]
-    pub page_url: Option<String>,
+    pub video_title: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Default, PartialEq, Eq)]
@@ -345,7 +352,9 @@ pub fn start(
                     .map(|d| d.as_millis() as i64)
                     .unwrap_or(0);
                 let fresh = bridge_track.as_ref().is_some_and(|t| {
-                    now_unix_ms - t.last_seen_unix_ms < 5_000 && !t.title.trim().is_empty()
+                    now_unix_ms - t.last_seen_unix_ms < 5_000
+                        && !t.title.trim().is_empty()
+                        && bridge_entry_matches_source(t, &snap.title)
                 });
 
                 let (title, artist, album) = if fresh {
@@ -493,7 +502,8 @@ pub fn start(
                                 duration_ms: snap.duration_ms,
                                 source_app_id: snap.source_app_id.clone(),
                                 bridge_source: None,
-                                page_url: None,
+                                video_title: Some(snap.title.clone())
+                                    .filter(|t| !t.trim().is_empty()),
                             },
                             promo: None,
                         };
@@ -507,18 +517,14 @@ pub fn start(
 
             last_key = key.clone();
 
-            // Read the bridge once more purely for diagnostics. The resolver
-            // does not use these; they exist so the resolution log can say
-            // which app and which page a result came from.
+            // Which bridge (if any) supplied the metadata. Diagnostics only.
             #[cfg(windows)]
-            let (bridge_source, page_url) = {
+            let bridge_source = {
                 let b = web_bridge.read().await;
-                b.as_ref()
-                    .map(|t| (Some(t.source.clone()), t.page_url.clone()))
-                    .unwrap_or((None, None))
+                b.as_ref().map(|t| t.source.clone())
             };
             #[cfg(not(windows))]
-            let (bridge_source, page_url): (Option<String>, Option<String>) = (None, None);
+            let bridge_source: Option<String> = None;
 
             let track = TrackEcho {
                 title: effective_title.clone(),
@@ -527,7 +533,11 @@ pub fn start(
                 duration_ms: snap.duration_ms,
                 source_app_id: snap.source_app_id.clone(),
                 bridge_source,
-                page_url,
+                // `snap.title` is what the media source published, untouched.
+                // For YouTube that is the real video title, which is what a
+                // human needs to recognize a failed track. `effective_title`
+                // above has already been through bridge normalization.
+                video_title: Some(snap.title.clone()).filter(|t| !t.trim().is_empty()),
             };
 
             if unreliable_no_bridge || is_video_bridge {
@@ -616,6 +626,43 @@ pub fn start(
             }
         }
     });
+}
+
+/// Does this bridge entry actually describe the track the media source is
+/// reporting right now?
+///
+/// A timestamp is not enough. On every track change SMTC advances first and
+/// the probe re-reads a beat later, so for a moment the bridge holds the
+/// PREVIOUS song while its `last_seen_unix_ms` is only milliseconds old. The
+/// staleness window says "fresh" and the resolver then looks up the wrong
+/// song, showing the previous track's lyrics until the probe catches up.
+/// Observed on live autoplay: three consecutive tracks each resolved against
+/// the one before it, and every track logged twice.
+///
+/// Only meaningful for bridges that DERIVE their metadata from the source
+/// title. YouTube's does: `parse_youtube_metadata` splits SMTC's video title,
+/// so the bridge title is always contained in it. Pandora's does not, because
+/// SMTC there reports only the browser tab title and the probe reads the page
+/// itself, so its title legitimately has nothing in common with `snap.title`
+/// and must never be rejected here.
+///
+/// A false negative is cheap: the resolver falls back to the source title and
+/// cleans it itself, which is a slightly worse query but the right song. A
+/// false positive is what this exists to prevent.
+#[cfg(windows)]
+fn bridge_entry_matches_source(
+    entry: &crate::web_bridge::WebBridgeTrack,
+    source_title: &str,
+) -> bool {
+    if entry.source != "youtube-web" {
+        return true;
+    }
+    if source_title.trim().is_empty() {
+        return true;
+    }
+    let source = normalize_for_match(source_title);
+    let bridge = normalize_for_match(&entry.title);
+    bridge.is_empty() || source.contains(&bridge)
 }
 
 async fn resolve_lyrics(
@@ -929,10 +976,14 @@ struct LyricResolution {
     source_app_id: Option<String>,
     /// e.g. `youtube-web`, when a browser bridge supplied the metadata.
     bridge_source: Option<String>,
-    /// Address-bar URL when a probe could read it. Foreground tab only.
-    page_url: Option<String>,
-    /// Always present, so a track can be found again even with no `page_url`.
-    search_url: String,
+    /// The untouched title the source published. On YouTube this is the real
+    /// video title, e.g. `Kygo - Freeze (Official Video)`.
+    ///
+    /// This is the field to read when a track fails. `raw_title` above has
+    /// already been through bridge normalization, so a YouTube miss shows
+    /// there as `Freeze` rather than anything a person would recognize from
+    /// the page.
+    video_title: Option<String>,
 }
 
 /// Summary of the resolution log, plus the rows behind it.
@@ -1025,7 +1076,7 @@ pub fn export_lyric_report(app: AppHandle) -> Result<String, String> {
 
     let mut csv = String::new();
     csv.push_str(
-        "outcome,provider,plays,raw_artist,raw_title,cleaned_artist,cleaned_title,duration_ms,line_count,word_timed,source_app_id,bridge_source,page_url,search_url,errors
+        "outcome,video_title,provider,plays,raw_artist,raw_title,cleaned_artist,cleaned_title,duration_ms,line_count,word_timed,source_app_id,bridge_source,errors
 ",
     );
 
@@ -1045,8 +1096,9 @@ pub fn export_lyric_report(app: AppHandle) -> Result<String, String> {
     for e in &rows {
         let _ = writeln!(
             csv,
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             esc(&e.outcome),
+            esc(e.video_title.as_deref().unwrap_or("")),
             esc(&e.provider),
             e.plays,
             esc(&e.raw_artist),
@@ -1058,8 +1110,6 @@ pub fn export_lyric_report(app: AppHandle) -> Result<String, String> {
             e.word_timed,
             esc(e.source_app_id.as_deref().unwrap_or("")),
             esc(e.bridge_source.as_deref().unwrap_or("")),
-            esc(e.page_url.as_deref().unwrap_or("")),
-            esc(&e.search_url),
             esc(&e.errors.join(" | ")),
         );
     }
@@ -1124,15 +1174,6 @@ fn log_resolution(app: &AppHandle, track: &TrackEcho, out: &Outcome) {
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
 
-    let search_url = format!(
-        "https://www.youtube.com/results?search_query={}",
-        urlencoding::encode(
-            &format!("{} {}", track.artist, track.title)
-                .trim()
-                .to_lowercase()
-        )
-    );
-
     let merged = merge_resolution(
         entries,
         LyricResolution {
@@ -1152,8 +1193,7 @@ fn log_resolution(app: &AppHandle, track: &TrackEcho, out: &Outcome) {
             duration_ms: track.duration_ms,
             source_app_id: track.source_app_id.clone(),
             bridge_source: track.bridge_source.clone(),
-            page_url: track.page_url.clone(),
-            search_url,
+            video_title: track.video_title.clone(),
         },
         RESOLUTION_LOG_CAP,
     );
@@ -1190,13 +1230,13 @@ fn merge_resolution(
     entries.push(LyricResolution {
         plays,
         first_seen_unix_ms: first_seen,
-        // Keep a page_url we already had if this sighting could not read one.
-        // The address bar is only readable when the tab is in the foreground,
-        // so a later background play would otherwise erase a good URL.
-        page_url: new
-            .page_url
+        // Keep a video title we already had if this sighting arrived without
+        // one, so a momentary gap in source metadata cannot blank out the only
+        // human-readable name for the track.
+        video_title: new
+            .video_title
             .clone()
-            .or_else(|| previous.and_then(|p| p.page_url)),
+            .or_else(|| previous.and_then(|p| p.video_title)),
         ..new
     });
 
@@ -1322,7 +1362,7 @@ async fn ad_break_outcome(
             duration_ms: snap.duration_ms,
             source_app_id: snap.source_app_id.clone(),
             bridge_source: None,
-            page_url: None,
+            video_title: None,
         },
         promo: picked,
     }
@@ -1430,19 +1470,43 @@ async fn fetch_lrclib(
     // Reversed "Song - Artist" uploads. Some lyric channels (e.g. "Pillow")
     // title videos "Song - Artist (Lyrics)" instead of "Artist - Song", so the
     // YouTube parser put the real SONG in the artist field and the real ARTIST
-    // in the title field — every search above looked up the wrong half and
+    // in the title field. Every search above looked up the wrong half and
     // missed (real failure: "Hanging By A Moment - Lifehouse"). When all else
     // misses, retry searching the ARTIST field as the track name with the
-    // roles swapped. pick_best's duration gate keeps this from false-matching a
-    // normal "Artist - Song" (a real artist name rarely doubles as a song
-    // title of the same length).
+    // roles swapped.
+    //
+    // This used to rely on pick_best's duration gate alone, on the theory that
+    // "a real artist name rarely doubles as a song title of the same length".
+    // That is false, and it produced the worst class of bug this app can have.
+    // Playing "MGMT - Electric Feel (OFFICIAL CRW Chill TRAP REMIX)", the
+    // search for track_name="MGMT" found a real Spanish song literally titled
+    // "MGMT" by El Columpio Asesino at 261s against the video's 262s. Exact
+    // title match (100) plus a one-second duration match (30) plus the synced
+    // bonus (20) scored 150 against a threshold of 80, and the overlay
+    // confidently displayed Spanish lyrics for an MGMT remix. Band names double
+    // as song titles constantly, and across twenty candidates a duration
+    // collision inside five seconds is likely rather than rare.
+    //
+    // The fix is to require BOTH halves to corroborate. A genuine reversal
+    // swaps them, so if the artist field really holds the song, the record we
+    // matched must be BY the thing sitting in the title field. Checking only
+    // the half we searched on can never detect a coincidence.
     if !artist.trim().is_empty() && !artist.eq_ignore_ascii_case(title) {
         let artist_as_title = strip_youtube_noise(artist);
         if let Ok(records) = try_search_lrclib_once(client, &artist_as_title).await {
             if let Some(rec) = pick_best(records, &artist_as_title, title, duration_ms) {
-                let cached = to_cached(rec);
-                if !matches!(cached, CachedLyrics::NotFound) {
-                    return Ok((cached, "lrclib-search".into()));
+                if reversal_is_corroborated(&rec, title) {
+                    let cached = to_cached(rec);
+                    if !matches!(cached, CachedLyrics::NotFound) {
+                        return Ok((cached, "lrclib-search".into()));
+                    }
+                } else {
+                    eprintln!(
+                        "[lyrics] rejected reversed-roles match '{}' by '{}': record artist does not corroborate '{}'",
+                        rec.track_name.as_deref().unwrap_or(""),
+                        rec.artist_name.as_deref().unwrap_or(""),
+                        title
+                    );
                 }
             }
         }
@@ -1536,6 +1600,28 @@ async fn lrclib_request(
     }
 
     Err(first_err.unwrap_or_else(|| anyhow::anyhow!("no route available for {path}")))
+}
+
+/// Does a reversed-roles match hold up on the half we did NOT search on?
+///
+/// The reversal claims the title field holds the real ARTIST. If that is true,
+/// the record we matched must be by that artist. When it is not, we did not
+/// find a reversed upload, we found an unrelated song that happens to share a
+/// name with the artist, which is how a Spanish track called "MGMT" ended up
+/// rendering over an MGMT remix.
+///
+/// Compared with `strip_youtube_noise` applied to the claimed artist, since
+/// that field carries the same uploader chrome the title field does.
+fn reversal_is_corroborated(rec: &LrcRecord, claimed_artist: &str) -> bool {
+    let rec_artist = normalize_for_match(rec.artist_name.as_deref().unwrap_or(""));
+    let claimed = normalize_for_match(&strip_youtube_noise(claimed_artist));
+    if rec_artist.is_empty() || claimed.is_empty() {
+        // No evidence either way. Refuse: this path only exists to rescue an
+        // unusual upload convention, so an unverifiable match is not worth the
+        // risk of showing the wrong song's words.
+        return false;
+    }
+    rec_artist.contains(&claimed) || claimed.contains(&rec_artist)
 }
 
 /// Returns Ok(Some(rec)) on a 200 hit, Ok(None) on any 4xx, Err on 5xx/network.
@@ -2257,6 +2343,9 @@ fn cleaner() -> &'static Regex {
                       radio\s+(?:edit|version|mix) |
                       extended\s+(?:mix|version) |
                       original\s+(?:mix|version) |
+                      (?:[\w'\-]+\s+)*remix |
+                      (?:[\w'\-]+\s+)*bootleg |
+                      (?:[\w'\-]+\s+)*mashup |
                       edit |
                       bonus\s+track |
                       mv |
@@ -3036,8 +3125,7 @@ mod tests {
             duration_ms: 1000,
             source_app_id: None,
             bridge_source: None,
-            page_url: None,
-            search_url: String::new(),
+            video_title: Some(format!("Artist - {title} (Official Video)")),
         };
 
         // Replaying a track updates in place and bumps the count rather than
@@ -3060,16 +3148,17 @@ mod tests {
         let log = merge_resolution(log, entry("Song B", 4, "synced"), 10);
         assert_eq!(log.len(), 2);
 
-        // A good URL survives a later play that could not read one, because
-        // the address bar is only readable while the tab is in the foreground.
-        let mut with_url = entry("Song C", 5, "synced");
-        with_url.page_url = Some("https://www.youtube.com/watch?v=abc".into());
-        let log = merge_resolution(log, with_url, 10);
-        let log = merge_resolution(log, entry("Song C", 6, "synced"), 10);
+        // A video title we already captured survives a later sighting that
+        // arrived without one, so a momentary metadata gap cannot blank out
+        // the only human-readable name for the track.
+        let log = merge_resolution(log, entry("Song C", 5, "synced"), 10);
+        let mut untitled = entry("Song C", 6, "synced");
+        untitled.video_title = None;
+        let log = merge_resolution(log, untitled, 10);
         assert_eq!(
-            log.last().unwrap().page_url.as_deref(),
-            Some("https://www.youtube.com/watch?v=abc"),
-            "a background replay must not erase a URL we already captured"
+            log.last().unwrap().video_title.as_deref(),
+            Some("Artist - Song C (Official Video)"),
+            "a later sighting without metadata must not erase the video title"
         );
 
         // The cap drops from the front, keeping the newest.
@@ -3080,6 +3169,61 @@ mod tests {
         assert_eq!(log.len(), 3);
         assert_eq!(log[0].raw_title, "Song 7");
         assert_eq!(log[2].raw_title, "Song 9");
+    }
+
+    // A wrong answer is worse than no answer. This pins the exact case that
+    // rendered Spanish lyrics over an MGMT remix: searching the ARTIST field
+    // as a track name found a real song literally titled "MGMT" by an
+    // unrelated Spanish band whose duration happened to land one second from
+    // the video's. Exact title plus duration plus synced scored 150 against a
+    // threshold of 80, so nothing downstream could have caught it.
+    #[test]
+    fn reversed_roles_match_requires_both_halves_to_corroborate() {
+        let rec = |track: &str, artist: &str| LrcRecord {
+            id: None,
+            name: None,
+            album_name: None,
+            track_name: Some(track.into()),
+            artist_name: Some(artist.into()),
+            duration: Some(261.0),
+            instrumental: Some(false),
+            plain_lyrics: Some("la la la".into()),
+            synced_lyrics: Some("[00:01.00] la la la".into()),
+        };
+
+        // The real failure. Claimed artist is the video's title field; the
+        // record is by somebody else entirely.
+        assert!(
+            !reversal_is_corroborated(
+                &rec("MGMT", "El Columpio Asesino"),
+                "Electric Feel (OFFICIAL CRW Chill TRAP REMIX)"
+            ),
+            "an unrelated artist must not pass as a reversed-roles match"
+        );
+
+        // The case this path exists for: "Hanging By A Moment - Lifehouse"
+        // puts the song in the artist field and the artist in the title field.
+        // Both halves line up, so it is a genuine reversal.
+        assert!(reversal_is_corroborated(
+            &rec("Hanging By A Moment", "Lifehouse"),
+            "Lifehouse"
+        ));
+        // Uploader chrome on the claimed artist must not break it.
+        assert!(reversal_is_corroborated(
+            &rec("Hanging By A Moment", "Lifehouse"),
+            "Lifehouse (Lyrics)"
+        ));
+        // Partial containment counts, since channel naming varies.
+        assert!(reversal_is_corroborated(
+            &rec("Bartender", "T-Pain feat. Akon"),
+            "T-Pain"
+        ));
+
+        // Missing evidence is refused rather than assumed. This path only
+        // exists to rescue an unusual upload convention, so an unverifiable
+        // match is not worth showing the wrong song's words.
+        assert!(!reversal_is_corroborated(&rec("MGMT", ""), "Lifehouse"));
+        assert!(!reversal_is_corroborated(&rec("MGMT", "Lifehouse"), ""));
     }
 
     #[test]
@@ -3355,6 +3499,21 @@ mod tests {
         assert_eq!(clean_title("Level 7"), "Level 7");
         // `p` suffix only strips at real resolution widths.
         assert_eq!(clean_title("Song 22p"), "Song 22p");
+
+        // Remix / bootleg / mashup tags. The primary LRCLib search returns
+        // ZERO records for the full decorated title, which pushed resolution
+        // onto the reversed-roles fallback and straight into a false match.
+        // Stripping the tag lets the first search find the original.
+        assert_eq!(
+            clean_title("Electric Feel (OFFICIAL CRW Chill TRAP REMIX)"),
+            "Electric Feel"
+        );
+        assert_eq!(clean_title("Song (Remix)"), "Song");
+        assert_eq!(clean_title("Song [Slowed Reverb Remix]"), "Song");
+        assert_eq!(clean_title("Song (Some DJ Bootleg)"), "Song");
+        assert_eq!(clean_title("Song (Tiesto Remix) [4K]"), "Song");
+        // A title that IS the word survives, same as every other tag.
+        assert_eq!(clean_title("Remix"), "Remix");
 
         // Fixed-point pipeline: decorative symbols are stripped LAST, so a
         // quality token sitting behind a trailing emoji is invisible to the

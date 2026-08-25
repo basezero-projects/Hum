@@ -50,15 +50,6 @@ pub struct WebBridgeTrack {
     pub title: String,
     pub artist: String,
     pub album: String,
-    /// URL from the browser's address bar, when a probe could read it.
-    /// Diagnostics only; nothing in the resolver depends on it.
-    ///
-    /// Reflects the FOREGROUND tab, because that is all the address bar shows.
-    /// A track playing in a background tab reports whatever the visible tab
-    /// happens to be, so a mismatch between this and the title is expected
-    /// rather than a bug.
-    #[serde(default)]
-    pub page_url: Option<String>,
     /// Identifier of the probe that wrote this entry, e.g. `"pandora-web"`.
     pub source: String,
     /// Unix epoch ms at the moment of the read. Consumers use this to
@@ -358,63 +349,6 @@ fn find_chrome_windows<F: Fn(&str) -> bool>(predicate: F) -> Vec<HWND> {
     ctx.hits
 }
 
-/// Read the URL out of a Chromium window's address bar.
-///
-/// Targeted lookup rather than a tree walk. The omnibox is an Edit control
-/// carrying a ValuePattern, and a matcher lets UIA run the search in-process
-/// instead of marshalling every node across the process boundary the way the
-/// DFS probes do. Depth and timeout are capped for the same reason.
-///
-/// Returns `None` on any failure. This is diagnostic data, so it never
-/// deserves an error path in the caller: no URL just means no URL.
-pub(crate) fn read_chromium_address_bar(hwnd: HWND) -> Option<String> {
-    use uiautomation::patterns::UIValuePattern;
-    use uiautomation::UIAutomation;
-
-    let automation = UIAutomation::new().ok()?;
-    // windows-crate HWND and uiautomation's Handle are distinct crate
-    // versions, so From<HWND> does not cross. Bridge via the raw isize.
-    let root = automation
-        .element_from_handle((hwnd.0 as isize).into())
-        .ok()?;
-
-    let matcher = automation
-        .create_matcher()
-        .from(root)
-        .control_type(uiautomation::controls::ControlType::Edit)
-        .depth(12)
-        .timeout(400);
-
-    let element = matcher.find_first().ok()?;
-    let value = element
-        .get_pattern::<UIValuePattern>()
-        .ok()?
-        .get_value()
-        .ok()?;
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    // Chromium hides the scheme, so a normal page reads as
-    // "www.youtube.com/watch?v=..." with no protocol. Put it back, and reject
-    // anything that looks like a typed search query rather than a URL.
-    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        Some(trimmed.to_string())
-    } else if trimmed.contains('.') && !trimmed.contains(' ') {
-        Some(format!("https://{trimmed}"))
-    } else {
-        None
-    }
-}
-
-/// Find the first visible Chromium window whose title contains `needle`
-/// (case-sensitive substring match). Used by YouTubeProbe to locate the
-/// YouTube tab's window handle without a full tab enumeration.
-///
-/// Returns `None` when no matching Chromium window is visible. The caller
-/// must check whether the returned window is actually a YouTube tab — the
-/// title match is a fast heuristic; the UIA walk in the probe confirms.
 pub(crate) fn find_chromium_window_with_title_substring(needle: &str) -> Option<HWND> {
     find_chrome_windows(|title| title.contains(needle))
         .into_iter()
@@ -765,7 +699,6 @@ impl WebPlayerProbe for PandoraProbe {
                     .map(|s| s * 1_000)
                     .unwrap_or(30_000); // 30s fallback when countdown unreadable
                 return Ok(Some(WebBridgeTrack {
-                    page_url: None,
                     title: String::new(),
                     artist: String::new(),
                     album: String::new(),
@@ -790,7 +723,6 @@ impl WebPlayerProbe for PandoraProbe {
             }
 
             return Ok(Some(WebBridgeTrack {
-                page_url: None,
                 title,
                 artist,
                 album,
@@ -1291,7 +1223,6 @@ impl WebPlayerProbe for VideoServiceProbe {
                 });
                 let Some(show) = show else { continue };
                 return Ok(Some(WebBridgeTrack {
-                    page_url: None,
                     title: show,
                     artist: String::new(),
                     album: String::new(),

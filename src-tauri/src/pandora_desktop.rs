@@ -212,7 +212,6 @@ impl WebPlayerProbe for PandoraDesktopProbe {
                     .map(|s| s * 1_000)
                     .unwrap_or(30_000); // 30s fallback when countdown unreadable
                 return Ok(Some(WebBridgeTrack {
-                    page_url: None,
                     title: String::new(),
                     artist: String::new(),
                     album: String::new(),
@@ -236,7 +235,6 @@ impl WebPlayerProbe for PandoraDesktopProbe {
                 update_track_state(track_key, detected_state, now_unix_ms);
 
             return Ok(Some(WebBridgeTrack {
-                page_url: None,
                 title,
                 artist,
                 album,

@@ -6,6 +6,26 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.91] - 2026-08-23
+
+### Fixed
+- **Hum no longer shows a completely different song's lyrics.** Playing "MGMT - Electric Feel (OFFICIAL CRW Chill TRAP REMIX)", the overlay confidently displayed Spanish lyrics belonging to an unrelated track. It now finds the real Electric Feel words instead. A wrong answer is worse than no answer, so this is the highest-severity class of bug the overlay can have: nothing on screen tells you the words are not the song you are hearing.
+
+  What happened: when every normal lookup misses, Hum has a last-resort retry for videos titled "Song - Artist" instead of the usual "Artist - Song", where it searches using the artist field as if it were the song name. Searching for "MGMT" found a real Spanish song literally titled "MGMT" by El Columpio Asesino, 261 seconds long against the video's 262. An exact title match plus a one-second duration match plus a bonus for having timed lyrics scored 150 against a cutoff of 80, so nothing downstream could reject it. The old guard assumed "a real artist name rarely doubles as a song title of the same length", which is simply not true: band names get used as song titles constantly, and across twenty candidates a duration collision inside five seconds is likely rather than rare.
+
+  The fix requires BOTH halves to agree. A genuinely reversed title swaps the song and the artist, so the matched record must actually be BY whatever sits in the title field. Checking only the half that was searched can never catch a coincidence. Legitimate reversed uploads like "Hanging By A Moment - Lifehouse" still resolve, because there both halves line up. Rejections are logged to the dev console with the record that was refused.
+
+- **Remix, bootleg, and mashup tags are now stripped from titles.** A video called "Electric Feel (OFFICIAL CRW Chill TRAP REMIX)" returned zero results, because that whole decorated string went to the lyrics service as if it were the song name. That empty result is what pushed the lookup onto the last-resort path above. Any words before "Remix", "Bootleg", or "Mashup" inside brackets or parentheses now come off, so the first search finds the original recording.
+
+- **Hum no longer resolves the previous song's lyrics when a track changes.** On every track change the overlay briefly looked up the track before it, then corrected itself once the browser reader caught up. Every track was also being recorded twice in the coverage log.
+
+  Cause: the browser reader is consulted whenever it updated in the last five seconds. On a track change the system media info advances first and the reader re-reads a moment later, so for a beat the reader still describes the PREVIOUS song while its timestamp looks perfectly fresh. Hum now also checks that the reader's track actually corresponds to what the media source is reporting, and ignores it when they disagree. This check applies only to YouTube, where the reader derives its data from the video title. Pandora is untouched, since there the reader reads the page directly and its title legitimately has nothing in common with the system media info.
+
+### Changed
+- **The coverage log now records the real YouTube video title.** Failures are recorded with the full video title as it appears on the page, for example "STELLA LEFTY - Boston (Lyrics)", alongside what the resolver actually searched for after cleaning. That pair is what tells you whether a miss was Hum mangling the title or the lyrics genuinely not existing. Previously only the cleaned name was kept, which showed a YouTube miss as "Boston" and made failures hard to trace back to a video.
+
+- **Removed page URL capture from the coverage log.** It read the browser address bar once per track, which only ever reflects the tab you are looking at, and it recorded the wrong track's URL when a song played in the background. The video title identifies a track well enough without it, and the accessibility lookup is gone from the YouTube reader's hot path.
+
 ## [0.13.90] - 2026-08-23
 
 ### Added
