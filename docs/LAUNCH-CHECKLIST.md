@@ -1,6 +1,8 @@
 # Hum launch checklist
 
 Last reviewed: 2026-08-25
+Shipped so far: v0.13.95 and v0.13.96 (section 1, everything except the
+primary-surface decision and the proof items, which need a real release)
 
 This is the work list for getting Hum sellable. It is deliberately separate from
 [the 1.0 release checklist](verification/1.0-release-checklist.md), which is the
@@ -63,13 +65,13 @@ the user clicks. So the banner reads "Hum v0.14.1 is ready to install" while
 nothing has been downloaded, and the click the user thinks is instant is
 actually the whole download.
 
-- [ ] Pre-download after a successful check. Keep the state internal until the
+- [x] Pre-download after a successful check. Keep the state internal until the
       bytes land, then flip to `available`. This makes the existing copy true
       instead of rewriting it.
-- [ ] Gate ready on an actual `Finished` event, not on `download()` resolving.
+- [x] Gate ready on an actual `Finished` event, not on `download()` resolving.
       SimSweep added `finishedSeen` for exactly this: a promise that resolves
       without `Finished` would otherwise hand `install()` a partial file.
-- [ ] Keep the download quiet. No banner, no tray change, no progress until it
+- [x] Keep the download quiet. No banner, no tray change, no progress until it
       is done and there is something worth clicking.
 
 ### Where Hum has to differ from SimSweep
@@ -77,18 +79,21 @@ actually the whole download.
 SimSweep gets launched, used, and closed. Hum is an always-on overlay that can
 run for weeks, and it sits on top of whatever the person is doing.
 
-- [ ] Add a periodic re-check. Right now `runUpdateCheck("automatic")` fires
+- [x] Add a periodic re-check. Right now `runUpdateCheck("automatic")` fires
       once when the overlay mounts and never again, so somebody who leaves Hum
       running never learns an update exists. Every six hours is reasonable.
-- [ ] Re-check after the machine wakes from sleep. A laptop that slept through
+- [x] Re-check after the machine wakes from sleep. A laptop that slept through
       a release should catch up when it opens.
-- [ ] Do not relaunch during playback without asking. SimSweep can restart
-      whenever it likes. Killing Hum mid-song to install an update is rude.
-      Offer "Install and restart now" against "Install when I close Hum".
+- [x] Do not restart during playback without asking. Shipped in v0.13.96 as a
+      confirm step rather than the deferred install this originally proposed.
+      `tauri-plugin-updater` calls `std::process::exit(0)` inside `install()`
+      on Windows (`updater.rs:865`), so "install when I close Hum" cannot be
+      built on this plugin. A click during playback now names the consequence
+      and waits for a second click, reverting after ten seconds.
 - [ ] Decide whether the overlay banner or the tray item is the primary
       surface. The tray already carries the right label and costs the user no
       screen space over their music. The banner may be better as an opt-in.
-- [ ] Make the banner dismissible for the session. An always-on-top window is
+- [x] Make the banner dismissible for the session. An always-on-top window is
       the worst place for a notice that cannot be closed.
 
 ### Error copy
@@ -97,11 +102,11 @@ Hum currently renders "Could not download Hum v0.14.1. Try again." for
 everything. SimSweep maps the real failures to something actionable in
 `friendlyUpdateError()`.
 
-- [ ] Map access denied and "os error 13" to the install-folder explanation.
-- [ ] Map signature, verify, and minisign failures to "downloaded but could
+- [x] Map access denied and "os error 13" to the install-folder explanation.
+- [x] Map signature, verify, and minisign failures to "downloaded but could
       not be verified, so it was not installed", plus the manual download link.
-- [ ] Map network, DNS, and timeout to a connection message.
-- [ ] Keep the raw error available for support without showing it by default.
+- [x] Map network, DNS, and timeout to a connection message.
+- [x] Keep the raw error available for support without showing it by default.
 
 ### Proving it works
 
