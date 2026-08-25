@@ -6,6 +6,33 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.95] - 2026-08-25
+
+### Changed
+- **Updates now download in the background, so the "ready to install" offer is real.** The small update dot and label on the overlay (top-left, above the album art and lyrics) previously appeared the moment Hum noticed a new version existed, reading "Hum v0.13.95 is ready to install" while nothing had actually been downloaded. Clicking it started a download that could take a minute on a slow connection, with no warning that the "install" was going to be a wait.
+
+  Hum now fetches the update as soon as it finds one, silently. Nothing appears on the overlay and the tray menu keeps saying "Check for updates" the whole time. Only once the file is on disk and verified complete does the dot appear with "Hum v0.13.95 is ready to install", and the tray item change to "Install update v0.13.95". At that point clicking really is instant: the download is already done, so all that is left is swapping the files and restarting.
+
+  A manual check behaves differently on purpose. If you pick "Check for updates" from the tray yourself, you see the progress, because you asked and silence would look like nothing happened. The banner reads "Downloading Hum v0.13.95: 42%" and the tray mirrors it. Clicking the tray during a background download also switches it to the visible version, so you are never left watching a menu that claims Hum is idle while it is working.
+
+- **Hum checks for updates while it is running, not only when it starts.** The old behavior checked once when the overlay opened and never again. Hum is an always-on overlay that people leave running for weeks at a time, so somebody who never restarted it never found out an update existed. Hum now checks every six hours.
+
+  The timer compares real clock time rather than counting ticks, which means a laptop that slept through the interval checks as soon as it wakes up instead of waiting out another full six hours. Background checks stay completely silent whether they find something or not, so this adds no new interruptions.
+
+### Fixed
+- **A half-downloaded update can no longer be offered as installable.** The updater plugin can finish its download call without ever reporting that the transfer completed, which left a truncated file that Hum would happily hand to the installer. Hum now requires the explicit completion signal before it will call an update ready, and treats anything else as a failed download to retry.
+
+- **Update failures now explain what went wrong instead of saying "Try again".** Every failure previously rendered the same generic line, so a permissions problem, a corrupted download, and a dead internet connection all looked identical. The overlay banner and the tray item now carry the real cause:
+
+  - Windows refusing to overwrite the app (another copy still running, or a locked folder) reads "Windows blocked Hum from replacing itself. Close any other copy of Hum and try again, or reinstall the latest version from the Hum download page."
+  - A signature that does not check out reads "The update downloaded but could not be verified, so Hum did not install it." Hum never offers a way to install it anyway, because an artifact that fails verification is exactly the one you must not run.
+  - Running out of disk space reads "There was not enough free disk space to download the update."
+  - An unreachable release server reads "Hum could not reach the update server. Check your connection and try again."
+
+  Raw error text never reaches the overlay. File paths, Rust panics, and OS error codes are useless to somebody who just wants their lyrics back, and alarming on a window that sits on top of everything else.
+
+- **A failed background check no longer leaves anything on screen.** Automatic checks and downloads that fail now stay silent and simply retry at the next interval, since there is nothing the user could usefully do about a failure they never triggered. Failures from a check you started yourself still show, because you are waiting on an answer.
+
 ## [0.13.94] - 2026-08-23
 
 ### Fixed

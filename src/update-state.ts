@@ -1,12 +1,27 @@
 export type UpdateOrigin = "automatic" | "manual";
 export type UpdateErrorStage = "check" | "download" | "install" | "restart";
 
+/**
+ * How long Hum waits between automatic update checks.
+ *
+ * Hum is an always-on overlay, not a session app. Somebody can leave it
+ * running for weeks, so a single check at startup means they never learn an
+ * update exists. Six hours is frequent enough to matter and rare enough that
+ * the release server never notices.
+ */
+export const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
 export type UpdateState =
   | { phase: "idle" }
   | { phase: "checking"; origin: UpdateOrigin }
   | { phase: "current"; origin: UpdateOrigin }
   | { phase: "available"; version: string }
-  | { phase: "downloading"; version: string; progress: number | null }
+  | {
+      phase: "downloading";
+      version: string;
+      progress: number | null;
+      origin: UpdateOrigin;
+    }
   | { phase: "installing"; version: string }
   | { phase: "restarting"; version: string }
   | {
@@ -14,6 +29,8 @@ export type UpdateState =
       stage: UpdateErrorStage;
       version?: string;
       origin?: UpdateOrigin;
+      /** Human explanation from `friendlyUpdateError`. Falls back to generic copy. */
+      message?: string;
     };
 
 export type UpdateAction = "none" | "install" | "retry";
@@ -32,6 +49,13 @@ export type NativeUpdateStatus = {
   progress: number | null;
   retryable: boolean;
   stage: UpdateErrorStage | null;
+};
+
+const QUIET: UpdatePresentation = {
+  bannerText: null,
+  trayText: "Check for updates",
+  action: "none",
+  progress: null,
 };
 
 export function sanitizeUpdateVersion(version: string): string | null {
@@ -60,6 +84,26 @@ export function shouldRequestManualCheck(
   return action === "none" && operation !== "installing";
 }
 
+/**
+ * Whether enough time has passed to run another automatic check.
+ *
+ * Deliberately compares wall-clock stamps rather than counting timer ticks,
+ * so a machine that slept through the interval checks as soon as it wakes.
+ * That covers the sleeping-laptop case with the same mechanism as the routine
+ * one, instead of needing separate wake detection.
+ */
+export function shouldRunPeriodicCheck(
+  lastCheckAtMs: number | null,
+  nowMs: number,
+  intervalMs: number = UPDATE_CHECK_INTERVAL_MS,
+): boolean {
+  if (lastCheckAtMs === null) return true;
+  // A clock that moved backwards (timezone change, NTP correction) would
+  // otherwise park the next check arbitrarily far in the future.
+  if (nowMs < lastCheckAtMs) return true;
+  return nowMs - lastCheckAtMs >= intervalMs;
+}
+
 export function clampDownloadProgress(
   downloadedBytes: number,
   totalBytes: number | undefined,
@@ -76,15 +120,75 @@ export function canInstallUpdate(
   return state.phase === "available" && hasResource;
 }
 
+/**
+ * Turn a raw updater failure into something a person can act on.
+ *
+ * The plugin surfaces OS-level text ("os error 13", minisign failures) that
+ * means nothing to somebody who just wants their lyrics back. The raw string
+ * is still worth keeping for support, so callers should log it separately
+ * rather than replacing it with this.
+ *
+ * No URL is baked in on purpose. The download page lives behind a domain that
+ * is still being settled, and About already carries the real link.
+ */
+export function friendlyUpdateError(error: unknown): string {
+  const raw = String(
+    error instanceof Error ? (error.message ?? error) : error,
+  ).toLowerCase();
+
+  const has = (...needles: string[]) => needles.some((n) => raw.includes(n));
+
+  // Windows refused to write the new build into place: the folder is locked,
+  // read-only, or another copy of Hum is still holding the executable.
+  if (
+    has(
+      "permission denied",
+      "os error 13",
+      "access is denied",
+      "eacces",
+      "operation not permitted",
+      "used by another process",
+      "os error 32",
+    )
+  ) {
+    return "Windows blocked Hum from replacing itself. Close any other copy of Hum and try again, or reinstall the latest version from the Hum download page.";
+  }
+
+  // The artifact arrived but its minisign signature did not check out. Never
+  // install this, and never suggest a workaround that skips verification.
+  if (has("signature", "minisign", "untrusted", "verify", "verification")) {
+    return "The update downloaded but could not be verified, so Hum did not install it. Reinstall the latest version from the Hum download page.";
+  }
+
+  // Ran out of room part-way through writing the artifact.
+  if (has("no space", "os error 112", "disk full")) {
+    return "There was not enough free disk space to download the update. Free up some space and try again.";
+  }
+
+  // Could not reach the release server at all.
+  if (
+    has(
+      "network",
+      "timed out",
+      "timeout",
+      "connect",
+      "dns",
+      "unreachable",
+      "request",
+      "certificate",
+      "tls",
+    )
+  ) {
+    return "Hum could not reach the update server. Check your connection and try again.";
+  }
+
+  return "The update did not go through. Try again, or reinstall the latest version from the Hum download page.";
+}
+
 export function updatePresentation(state: UpdateState): UpdatePresentation {
   switch (state.phase) {
     case "idle":
-      return {
-        bannerText: null,
-        trayText: "Check for updates",
-        action: "none",
-        progress: null,
-      };
+      return QUIET;
     case "checking":
       return state.origin === "manual"
         ? {
@@ -93,12 +197,7 @@ export function updatePresentation(state: UpdateState): UpdatePresentation {
             action: "none",
             progress: null,
           }
-        : {
-            bannerText: null,
-            trayText: "Check for updates",
-            action: "none",
-            progress: null,
-          };
+        : QUIET;
     case "current":
       return state.origin === "manual"
         ? {
@@ -107,13 +206,10 @@ export function updatePresentation(state: UpdateState): UpdatePresentation {
             action: "none",
             progress: null,
           }
-        : {
-            bannerText: null,
-            trayText: "Check for updates",
-            action: "none",
-            progress: null,
-          };
+        : QUIET;
     case "available":
+      // Only reachable once the bytes are on disk, so this copy is literally
+      // true and the click it invites really is instant.
       return {
         bannerText: `Hum v${state.version} is ready to install`,
         trayText: `Install update v${state.version}`,
@@ -121,6 +217,10 @@ export function updatePresentation(state: UpdateState): UpdatePresentation {
         progress: null,
       };
     case "downloading":
+      // An automatic download is nobody's business until it finishes. Showing
+      // progress for something the user never asked for turns an always-on-top
+      // overlay into a nag.
+      if (state.origin === "automatic") return QUIET;
       return {
         bannerText:
           state.progress === null
@@ -147,61 +247,63 @@ export function updatePresentation(state: UpdateState): UpdatePresentation {
         action: "none",
         progress: null,
       };
-    case "error":
-      if (state.stage === "check") {
-        return state.origin === "automatic"
-          ? {
-              bannerText: null,
-              trayText: "Check for updates",
-              action: "none",
-              progress: null,
-            }
-          : {
-              bannerText: "Could not check for updates. Try again.",
-              trayText: "Retry update check",
-              action: "retry",
-              progress: null,
-            };
-      }
+    case "error": {
+      // A failure the user never triggered stays silent. Automatic work only
+      // ever checks and downloads, both of which retry on the next interval,
+      // so there is nothing for them to do about it right now.
+      if (state.origin === "automatic") return QUIET;
+
       if (state.stage === "restart") {
         return {
-          bannerText: "Hum was updated, but could not restart. Try again.",
+          bannerText:
+            state.message ??
+            "Hum was updated, but could not restart. Try again.",
           trayText: "Retry restart",
           action: "retry",
           progress: null,
         };
       }
+      if (state.stage === "check") {
+        return {
+          bannerText: state.message ?? "Could not check for updates. Try again.",
+          trayText: "Retry update check",
+          action: "retry",
+          progress: null,
+        };
+      }
       return {
-        bannerText: `Could not ${state.stage} Hum v${state.version ?? ""}. Try again.`,
+        bannerText:
+          state.message ??
+          `Could not ${state.stage} Hum v${state.version ?? ""}. Try again.`,
         trayText: `Retry update${state.version ? ` v${state.version}` : ""}`,
         action: "retry",
         progress: null,
       };
+    }
   }
 }
 
 export function nativeUpdateStatus(state: UpdateState): NativeUpdateStatus {
+  const quiet: NativeUpdateStatus = {
+    phase: "idle",
+    version: null,
+    progress: null,
+    retryable: false,
+    stage: null,
+  };
+
+  // Everything the tray hides in `updatePresentation` is hidden here too, so
+  // the menu item and the banner can never disagree about whether Hum is
+  // quietly working in the background.
   if (
-    (state.phase === "checking" || state.phase === "current") &&
+    (state.phase === "checking" ||
+      state.phase === "current" ||
+      state.phase === "downloading") &&
     state.origin === "automatic"
   ) {
-    return {
-      phase: "idle",
-      version: null,
-      progress: null,
-      retryable: false,
-      stage: null,
-    };
+    return quiet;
   }
-  if (state.phase === "error" && state.stage === "check" && state.origin === "automatic") {
-    return {
-      phase: "idle",
-      version: null,
-      progress: null,
-      retryable: false,
-      stage: null,
-    };
-  }
+  if (state.phase === "error" && state.origin === "automatic") return quiet;
 
   const version = "version" in state ? (state.version ?? null) : null;
   const progress = state.phase === "downloading" ? state.progress : null;

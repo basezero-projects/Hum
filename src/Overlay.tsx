@@ -49,11 +49,14 @@ import {
 import {
   canInstallUpdate,
   clampDownloadProgress,
+  friendlyUpdateError,
   nativeUpdateStatus,
   promoteUpdateOrigin,
   sanitizeUpdateVersion,
   shouldRequestManualCheck,
+  shouldRunPeriodicCheck,
   updatePresentation,
+  UPDATE_CHECK_INTERVAL_MS,
   type UpdateErrorStage,
   type UpdateOrigin,
   type UpdateOperation,
@@ -171,6 +174,9 @@ export default function Overlay() {
   const updateOperationRef = useRef<UpdateOperation>("idle");
   const updateCheckOriginRef = useRef<UpdateOrigin>("automatic");
   const updateOutcomeTimerRef = useRef<number | null>(null);
+  // Wall-clock stamp of the last check, so the periodic sweep below can tell
+  // a slept-through interval from a quiet one.
+  const lastUpdateCheckAtRef = useRef<number | null>(null);
   // Coarse re-render trigger for the progress bar / time readout.
   // Position interpolation is computed in render from
   // `track.position_ms + (Date.now() - track.last_update_unix_ms)` while
@@ -489,8 +495,29 @@ export default function Overlay() {
     const un = listen("updater-check-requested", () => {
       void handleUpdateAction();
     });
+
+    // Hum can sit running for weeks, so one check at mount is not enough.
+    // The tick is short but the decision is made against wall clock, which
+    // means a machine that slept through the interval checks as soon as it
+    // wakes rather than waiting out a fresh six hours.
+    const sweep = window.setInterval(() => {
+      if (updateOperationRef.current !== "idle") return;
+      if (updateStateRef.current.phase === "available") return;
+      if (
+        !shouldRunPeriodicCheck(
+          lastUpdateCheckAtRef.current,
+          Date.now(),
+          UPDATE_CHECK_INTERVAL_MS,
+        )
+      ) {
+        return;
+      }
+      void runUpdateCheck("automatic");
+    }, 5 * 60 * 1000);
+
     return () => {
       un.then((fn) => fn()).catch(() => {});
+      window.clearInterval(sweep);
       if (updateOutcomeTimerRef.current !== null) {
         window.clearTimeout(updateOutcomeTimerRef.current);
         updateOutcomeTimerRef.current = null;
@@ -542,53 +569,150 @@ export default function Overlay() {
         origin,
       );
       if (updateCheckOriginRef.current === "manual") {
-        publishUpdateState({ phase: "checking", origin: "manual" });
+        // A tray click during a silent pre-download should reveal the download
+        // rather than claim Hum is still checking, which would be a lie the
+        // user can disprove by watching nothing happen.
+        const live = updateStateRef.current;
+        publishUpdateState(
+          live.phase === "downloading"
+            ? { ...live, origin: "manual" }
+            : { phase: "checking", origin: "manual" },
+        );
       }
       return null;
     }
     if (updateOperationRef.current !== "idle") return null;
+
     updateOperationRef.current = "checking";
     updateCheckOriginRef.current = origin;
+    lastUpdateCheckAtRef.current = Date.now();
     clearUpdateOutcomeTimer();
     publishUpdateState({ phase: "checking", origin });
+
+    let update: Update | null;
     try {
-      const update = await checkForUpdate();
-      const finalOrigin = updateCheckOriginRef.current;
-      if (!update) {
-        await replaceAvailableUpdate(null);
-        if (finalOrigin === "manual") {
-          publishUpdateState({ phase: "current", origin: finalOrigin });
-          returnUpdateTrayToIdle(2500);
-        } else {
-          publishUpdateState({ phase: "idle" });
-        }
-        return null;
-      }
-      const version = sanitizeUpdateVersion(update.version);
-      if (!version) {
-        await update.close().catch(() => {});
-        if (finalOrigin === "manual") {
-          publishUpdateState({ phase: "error", stage: "check", origin: finalOrigin });
-        } else {
-          publishUpdateState({ phase: "idle" });
-        }
-        return null;
-      }
-      await replaceAvailableUpdate(update);
-      publishUpdateState({ phase: "available", version });
-      return update;
-    } catch {
+      update = await checkForUpdate();
+    } catch (error) {
       await replaceAvailableUpdate(null);
-      const finalOrigin = updateCheckOriginRef.current;
+      const failedOrigin = updateCheckOriginRef.current;
+      publishUpdateState({
+        phase: "error",
+        stage: "check",
+        origin: failedOrigin,
+        message:
+          failedOrigin === "manual" ? friendlyUpdateError(error) : undefined,
+      });
+      updateOperationRef.current = "idle";
+      return null;
+    }
+
+    const finalOrigin = updateCheckOriginRef.current;
+
+    if (!update) {
+      await replaceAvailableUpdate(null);
       if (finalOrigin === "manual") {
-        publishUpdateState({ phase: "error", stage: "check", origin: finalOrigin });
+        publishUpdateState({ phase: "current", origin: finalOrigin });
+        returnUpdateTrayToIdle(2500);
       } else {
         publishUpdateState({ phase: "idle" });
       }
-      return null;
-    } finally {
       updateOperationRef.current = "idle";
+      return null;
     }
+
+    const version = sanitizeUpdateVersion(update.version);
+    if (!version) {
+      await update.close().catch(() => {});
+      await replaceAvailableUpdate(null);
+      publishUpdateState({ phase: "error", stage: "check", origin: finalOrigin });
+      updateOperationRef.current = "idle";
+      return null;
+    }
+
+    await replaceAvailableUpdate(update);
+
+    // Fetch the bytes now rather than when the user clicks. `available` has
+    // to mean the artifact is on disk, because the banner offers an install
+    // and the tray offers a one-click action. Neither can honestly promise
+    // that while the download has not started.
+    let totalBytes: number | undefined;
+    let downloadedBytes = 0;
+    let publishedProgress: number | null = null;
+    let publishedOrigin: UpdateOrigin | null = null;
+    // The plugin can resolve `download()` without ever emitting `Finished`.
+    // Without this flag a truncated artifact would be offered as installable.
+    let finishedSeen = false;
+
+    publishUpdateState({
+      phase: "downloading",
+      version,
+      progress: null,
+      origin: finalOrigin,
+    });
+
+    const onDownload = (event: DownloadEvent) => {
+      if (event.event === "Started") {
+        totalBytes = event.data.contentLength;
+        downloadedBytes = 0;
+      } else if (event.event === "Progress") {
+        downloadedBytes += event.data.chunkLength;
+      } else if (event.event === "Finished") {
+        finishedSeen = true;
+        if (totalBytes) downloadedBytes = totalBytes;
+      }
+      const progress = clampDownloadProgress(downloadedBytes, totalBytes);
+      // Origin is read fresh each tick because a tray click can promote a
+      // silent download to a visible one part-way through.
+      const liveOrigin = updateCheckOriginRef.current;
+      if (progress !== publishedProgress || liveOrigin !== publishedOrigin) {
+        publishedProgress = progress;
+        publishedOrigin = liveOrigin;
+        publishUpdateState({
+          phase: "downloading",
+          version,
+          progress,
+          origin: liveOrigin,
+        });
+      }
+    };
+
+    try {
+      await update.download(onDownload);
+    } catch (error) {
+      await replaceAvailableUpdate(null);
+      const failedOrigin = updateCheckOriginRef.current;
+      publishUpdateState({
+        phase: "error",
+        stage: "download",
+        version,
+        origin: failedOrigin,
+        message:
+          failedOrigin === "manual" ? friendlyUpdateError(error) : undefined,
+      });
+      updateOperationRef.current = "idle";
+      return null;
+    }
+
+    if (!finishedSeen) {
+      await replaceAvailableUpdate(null);
+      const failedOrigin = updateCheckOriginRef.current;
+      publishUpdateState({
+        phase: "error",
+        stage: "download",
+        version,
+        origin: failedOrigin,
+        message:
+          failedOrigin === "manual"
+            ? "The update download did not finish cleanly. Check your connection and try again."
+            : undefined,
+      });
+      updateOperationRef.current = "idle";
+      return null;
+    }
+
+    publishUpdateState({ phase: "available", version });
+    updateOperationRef.current = "idle";
+    return update;
   }
 
   async function installUpdateInternal() {
@@ -601,46 +725,33 @@ export default function Overlay() {
         phase: "error",
         stage: "download",
         version: current.version,
+        origin: "manual",
       });
       return;
     }
 
+    // The artifact is already on disk, so this is the fast half: swap the
+    // files and restart. Nothing here touches the network.
     const version = current.version;
     updateOperationRef.current = "installing";
     availableUpdateRef.current = null;
-    let stage: UpdateErrorStage = "download";
-    let totalBytes: number | undefined;
-    let downloadedBytes = 0;
-    let publishedProgress: number | null = null;
-    publishUpdateState({ phase: "downloading", version, progress: null });
-
-    const onDownload = (event: DownloadEvent) => {
-      if (event.event === "Started") {
-        totalBytes = event.data.contentLength;
-        downloadedBytes = 0;
-      } else if (event.event === "Progress") {
-        downloadedBytes += event.data.chunkLength;
-      } else if (event.event === "Finished" && totalBytes) {
-        downloadedBytes = totalBytes;
-      }
-      const progress = clampDownloadProgress(downloadedBytes, totalBytes);
-      if (progress !== publishedProgress) {
-        publishedProgress = progress;
-        publishUpdateState({ phase: "downloading", version, progress });
-      }
-    };
+    let stage: UpdateErrorStage = "install";
+    publishUpdateState({ phase: "installing", version });
 
     try {
-      await resource!.download(onDownload);
-      stage = "install";
-      publishUpdateState({ phase: "installing", version });
       await resource!.install();
       stage = "restart";
       publishUpdateState({ phase: "restarting", version });
       await relaunch();
-    } catch {
+    } catch (error) {
       await resource!.close().catch(() => {});
-      publishUpdateState({ phase: "error", stage, version });
+      publishUpdateState({
+        phase: "error",
+        stage,
+        version,
+        origin: "manual",
+        message: friendlyUpdateError(error),
+      });
     } finally {
       updateOperationRef.current = "idle";
     }
