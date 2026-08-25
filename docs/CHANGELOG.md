@@ -6,6 +6,26 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.96] - 2026-08-25
+
+### Added
+- **Installing an update while music is playing now asks before it cuts the song off.** Installing exits Hum on the spot, so clicking "Install update v0.13.96" used to end playback mid-line with no warning that the click meant "restart now". If something is playing, the first click no longer installs. The overlay banner changes to "Installing stops playback and restarts Hum. Click again to install v0.13.96." and the tray item changes to "Install v0.13.96 and restart now". A second click goes ahead.
+
+  With nothing playing there is nothing to interrupt, so the click stands as given and installs immediately. The confirmation only shows up when it is actually protecting something.
+
+  The offer expires after ten seconds and reverts to the normal install prompt. Without that, the tray would sit on a one-click restart indefinitely, and somebody opening the menu an hour later to check for updates would kill their own playback instead.
+
+  Worth recording why this is a confirmation rather than a "install when I close Hum" option. The updater plugin spawns the Windows installer and then calls `std::process::exit(0)` inside `install()`, so there is no way to queue an install for later without leaving the app. Making the click an informed one is the honest version of the same goal.
+
+- **The update banner can be dismissed.** The dot and label on the overlay now show a small close control on hover. Clicking it hides the notice for the rest of the session without installing anything. The tray menu still carries the update, so nothing is lost by dismissing it.
+
+  Only notices that stick around can be dismissed, meaning "ready to install" and failures. States that clear themselves within seconds (installing, restarting, checking) have no close control, because it would be a target that vanishes as the pointer reaches it.
+
+  Dismissals are remembered per notice rather than globally. Waving away v0.13.96 does not silence v0.13.97 when it arrives, and dismissing a failed download does not hide a later failed install.
+
+### Fixed
+- **Dismissing the banner in Ghost mode no longer leaves an invisible clickable patch behind.** Ghost mode punches a click-through hole in the overlay wherever the update banner sits. That hole was positioned from whether a banner existed at all, so a dismissed banner would have left a small region that still swallowed clicks with nothing visible there. Both the banner and the hole now read the same visibility rule.
+
 ## [0.13.95] - 2026-08-25
 
 ### Changed

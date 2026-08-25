@@ -2,12 +2,16 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  bannerDismissKey,
+  bannerIsVisible,
   canInstallUpdate,
   clampDownloadProgress,
   friendlyUpdateError,
+  isBannerDismissible,
   nativeUpdateStatus,
   promoteUpdateOrigin,
   sanitizeUpdateVersion,
+  shouldConfirmInstall,
   shouldRequestManualCheck,
   shouldRunPeriodicCheck,
   updatePresentation,
@@ -98,6 +102,14 @@ const CASES: Array<{
     banner: null,
     tray: "Check for updates",
     action: "none",
+    progress: null,
+  },
+  {
+    state: { phase: "confirming", version: "1.2.3" },
+    banner:
+      "Installing stops playback and restarts Hum. Click again to install v1.2.3.",
+    tray: "Install v1.2.3 and restart now",
+    action: "install",
     progress: null,
   },
   {
@@ -369,4 +381,102 @@ test("friendly errors never leak raw provider text to the overlay", () => {
   const raw = "thread 'main' panicked at C:\\Users\\someone\\src\\updater.rs:42";
   const message = friendlyUpdateError(new Error(raw));
   assert.doesNotMatch(message, /panicked|\.rs:|C:\\/);
+});
+
+test("installing during playback asks once, and asks only then", () => {
+  const available: UpdateState = { phase: "available", version: "1.2.3" };
+
+  // Something is playing, so the restart would cut a song off mid-line.
+  assert.equal(shouldConfirmInstall(available, true), true);
+
+  // Nothing playing means nothing to interrupt, so the click stands as given
+  // rather than making the user click twice for no reason.
+  assert.equal(shouldConfirmInstall(available, false), false);
+
+  // The second click must install rather than asking again forever.
+  assert.equal(
+    shouldConfirmInstall({ phase: "confirming", version: "1.2.3" }, true),
+    false,
+  );
+
+  // Nothing else can be confirmed into an install.
+  assert.equal(shouldConfirmInstall({ phase: "idle" }, true), false);
+  assert.equal(
+    shouldConfirmInstall(
+      { phase: "downloading", version: "1.2.3", progress: 5, origin: "manual" },
+      true,
+    ),
+    false,
+  );
+});
+
+test("the confirm step stays installable and stays clickable in the tray", () => {
+  const confirming: UpdateState = { phase: "confirming", version: "1.2.3" };
+
+  assert.equal(canInstallUpdate(confirming, true), true);
+  // A confirm with no downloaded artifact behind it is still not installable.
+  assert.equal(canInstallUpdate(confirming, false), false);
+
+  // A disabled tray item here would strand the user one click short of the
+  // install they already asked for.
+  const native = nativeUpdateStatus(confirming);
+  assert.equal(native.phase, "confirming");
+  assert.equal(native.version, "1.2.3");
+  assert.equal(native.retryable, true);
+});
+
+test("only the states that persist can be dismissed", () => {
+  assert.equal(isBannerDismissible({ phase: "available", version: "1.2.3" }), true);
+  assert.equal(
+    isBannerDismissible({ phase: "error", stage: "install", version: "1.2.3" }),
+    true,
+  );
+
+  // These clear themselves within seconds, so a close button would be a
+  // target that disappears as the pointer reaches it.
+  for (const state of [
+    { phase: "installing", version: "1.2.3" },
+    { phase: "restarting", version: "1.2.3" },
+    { phase: "checking", origin: "manual" },
+    { phase: "confirming", version: "1.2.3" },
+  ] as UpdateState[]) {
+    assert.equal(isBannerDismissible(state), false, JSON.stringify(state));
+  }
+});
+
+test("dismissing one notice never silences a different one", () => {
+  const v1: UpdateState = { phase: "available", version: "1.2.3" };
+  const v2: UpdateState = { phase: "available", version: "1.2.4" };
+  const key = bannerDismissKey(v1);
+  assert.equal(key, "available:1.2.3");
+
+  assert.equal(bannerIsVisible(v1, key), false);
+  // A newer release has to announce itself even though the last one was
+  // waved away.
+  assert.equal(bannerIsVisible(v2, key), true);
+
+  // Errors key on their stage, so dismissing a failed download does not hide
+  // a later failed install.
+  const dl: UpdateState = { phase: "error", stage: "download", version: "1.2.3" };
+  const inst: UpdateState = { phase: "error", stage: "install", version: "1.2.3" };
+  const dlKey = bannerDismissKey(dl);
+  assert.equal(bannerIsVisible(dl, dlKey), false);
+  assert.equal(bannerIsVisible(inst, dlKey), true);
+});
+
+test("a silent state is never visible, dismissed or not", () => {
+  // bannerIsVisible drives the Ghost-mode click hole as well as the banner,
+  // so a state with no banner must never report itself visible.
+  const silent: UpdateState = {
+    phase: "downloading",
+    version: "1.2.3",
+    progress: 40,
+    origin: "automatic",
+  };
+  assert.equal(bannerIsVisible(silent, null), false);
+  assert.equal(bannerDismissKey(silent), null);
+  assert.equal(bannerIsVisible({ phase: "idle" }, null), false);
+
+  // And a visible state with no dismissal recorded stays visible.
+  assert.equal(bannerIsVisible({ phase: "available", version: "1.2.3" }, null), true);
 });

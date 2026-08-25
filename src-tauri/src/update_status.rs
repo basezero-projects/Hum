@@ -7,6 +7,8 @@ pub(crate) enum UpdatePhase {
     Checking,
     Current,
     Available,
+    /// Waiting on a second click, because installing would cut off playback.
+    Confirming,
     Downloading,
     Installing,
     Restarting,
@@ -64,6 +66,12 @@ pub(crate) fn tray_projection(status: &UpdateStatus) -> TrayProjection {
             version
                 .map(|value| format!("Install update v{value}"))
                 .unwrap_or_else(|| "Update available".to_string()),
+            true,
+        ),
+        UpdatePhase::Confirming => (
+            version
+                .map(|value| format!("Install v{value} and restart now"))
+                .unwrap_or_else(|| "Install and restart now".to_string()),
             true,
         ),
         UpdatePhase::Downloading => (
@@ -130,6 +138,25 @@ mod tests {
         });
         assert_eq!(available.text, "Install update v1.2.3");
         assert!(available.enabled);
+
+        // The confirm step names the consequence, not the action, and stays
+        // clickable: the second click is the one that actually installs, so a
+        // disabled item here would strand the user.
+        let confirming = tray_projection(&UpdateStatus {
+            phase: UpdatePhase::Confirming,
+            version: Some("1.2.3".into()),
+            progress: None,
+            retryable: true,
+            stage: None,
+        });
+        assert_eq!(confirming.text, "Install v1.2.3 and restart now");
+        assert!(confirming.enabled);
+
+        // A version that fails sanitizing still leaves an actionable item
+        // rather than a dead menu row.
+        let confirming_unnamed = tray_projection(&status(UpdatePhase::Confirming));
+        assert_eq!(confirming_unnamed.text, "Install and restart now");
+        assert!(confirming_unnamed.enabled);
 
         let downloading = tray_projection(&UpdateStatus {
             phase: UpdatePhase::Downloading,
@@ -199,5 +226,17 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.phase, UpdatePhase::Downloading);
         assert_eq!(parsed.progress, Some(20));
+
+        // The frontend sends this one whenever a restart would interrupt
+        // playback, so a rename on either side has to break a test.
+        let confirming: UpdateStatus = serde_json::from_value(serde_json::json!({
+            "phase": "confirming",
+            "version": "1.2.3",
+            "progress": null,
+            "retryable": true,
+            "stage": null
+        }))
+        .unwrap();
+        assert_eq!(confirming.phase, UpdatePhase::Confirming);
     }
 }

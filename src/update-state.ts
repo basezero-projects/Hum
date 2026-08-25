@@ -16,6 +16,12 @@ export type UpdateState =
   | { phase: "checking"; origin: UpdateOrigin }
   | { phase: "current"; origin: UpdateOrigin }
   | { phase: "available"; version: string }
+  /**
+   * The user asked to install while music was playing, so Hum is waiting for
+   * a second click before it restarts. Only ever entered when a restart would
+   * actually interrupt something.
+   */
+  | { phase: "confirming"; version: string }
   | {
       phase: "downloading";
       version: string;
@@ -32,6 +38,16 @@ export type UpdateState =
       /** Human explanation from `friendlyUpdateError`. Falls back to generic copy. */
       message?: string;
     };
+
+/**
+ * How long the "click again to restart" offer stands before Hum reverts to
+ * the plain install prompt.
+ *
+ * Without this the tray would sit on a one-click restart indefinitely, so
+ * somebody opening the menu later to check for updates would instead kill
+ * their own playback.
+ */
+export const UPDATE_CONFIRM_TIMEOUT_MS = 10_000;
 
 export type UpdateAction = "none" | "install" | "retry";
 export type UpdateOperation = "idle" | "checking" | "installing";
@@ -117,7 +133,65 @@ export function canInstallUpdate(
   state: UpdateState,
   hasResource: boolean,
 ): boolean {
-  return state.phase === "available" && hasResource;
+  return (
+    (state.phase === "available" || state.phase === "confirming") && hasResource
+  );
+}
+
+/**
+ * Whether clicking install should ask first rather than restarting straight
+ * away.
+ *
+ * Hum exits the moment `install()` runs, so a click during playback cuts the
+ * song off. Asking costs one extra click and only when it would actually
+ * interrupt something, which is why this takes the playing flag rather than
+ * confirming unconditionally.
+ */
+export function shouldConfirmInstall(
+  state: UpdateState,
+  isPlaying: boolean,
+): boolean {
+  return state.phase === "available" && isPlaying;
+}
+
+/**
+ * Whether the overlay banner offers a dismiss control for this state.
+ *
+ * Only the two states that persist indefinitely can be dismissed. Everything
+ * else clears itself within seconds, so a close button on them would be a
+ * target that vanishes as the pointer arrives.
+ */
+export function isBannerDismissible(state: UpdateState): boolean {
+  return state.phase === "available" || state.phase === "error";
+}
+
+/**
+ * Identity for a dismissal, so dismissing one update does not silence the
+ * next one. Errors key on their stage, which means a download failure the
+ * user waved away does not hide a later install failure.
+ */
+export function bannerDismissKey(state: UpdateState): string | null {
+  if (state.phase === "available") return `available:${state.version}`;
+  if (state.phase === "error") {
+    return `error:${state.stage}:${state.version ?? ""}`;
+  }
+  return null;
+}
+
+/**
+ * Whether the overlay should be showing a banner right now.
+ *
+ * Both the banner itself and the native click-through hole read this, so a
+ * dismissed banner cannot leave an invisible clickable region sitting over
+ * the user's screen in Ghost mode.
+ */
+export function bannerIsVisible(
+  state: UpdateState,
+  dismissedKey: string | null,
+): boolean {
+  if (updatePresentation(state).bannerText === null) return false;
+  const key = bannerDismissKey(state);
+  return key === null || key !== dismissedKey;
 }
 
 /**
@@ -216,6 +290,15 @@ export function updatePresentation(state: UpdateState): UpdatePresentation {
         action: "install",
         progress: null,
       };
+    case "confirming":
+      // Names the consequence rather than the action. Somebody who opened the
+      // tray to check for updates must not lose a song to a stray click.
+      return {
+        bannerText: `Installing stops playback and restarts Hum. Click again to install v${state.version}.`,
+        trayText: `Install v${state.version} and restart now`,
+        action: "install",
+        progress: null,
+      };
     case "downloading":
       // An automatic download is nobody's business until it finishes. Showing
       // progress for something the user never asked for turns an always-on-top
@@ -307,8 +390,11 @@ export function nativeUpdateStatus(state: UpdateState): NativeUpdateStatus {
 
   const version = "version" in state ? (state.version ?? null) : null;
   const progress = state.phase === "downloading" ? state.progress : null;
+  // `confirming` has to stay clickable, because the second click is the one
+  // that actually installs.
   const retryable =
     state.phase === "available" ||
+    state.phase === "confirming" ||
     (state.phase === "error" && state.origin !== "automatic");
   const stage = state.phase === "error" ? state.stage : null;
   return { phase: state.phase, version, progress, retryable, stage };

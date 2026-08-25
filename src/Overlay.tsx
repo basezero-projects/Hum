@@ -47,9 +47,13 @@ import {
   stableRibbonLineMetrics,
 } from "./ribbon-composition";
 import {
+  bannerDismissKey,
+  bannerIsVisible,
   canInstallUpdate,
   clampDownloadProgress,
   friendlyUpdateError,
+  isBannerDismissible,
+  shouldConfirmInstall,
   nativeUpdateStatus,
   promoteUpdateOrigin,
   sanitizeUpdateVersion,
@@ -57,6 +61,7 @@ import {
   shouldRunPeriodicCheck,
   updatePresentation,
   UPDATE_CHECK_INTERVAL_MS,
+  UPDATE_CONFIRM_TIMEOUT_MS,
   type UpdateErrorStage,
   type UpdateOrigin,
   type UpdateOperation,
@@ -177,6 +182,11 @@ export default function Overlay() {
   // Wall-clock stamp of the last check, so the periodic sweep below can tell
   // a slept-through interval from a quiet one.
   const lastUpdateCheckAtRef = useRef<number | null>(null);
+  // Which banner the user waved away. Keyed by version and error stage, so
+  // dismissing one notice never silences a later, different one.
+  const [dismissedBannerKey, setDismissedBannerKey] = useState<string | null>(
+    null,
+  );
   // Coarse re-render trigger for the progress bar / time readout.
   // Position interpolation is computed in render from
   // `track.position_ms + (Date.now() - track.last_update_unix_ms)` while
@@ -531,9 +541,9 @@ export default function Overlay() {
   useEffect(() => {
     if (!platformInfo?.window.update_banner_pointer_exception) return;
 
-    const visible = updatePresentation(updateState).bannerText !== null;
+    const visible = bannerIsVisible(updateState, dismissedBannerKey);
     invoke("set_update_banner_visible", { visible }).catch(() => {});
-  }, [platformInfo, updateState]);
+  }, [platformInfo, updateState, dismissedBannerKey]);
 
   function publishUpdateState(next: UpdateState) {
     updateStateRef.current = next;
@@ -554,6 +564,26 @@ export default function Overlay() {
       updateOutcomeTimerRef.current = null;
       publishUpdateState({ phase: "idle" });
     }, delayMs);
+  }
+
+  /**
+   * Hold an install offer open for one more click.
+   *
+   * The plugin exits the process inside `install()`, so there is no way to
+   * defer the restart itself. The honest alternative is to make sure the
+   * click that triggers it was an informed one.
+   */
+  function enterInstallConfirm(version: string) {
+    clearUpdateOutcomeTimer();
+    publishUpdateState({ phase: "confirming", version });
+    updateOutcomeTimerRef.current = window.setTimeout(() => {
+      updateOutcomeTimerRef.current = null;
+      // Revert rather than install. An offer nobody took must never decay
+      // into a one-click restart waiting for an unrelated tray visit.
+      if (updateStateRef.current.phase === "confirming") {
+        publishUpdateState({ phase: "available", version });
+      }
+    }, UPDATE_CONFIRM_TIMEOUT_MS);
   }
 
   async function replaceAvailableUpdate(next: Update | null) {
@@ -719,7 +749,9 @@ export default function Overlay() {
     if (updateOperationRef.current !== "idle") return;
     const current = updateStateRef.current;
     const resource = availableUpdateRef.current;
-    if (current.phase !== "available") return;
+    if (current.phase !== "available" && current.phase !== "confirming") return;
+    // A pending confirm revert must not fire while the install is running.
+    clearUpdateOutcomeTimer();
     if (!canInstallUpdate(current, resource !== null)) {
       publishUpdateState({
         phase: "error",
@@ -781,8 +813,24 @@ export default function Overlay() {
   }
 
   async function handleUpdateAction() {
-    const action = updatePresentation(updateStateRef.current).action;
-    if (action === "install") await installUpdateInternal();
+    const current = updateStateRef.current;
+    const action = updatePresentation(current).action;
+
+    if (action === "install") {
+      // Installing exits Hum on the spot. If something is playing, that is a
+      // song cut off mid-line, so it gets one confirmation first. With nothing
+      // playing there is nothing to interrupt and the click stands as given.
+      if (
+        current.phase === "available" &&
+        shouldConfirmInstall(current, trackRef.current?.state === "playing")
+      ) {
+        enterInstallConfirm(current.version);
+        return;
+      }
+      await installUpdateInternal();
+      return;
+    }
+
     if (action === "retry") await retryUpdateInternal();
     if (shouldRequestManualCheck(action, updateOperationRef.current)) {
       await runUpdateCheck("manual");
@@ -1278,6 +1326,8 @@ export default function Overlay() {
         nudgeBanner={nudgeBanner}
         updateState={updateState}
         onInstallUpdate={handleUpdateAction}
+        dismissedBannerKey={dismissedBannerKey}
+        onDismissBanner={setDismissedBannerKey}
         bridgeServiceName={bridgeServiceName}
         adActive={adActive}
         onHoverChange={setHovered}
@@ -1300,7 +1350,12 @@ export default function Overlay() {
           <ServiceBg serviceName={ambientServiceName} />
         ) : null}
         <NudgeBanner banner={nudgeBanner} />
-        <UpdateBanner state={updateState} onAction={handleUpdateAction} />
+        <UpdateBanner
+          state={updateState}
+          onAction={handleUpdateAction}
+          dismissedKey={dismissedBannerKey}
+          onDismiss={setDismissedBannerKey}
+        />
         <div {...dragProps} style={innerRowStyle}>
           {showArt && albumArt ? (
             <AlbumArtSide dataUrl={albumArt.data_url} size={ribbonArtSideSize} dragRegion={isEdit} onClick={openArtistPanel} />
@@ -1368,7 +1423,12 @@ export default function Overlay() {
           <ServiceBg serviceName={ambientServiceName} />
         ) : null}
         <NudgeBanner banner={nudgeBanner} />
-        <UpdateBanner state={updateState} onAction={handleUpdateAction} />
+        <UpdateBanner
+          state={updateState}
+          onAction={handleUpdateAction}
+          dismissedKey={dismissedBannerKey}
+          onDismiss={setDismissedBannerKey}
+        />
         {showArt && albumArt ? <AlbumArtBadge dataUrl={albumArt.data_url} onClick={openArtistPanel} /> : null}
         {openArtistPanel && (!showArt || !albumArt) && lyrics?.status !== "unsupported" ? (
           <ArtistInfoDot onClick={openArtistPanel} />
@@ -1436,7 +1496,12 @@ export default function Overlay() {
       ) : null}
       <NudgeBanner banner={nudgeBanner} />
       <div {...dragProps} style={outerStackStyle}>
-        <UpdateBanner state={updateState} onAction={handleUpdateAction} />
+        <UpdateBanner
+          state={updateState}
+          onAction={handleUpdateAction}
+          dismissedKey={dismissedBannerKey}
+          onDismiss={setDismissedBannerKey}
+        />
         {openArtistPanel && (!showArt || !albumArt) && lyrics?.status !== "unsupported" ? (
           <ArtistInfoDot onClick={openArtistPanel} />
         ) : null}
@@ -1519,6 +1584,8 @@ function SquareLyricsView({
   nudgeBanner,
   updateState,
   onInstallUpdate,
+  dismissedBannerKey,
+  onDismissBanner,
   bridgeServiceName,
   adActive,
   onHoverChange,
@@ -1551,6 +1618,8 @@ function SquareLyricsView({
   nudgeBanner: TimingBanner | null;
   updateState: UpdateState;
   onInstallUpdate: () => void;
+  dismissedBannerKey: string | null;
+  onDismissBanner: (key: string) => void;
   bridgeServiceName: string | null;
   adActive: boolean;
   onHoverChange: (hovered: boolean) => void;
@@ -1800,7 +1869,12 @@ function SquareLyricsView({
 
       <NudgeBanner banner={nudgeBanner} />
       <div style={{ position: "absolute", top: 10, left: 14, zIndex: 5 }}>
-        <UpdateBanner state={updateState} onAction={onInstallUpdate} />
+        <UpdateBanner
+          state={updateState}
+          onAction={onInstallUpdate}
+          dismissedKey={dismissedBannerKey}
+          onDismiss={onDismissBanner}
+        />
       </div>
 
       {settings.show_media || (showArt && albumArt) ? (
@@ -2274,14 +2348,19 @@ function usePrefersReducedMotion(): boolean {
 function UpdateBanner({
   state,
   onAction,
+  dismissedKey,
+  onDismiss,
 }: {
   state: UpdateState;
   onAction: () => void;
+  dismissedKey: string | null;
+  onDismiss: (key: string) => void;
 }) {
   const [hover, setHover] = useState(false);
   const presentation = updatePresentation(state);
-  if (presentation.bannerText === null) return null;
+  if (!bannerIsVisible(state, dismissedKey)) return null;
   const clickable = presentation.action !== "none";
+  const dismissible = isBannerDismissible(state);
 
   // Sits in normal flow as the first child of `outerStackStyle` in the main
   // render tree — above the art+lyrics row, contributing its own height to
@@ -2364,6 +2443,34 @@ function UpdateBanner({
       >
         {presentation.bannerText}
       </span>
+      {dismissible && expanded ? (
+        <button
+          type="button"
+          aria-label="Dismiss update notice"
+          title="Dismiss. The tray menu keeps the update."
+          onClick={(event) => {
+            // Without this the click falls through to the wrapper and starts
+            // the very install the user was trying to put off.
+            event.stopPropagation();
+            const key = bannerDismissKey(state);
+            if (key) onDismiss(key);
+          }}
+          style={{
+            background: "none",
+            border: "none",
+            padding: "0 2px",
+            marginLeft: 2,
+            cursor: "pointer",
+            pointerEvents: "auto",
+            color: "rgba(234,234,234,0.55)",
+            fontSize: 12,
+            lineHeight: 1,
+            fontFamily: "inherit",
+          }}
+        >
+          {"\u00d7"}
+        </button>
+      ) : null}
     </div>
   );
 }
