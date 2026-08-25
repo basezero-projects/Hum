@@ -6,6 +6,17 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.94] - 2026-08-23
+
+### Fixed
+- **Videos with long intros or mid-song cut scenes now show plain lyrics instead of karaoke that runs minutes early.** v0.13.93 caught this by comparing the video's length to the lyric record's, but that test believes the length the record reports, and records sometimes report the wrong one. Hum now also checks whether the lyric timings actually reach the end of what is playing, which catches a mislabelled record no matter what duration it claims.
+
+  The case that exposed it: "Ella Langley - Choosin' Texas (Official Video)" runs 7 minutes, with the song not starting until 1:34 and the first line not sung until 1:51. LRCLib holds twenty records for it whose timings are byte-for-byte identical (first line at 17 seconds, last at 3:36) while their stated durations range from 2:20 to 7:42. The 7:02 one matched the video almost exactly, earned a perfect duration score, and still ran roughly a minute and a half early, because its words describe the 3:52 audio. Somebody had stamped the video's length onto the standard audio lyrics.
+
+  The new test is simple: if the last line lands before 60 percent of the way through the track, the timings cannot be describing this cut. Normal songs finish between 85 and 100 percent, and even a long instrumental outro reaches about 70, so only a clear mismatch trips it. A song that genuinely stops singing early falls back to an untimed block, which is the same graceful outcome rather than a wrong one.
+
+  Worth recording why no automatic correction is possible here. That video also cuts away mid-song around 2:51 and does not resume singing until 3:41. The video timeline is therefore not a shifted copy of the audio timeline, it is the audio broken up by inserted footage, so no single offset could line the two up. Keeping the words and dropping the timing claim is the only honest answer for this kind of video.
+
 ## [0.13.93] - 2026-08-23
 
 ### Changed

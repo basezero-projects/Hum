@@ -1988,6 +1988,13 @@ fn pick_best(
 /// two of trailing silence) and below a real structural difference.
 const TRUSTED_TIMING_GAP_SECS: i64 = 10;
 
+/// Minimum percentage of the playing track that timed lyrics must reach before
+/// we believe they describe this cut.
+///
+/// Set well below normal songs (85% to 100%, or around 70% with a long
+/// instrumental outro) so only a clear mismatch trips it.
+const MIN_LYRIC_COVERAGE_PCT: i64 = 60;
+
 /// Downgrade timed lyrics to an untimed block when the durations say the
 /// timings cannot line up.
 ///
@@ -2011,19 +2018,57 @@ fn downgrade_untrustworthy_timing(
     record_secs: Option<f64>,
     requested_duration_ms: u64,
 ) -> CachedLyrics {
-    let (Some(rec_secs), true) = (record_secs, requested_duration_ms > 0) else {
-        // No duration on one side, so there is nothing to compare. Leave it
-        // alone rather than punish a record for missing metadata.
+    if requested_duration_ms == 0 {
+        // Nothing to compare against. Leave it alone rather than punish a
+        // record for metadata we are missing on our own side.
         return cached;
+    }
+    let track_secs = requested_duration_ms as i64 / 1000;
+
+    // Test 1: the record's stated length disagrees with what is playing.
+    // Catches an honest record of the released audio matched against a longer
+    // video cut.
+    let duration_disagrees = match record_secs {
+        Some(rec) if rec as i64 > 0 => (track_secs - rec as i64).abs() > TRUSTED_TIMING_GAP_SECS,
+        _ => false,
     };
-    let rec_secs = rec_secs as i64;
-    if rec_secs <= 0 {
+
+    // Test 2: the timings do not span the track, regardless of what duration
+    // the record claims.
+    //
+    // Needed because test 1 trusts the record's own duration, and that
+    // duration can be wrong. Real case: "Ella Langley - Choosin' Texas
+    // (Official Video)" is 421s, and LRCLib holds twenty records for it whose
+    // timings are byte-identical (first line 17s, last line 216s) while their
+    // stated durations range from 140s to 462s. The 422s one matched our
+    // 421s video almost exactly and scored a perfect duration bonus, but its
+    // words still ran out at the halfway mark because they describe the 232s
+    // audio, not the video. Someone simply stamped the video's length onto the
+    // standard audio LRC.
+    //
+    // Lyrics that stop less than `MIN_LYRIC_COVERAGE_PCT` of the way through
+    // cannot be describing this cut. Normal songs land at 85% to 100%; a long
+    // instrumental outro might reach 70%. A track that genuinely stops singing
+    // early degrades to an untimed block, which is the same graceful outcome
+    // rather than a wrong one.
+    let coverage_too_short = match &cached {
+        CachedLyrics::Synced { lines, .. } => lines
+            .iter()
+            .map(|l| l.time_ms)
+            .max()
+            .map(|last_ms| {
+                let last_secs = last_ms as i64 / 1000;
+                last_secs > 0 && last_secs * 100 < track_secs * MIN_LYRIC_COVERAGE_PCT
+            })
+            .unwrap_or(false),
+        _ => false,
+    };
+
+    if !duration_disagrees && !coverage_too_short {
         return cached;
     }
-    let gap = (requested_duration_ms as i64 / 1000 - rec_secs).abs();
-    if gap <= TRUSTED_TIMING_GAP_SECS {
-        return cached;
-    }
+    let rec_secs = record_secs.map(|r| r as i64).unwrap_or(0);
+    let gap = (track_secs - rec_secs).abs();
     match cached {
         CachedLyrics::Synced { lines, .. } => {
             let text = lines
@@ -2039,8 +2084,7 @@ fn downgrade_untrustworthy_timing(
                 CachedLyrics::NotFound
             } else {
                 eprintln!(
-                    "[lyrics] timing not trustworthy ({gap}s gap: track {}s vs record {rec_secs}s), showing unsynced",
-                    requested_duration_ms / 1000
+                    "[lyrics] timing not trustworthy for a {track_secs}s track (record {rec_secs}s, gap {gap}s, duration_disagrees={duration_disagrees}, coverage_too_short={coverage_too_short}), showing unsynced"
                 );
                 CachedLyrics::Plain { text }
             }
@@ -3385,6 +3429,8 @@ mod tests {
     // the intro.
     #[test]
     fn untrustworthy_timing_degrades_to_unsynced() {
+        // Spans the track the way a real lyric sheet does, so these cases
+        // exercise the duration test rather than tripping the coverage test.
         let synced = || CachedLyrics::Synced {
             lines: vec![
                 LyricLine {
@@ -3393,7 +3439,7 @@ mod tests {
                     words: None,
                 },
                 LyricLine {
-                    time_ms: 14_000,
+                    time_ms: 190_000,
                     text: "I'm not good".into(),
                     words: None,
                 },
@@ -3440,6 +3486,49 @@ mod tests {
         ));
         assert!(matches!(
             downgrade_untrustworthy_timing(synced(), Some(0.0), 209_000),
+            CachedLyrics::Synced { .. }
+        ));
+
+        // A record whose stated duration matches perfectly but whose timings
+        // stop halfway. Twenty records for "Ella Langley - Choosin' Texas"
+        // share identical timings while claiming durations from 140s to 462s;
+        // the 422s one matched a 421s video exactly, scored a perfect duration
+        // bonus, and still ran 94 seconds early because its words describe the
+        // 232s audio. Test 1 cannot catch this, because it believes the
+        // record's own duration.
+        let short_coverage = || CachedLyrics::Synced {
+            lines: vec![
+                LyricLine {
+                    time_ms: 17_370,
+                    text: "Just when I thought".into(),
+                    words: None,
+                },
+                LyricLine {
+                    time_ms: 216_000,
+                    text: "the last line".into(),
+                    words: None,
+                },
+            ],
+            translation: None,
+        };
+        let out = downgrade_untrustworthy_timing(short_coverage(), Some(422.0), 421_281);
+        match out {
+            CachedLyrics::Plain { text } => assert!(text.contains("Just when I thought")),
+            other => panic!("expected Plain for 51% coverage, got {other:?}"),
+        }
+
+        // The same timings against the track they actually describe are fine,
+        // even though the words stop 16s before the end.
+        assert!(
+            matches!(
+                downgrade_untrustworthy_timing(short_coverage(), Some(232.0), 232_000),
+                CachedLyrics::Synced { .. }
+            ),
+            "93% coverage is a normal song"
+        );
+        // A long instrumental outro (70%) is still trusted.
+        assert!(matches!(
+            downgrade_untrustworthy_timing(short_coverage(), Some(308.0), 308_000),
             CachedLyrics::Synced { .. }
         ));
 
