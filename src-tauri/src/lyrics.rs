@@ -576,6 +576,7 @@ pub fn start(
                     Outcome {
                         cached: CachedLyrics::Unsupported,
                         source: lyrics_source,
+                        matched_duration_ms: None,
                         persist: false,
                         errors: Vec::new(),
                     },
@@ -678,6 +679,7 @@ async fn resolve_lyrics(
         return Outcome {
             cached,
             source: "memory".into(),
+            matched_duration_ms: None,
             persist: false,
             errors: Vec::new(),
         };
@@ -688,6 +690,7 @@ async fn resolve_lyrics(
         return Outcome {
             cached,
             source: "store".into(),
+            matched_duration_ms: None,
             persist: false,
             errors: Vec::new(),
         };
@@ -720,6 +723,7 @@ async fn resolve_lyrics(
         return Outcome {
             cached: CachedLyrics::NotFound,
             source: "mashup-skip".into(),
+            matched_duration_ms: None,
             persist: false,
             errors: Vec::new(),
         };
@@ -757,9 +761,11 @@ async fn resolve_lyrics(
         ),
     );
 
-    let mut netease_line_fallback: Option<(CachedLyrics, String)> = None;
+    let mut netease_line_fallback: Option<(CachedLyrics, String, Option<u64>)> = None;
     match netease_result {
-        Ok(Ok((cached, source))) if !matches!(cached, CachedLyrics::NotFound) => {
+        Ok(Ok((cached, source, matched_duration_ms)))
+            if !matches!(cached, CachedLyrics::NotFound) =>
+        {
             let has_words = match &cached {
                 CachedLyrics::Synced { lines, .. } => has_valid_word_timing(lines),
                 _ => false,
@@ -769,11 +775,12 @@ async fn resolve_lyrics(
                 return Outcome {
                     cached,
                     source,
+                    matched_duration_ms,
                     persist: true,
                     errors: Vec::new(),
                 };
             }
-            netease_line_fallback = Some((cached, source));
+            netease_line_fallback = Some((cached, source, matched_duration_ms));
         }
         Ok(Ok(_)) => {
             // Clean NetEase miss. Deliberately does NOT mark the resolution
@@ -790,11 +797,12 @@ async fn resolve_lyrics(
     }
 
     match lrclib_result {
-        Ok((cached, source)) if !matches!(cached, CachedLyrics::NotFound) => {
+        Ok((cached, source, matched_duration_ms)) if !matches!(cached, CachedLyrics::NotFound) => {
             mem.write().await.put(key.to_string(), cached.clone());
             return Outcome {
                 cached,
                 source,
+                matched_duration_ms,
                 persist: true,
                 errors: Vec::new(),
             };
@@ -808,11 +816,12 @@ async fn resolve_lyrics(
         }
     }
 
-    if let Some((cached, source)) = netease_line_fallback {
+    if let Some((cached, source, matched_duration_ms)) = netease_line_fallback {
         mem.write().await.put(key.to_string(), cached.clone());
         return Outcome {
             cached,
             source,
+            matched_duration_ms,
             persist: true,
             errors: Vec::new(),
         };
@@ -849,6 +858,7 @@ fn miss_outcome(lrclib_clean_miss: bool, errors: Vec<String>) -> Outcome {
         Outcome {
             cached: CachedLyrics::NotFound,
             source: "all-sources".into(),
+            matched_duration_ms: None,
             persist: false,
             errors,
         }
@@ -922,6 +932,11 @@ impl ErrorRetry {
 struct Outcome {
     cached: CachedLyrics,
     source: String,
+    /// Duration of the lyric record we matched, when the provider reported
+    /// one. Recorded so the coverage log can show how far the matched record
+    /// is from the track actually playing, which is what decides whether line
+    /// timings are trustworthy.
+    matched_duration_ms: Option<u64>,
     persist: bool,
     /// Per-source failures collected during this resolution. Only populated on
     /// the error branch; flows into `CurrentLyrics::errors` so the dev console
@@ -934,6 +949,7 @@ impl Outcome {
         Self {
             cached: CachedLyrics::NotFound,
             source: "error".into(),
+            matched_duration_ms: None,
             persist: false,
             errors,
         }
@@ -972,6 +988,11 @@ struct LyricResolution {
     cleaned_artist: String,
     album: String,
     duration_ms: u64,
+    /// Duration of the lyric record we matched, when the provider reported
+    /// one. The gap between this and `duration_ms` is what decides whether
+    /// line timings are trustworthy, so it is recorded to show how often
+    /// official music videos diverge from the released audio.
+    matched_duration_ms: Option<u64>,
     /// e.g. `chrome.exe`, `Spotify.exe`.
     source_app_id: Option<String>,
     /// e.g. `youtube-web`, when a browser bridge supplied the metadata.
@@ -1081,7 +1102,7 @@ pub fn export_lyric_report(app: AppHandle) -> Result<String, String> {
 
     let mut csv = String::new();
     csv.push_str(
-        "outcome,video_title,lyric_preview,provider,plays,raw_artist,raw_title,cleaned_artist,cleaned_title,duration_ms,line_count,word_timed,source_app_id,bridge_source,errors
+        "outcome,video_title,lyric_preview,provider,plays,raw_artist,raw_title,cleaned_artist,cleaned_title,duration_ms,matched_duration_ms,line_count,word_timed,source_app_id,bridge_source,errors
 ",
     );
 
@@ -1101,7 +1122,7 @@ pub fn export_lyric_report(app: AppHandle) -> Result<String, String> {
     for e in &rows {
         let _ = writeln!(
             csv,
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             esc(&e.outcome),
             esc(e.video_title.as_deref().unwrap_or("")),
             esc(e.lyric_preview.as_deref().unwrap_or("")),
@@ -1112,6 +1133,7 @@ pub fn export_lyric_report(app: AppHandle) -> Result<String, String> {
             esc(&e.cleaned_artist),
             esc(&e.cleaned_title),
             e.duration_ms,
+            e.matched_duration_ms.unwrap_or(0),
             e.line_count,
             e.word_timed,
             esc(e.source_app_id.as_deref().unwrap_or("")),
@@ -1227,6 +1249,7 @@ fn log_resolution(app: &AppHandle, track: &TrackEcho, out: &Outcome) {
             cleaned_artist,
             album: track.album.clone(),
             duration_ms: track.duration_ms,
+            matched_duration_ms: out.matched_duration_ms,
             source_app_id: track.source_app_id.clone(),
             bridge_source: track.bridge_source.clone(),
             video_title: track.video_title.clone(),
@@ -1453,7 +1476,7 @@ async fn fetch_lrclib(
     title: &str,
     album: &str,
     duration_ms: u64,
-) -> Result<(CachedLyrics, String)> {
+) -> Result<(CachedLyrics, String, Option<u64>)> {
     // Race /api/get and /api/search in parallel. LRCLib responses are ~8-10s
     // each from this network, so sequential fetch (get → maybe search) was up
     // to ~20s on misses. Parallel halves the wall-clock to ~10s.
@@ -1467,17 +1490,20 @@ async fn fetch_lrclib(
     );
 
     if let Ok(Some(rec)) = &get_res {
-        let cached = to_cached_ref(rec);
+        let rec_ms = rec.duration.map(|d| (d * 1000.0) as u64);
+        let cached = downgrade_untrustworthy_timing(to_cached_ref(rec), rec.duration, duration_ms);
         if !matches!(cached, CachedLyrics::NotFound) {
-            return Ok((cached, "lrclib".into()));
+            return Ok((cached, "lrclib".into(), rec_ms));
         }
     }
 
     if let Ok(records) = &search_res {
         if let Some(rec) = pick_best(records.clone(), title, artist, duration_ms) {
-            let cached = to_cached(rec);
+            let rec_secs = rec.duration;
+            let rec_ms = rec_secs.map(|d| (d * 1000.0) as u64);
+            let cached = downgrade_untrustworthy_timing(to_cached(rec), rec_secs, duration_ms);
             if !matches!(cached, CachedLyrics::NotFound) {
-                return Ok((cached, "lrclib-search".into()));
+                return Ok((cached, "lrclib-search".into(), rec_ms));
             }
         }
     }
@@ -1496,9 +1522,11 @@ async fn fetch_lrclib(
     if !stripped.is_empty() && stripped != title {
         if let Ok(records) = try_search_lrclib_once(client, &stripped).await {
             if let Some(rec) = pick_best(records, &stripped, artist, duration_ms) {
-                let cached = to_cached(rec);
+                let rec_secs = rec.duration;
+                let rec_ms = rec_secs.map(|d| (d * 1000.0) as u64);
+                let cached = downgrade_untrustworthy_timing(to_cached(rec), rec_secs, duration_ms);
                 if !matches!(cached, CachedLyrics::NotFound) {
-                    return Ok((cached, "lrclib-search".into()));
+                    return Ok((cached, "lrclib-search".into(), rec_ms));
                 }
             }
         }
@@ -1533,9 +1561,12 @@ async fn fetch_lrclib(
         if let Ok(records) = try_search_lrclib_once(client, &artist_as_title).await {
             if let Some(rec) = pick_best(records, &artist_as_title, title, duration_ms) {
                 if reversal_is_corroborated(&rec, title) {
-                    let cached = to_cached(rec);
+                    let rec_secs = rec.duration;
+                    let rec_ms = rec_secs.map(|d| (d * 1000.0) as u64);
+                    let cached =
+                        downgrade_untrustworthy_timing(to_cached(rec), rec_secs, duration_ms);
                     if !matches!(cached, CachedLyrics::NotFound) {
-                        return Ok((cached, "lrclib-search".into()));
+                        return Ok((cached, "lrclib-search".into(), rec_ms));
                     }
                 } else {
                     eprintln!(
@@ -1551,7 +1582,7 @@ async fn fetch_lrclib(
 
     // Both completed but had no content → authoritative NotFound.
     if get_res.is_ok() && search_res.is_ok() {
-        return Ok((CachedLyrics::NotFound, "lrclib".into()));
+        return Ok((CachedLyrics::NotFound, "lrclib".into(), None));
     }
 
     // At least one was a transient error — surface it so we don't cache.
@@ -1559,7 +1590,7 @@ async fn fetch_lrclib(
         (Err(e), Err(_)) => Err(e.context("both /api/get and /api/search failed")),
         (Err(e), _) => Err(e.context("/api/get failed")),
         (_, Err(e)) => Err(e.context("/api/search failed")),
-        _ => Ok((CachedLyrics::NotFound, "lrclib".into())),
+        _ => Ok((CachedLyrics::NotFound, "lrclib".into(), None)),
     }
 }
 
@@ -1950,6 +1981,74 @@ fn pick_best(
     scored.into_iter().next().map(|(_, r)| r)
 }
 
+/// Largest gap, in seconds, between the playing track and the matched record
+/// that we still trust line timings across.
+///
+/// Ten is chosen to sit just above the noise (differing fade-outs, a second or
+/// two of trailing silence) and below a real structural difference.
+const TRUSTED_TIMING_GAP_SECS: i64 = 10;
+
+/// Downgrade timed lyrics to an untimed block when the durations say the
+/// timings cannot line up.
+///
+/// Official music videos open with an intro, and LRCLib timings describe the
+/// released AUDIO, not the video cut. Real case: "Sam Smith - Stay With Me
+/// (Official Music Video)" runs 209s while every record runs 173s to 194s, and
+/// every record puts the first line at 00:10.95 when the video does not start
+/// singing until roughly 0:41. Hum highlighted line four while the intro was
+/// still playing.
+///
+/// The gap cannot simply be used as the offset. Here it was 15s or 36s
+/// depending on the record, while the correction actually needed was about
+/// 30s, because videos pad the end as well as the beginning. Applying it as an
+/// offset would trade a wrong answer for a differently wrong one.
+///
+/// So when the durations disagree we keep the words and drop the claim about
+/// timing, which is the part we cannot support. The overlay already renders
+/// this as "unsynced lyrics (no per-line timing)".
+fn downgrade_untrustworthy_timing(
+    cached: CachedLyrics,
+    record_secs: Option<f64>,
+    requested_duration_ms: u64,
+) -> CachedLyrics {
+    let (Some(rec_secs), true) = (record_secs, requested_duration_ms > 0) else {
+        // No duration on one side, so there is nothing to compare. Leave it
+        // alone rather than punish a record for missing metadata.
+        return cached;
+    };
+    let rec_secs = rec_secs as i64;
+    if rec_secs <= 0 {
+        return cached;
+    }
+    let gap = (requested_duration_ms as i64 / 1000 - rec_secs).abs();
+    if gap <= TRUSTED_TIMING_GAP_SECS {
+        return cached;
+    }
+    match cached {
+        CachedLyrics::Synced { lines, .. } => {
+            let text = lines
+                .iter()
+                .map(|l| l.text.trim())
+                .filter(|t| !t.is_empty())
+                .collect::<Vec<_>>()
+                .join(
+                    "
+",
+                );
+            if text.trim().is_empty() {
+                CachedLyrics::NotFound
+            } else {
+                eprintln!(
+                    "[lyrics] timing not trustworthy ({gap}s gap: track {}s vs record {rec_secs}s), showing unsynced",
+                    requested_duration_ms / 1000
+                );
+                CachedLyrics::Plain { text }
+            }
+        }
+        other => other,
+    }
+}
+
 fn to_cached_ref(rec: &LrcRecord) -> CachedLyrics {
     // Convenience: clone the bits we need without consuming the record.
     if rec.instrumental.unwrap_or(false) {
@@ -2061,7 +2160,7 @@ async fn fetch_netease(
     artist: &str,
     title: &str,
     duration_ms: u64,
-) -> Result<(CachedLyrics, String)> {
+) -> Result<(CachedLyrics, String, Option<u64>)> {
     let client = build_netease_client()?;
     let query = format!("{title} {artist}");
     // reqwest's RequestBuilder::form gates on a default feature that's been
@@ -2088,7 +2187,7 @@ async fn fetch_netease(
     let status = resp.status();
     if !status.is_success() {
         if status.is_client_error() {
-            return Ok((CachedLyrics::NotFound, "netease".into()));
+            return Ok((CachedLyrics::NotFound, "netease".into(), None));
         }
         anyhow::bail!("netease search returned {status}");
     }
@@ -2096,12 +2195,12 @@ async fn fetch_netease(
     let parsed: NeteaseSearchResp =
         serde_json::from_str(&body).context("parse netease search json")?;
     if parsed.code != 200 {
-        return Ok((CachedLyrics::NotFound, "netease".into()));
+        return Ok((CachedLyrics::NotFound, "netease".into(), None));
     }
     let songs = parsed.result.map(|r| r.songs).unwrap_or_default();
     let candidates = rank_netease_candidates(songs, artist, title, duration_ms);
     if candidates.is_empty() {
-        return Ok((CachedLyrics::NotFound, "netease".into()));
+        return Ok((CachedLyrics::NotFound, "netease".into(), None));
     }
 
     let candidate_count = candidates.len();
@@ -2109,15 +2208,21 @@ async fn fetch_netease(
     let mut failures = 0usize;
     let mut last_error = None;
     for (rank, song) in candidates.into_iter().enumerate() {
+        // NetEase reports duration in ms. Same trust rule as LRCLib: an
+        // official music video runs longer than the released audio, so its
+        // line timings will not line up no matter how good the match is.
+        let song_secs = (song.duration > 0).then(|| song.duration as f64 / 1000.0);
+        let song_ms = (song.duration > 0).then_some(song.duration);
         match fetch_netease_song_lyrics(&client, song.id).await {
             Ok(lyrics) => {
+                let lyrics = downgrade_untrustworthy_timing(lyrics, song_secs, duration_ms);
                 if matches!(
                     &lyrics,
                     CachedLyrics::Synced { lines, .. } if has_valid_word_timing(lines)
                 ) {
-                    return Ok((lyrics, "netease".into()));
+                    return Ok((lyrics, "netease".into(), song_ms));
                 }
-                completed.push((rank, lyrics));
+                completed.push((rank, lyrics, song_ms));
             }
             Err(error) => {
                 failures += 1;
@@ -2126,8 +2231,13 @@ async fn fetch_netease(
         }
     }
 
-    if let Some(cached) = select_best_netease_lyrics(completed) {
-        return Ok((cached, "netease".into()));
+    let matched_ms = completed.first().and_then(|(_, _, ms)| *ms);
+    let ranked: Vec<(usize, CachedLyrics)> = completed
+        .into_iter()
+        .map(|(rank, cached, _)| (rank, cached))
+        .collect();
+    if let Some(cached) = select_best_netease_lyrics(ranked) {
+        return Ok((cached, "netease".into(), matched_ms));
     }
     if failures == candidate_count {
         return Err(
@@ -2135,7 +2245,7 @@ async fn fetch_netease(
         );
     }
 
-    Ok((CachedLyrics::NotFound, "netease".into()))
+    Ok((CachedLyrics::NotFound, "netease".into(), None))
 }
 
 async fn fetch_netease_song_lyrics(client: &reqwest::Client, song_id: u64) -> Result<CachedLyrics> {
@@ -3160,6 +3270,7 @@ mod tests {
             cleaned_artist: "Artist".into(),
             album: String::new(),
             duration_ms: 1000,
+            matched_duration_ms: None,
             source_app_id: None,
             bridge_source: None,
             video_title: Some(format!("Artist - {title} (Official Video)")),
@@ -3262,6 +3373,91 @@ mod tests {
         // match is not worth showing the wrong song's words.
         assert!(!reversal_is_corroborated(&rec("MGMT", ""), "Lifehouse"));
         assert!(!reversal_is_corroborated(&rec("MGMT", "Lifehouse"), ""));
+    }
+
+    // Right words with wrong timing is its own failure mode, and it looks
+    // exactly like success in every column of the coverage log. Official music
+    // videos open with an intro while LRCLib timings describe the released
+    // audio, so the two cannot line up. Real case: Sam Smith "Stay With Me
+    // (Official Music Video)" runs 209s against records of 173s to 194s, every
+    // record starts its first line at 00:10.95, and the video does not start
+    // singing until roughly 0:41. The overlay was highlighting line four over
+    // the intro.
+    #[test]
+    fn untrustworthy_timing_degrades_to_unsynced() {
+        let synced = || CachedLyrics::Synced {
+            lines: vec![
+                LyricLine {
+                    time_ms: 10_950,
+                    text: "Guess it's true".into(),
+                    words: None,
+                },
+                LyricLine {
+                    time_ms: 14_000,
+                    text: "I'm not good".into(),
+                    words: None,
+                },
+            ],
+            translation: None,
+        };
+
+        // Close enough: differing fade-outs or a second of trailing silence
+        // must not cost the karaoke effect.
+        let out = downgrade_untrustworthy_timing(synced(), Some(206.0), 209_000);
+        assert!(
+            matches!(out, CachedLyrics::Synced { .. }),
+            "a 3s gap is noise"
+        );
+        let out = downgrade_untrustworthy_timing(synced(), Some(199.0), 209_000);
+        assert!(
+            matches!(out, CachedLyrics::Synced { .. }),
+            "a 10s gap is still trusted"
+        );
+
+        // The real failure. Words survive, the timing claim does not.
+        let out = downgrade_untrustworthy_timing(synced(), Some(194.0), 209_000);
+        match out {
+            CachedLyrics::Plain { text } => {
+                assert!(text.contains("Guess it's true"), "the words must survive");
+                assert!(text.contains("I'm not good"));
+            }
+            other => panic!("expected Plain, got {other:?}"),
+        }
+        assert!(matches!(
+            downgrade_untrustworthy_timing(synced(), Some(173.0), 209_000),
+            CachedLyrics::Plain { .. }
+        ));
+
+        // Missing duration on either side means there is nothing to compare,
+        // so a record is never punished for incomplete metadata.
+        assert!(matches!(
+            downgrade_untrustworthy_timing(synced(), None, 209_000),
+            CachedLyrics::Synced { .. }
+        ));
+        assert!(matches!(
+            downgrade_untrustworthy_timing(synced(), Some(194.0), 0),
+            CachedLyrics::Synced { .. }
+        ));
+        assert!(matches!(
+            downgrade_untrustworthy_timing(synced(), Some(0.0), 209_000),
+            CachedLyrics::Synced { .. }
+        ));
+
+        // Already-untimed lyrics and instrumentals pass through untouched.
+        assert!(matches!(
+            downgrade_untrustworthy_timing(
+                CachedLyrics::Plain {
+                    text: "words".into()
+                },
+                Some(1.0),
+                209_000
+            ),
+            CachedLyrics::Plain { .. }
+        ));
+        assert!(matches!(
+            downgrade_untrustworthy_timing(CachedLyrics::Instrumental, Some(1.0), 209_000),
+            CachedLyrics::Instrumental
+        ));
     }
 
     #[test]
@@ -3936,7 +4132,7 @@ mod tests {
             ("Train", "Drops Of Jupiter (Tell Me)", 259_560, false),
             ("Zach Bryan", "I Remember Everything", 227_241, false),
         ] {
-            let (cached, source) = fetch_netease(artist, title, duration_ms)
+            let (cached, source, _matched_ms) = fetch_netease(artist, title, duration_ms)
                 .await
                 .unwrap_or_else(|error| {
                     panic!("NetEase should resolve {artist} - {title}: {error:#}")

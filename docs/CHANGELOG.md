@@ -6,6 +6,19 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.93] - 2026-08-23
+
+### Changed
+- **Official music videos now show plain lyrics instead of karaoke that runs early.** When the video Hum is watching is meaningfully longer than the lyric record it matched, the overlay drops the per-line highlighting and shows the words as an untimed block, with the status line reading "unsynced lyrics (no per-line timing)". The words are still correct; Hum just stops claiming it knows when each line lands.
+
+  Why: music videos open with an intro, and lyric timings describe the released audio, not the video cut. Playing "Sam Smith - Stay With Me (Official Music Video)", the video runs 209 seconds while every available record runs 173 to 194, and all of them place the first line at 10.95 seconds when the video does not start singing until roughly 41. The overlay was highlighting the fourth line while the intro was still playing.
+
+  The gap cannot simply be used as a correction. On that track it was 15 or 36 seconds depending on the record, while the shift actually needed was about 30, because videos pad the end as well as the beginning. Using it as an offset would swap one wrong answer for another. So Hum keeps the part it can support (the words) and drops the part it cannot (the timing).
+
+  The cutoff is a 10 second difference, chosen to sit above ordinary noise like differing fade-outs or a second of trailing silence, and below a real structural difference. Applies to both lyric sources. Instrumentals and already-untimed lyrics are unaffected, and a record that reports no duration at all is never penalized for it.
+
+- **The coverage log now records the matched record's duration.** Exported as `matched_duration_ms` next to the track's own duration, so the size of this problem across a listening session is measurable rather than guessed at from one song.
+
 ## [0.13.92] - 2026-08-23
 
 ### Fixed
