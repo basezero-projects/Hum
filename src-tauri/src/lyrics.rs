@@ -979,6 +979,11 @@ struct LyricResolution {
     /// The untouched title the source published. On YouTube this is the real
     /// video title, e.g. `Kygo - Freeze (Official Video)`.
     ///
+    /// First real line of the resolved lyrics, or `None` when nothing was
+    /// found. Read this next to `video_title` to judge whether the match was
+    /// actually correct: the hit-rate columns cannot distinguish a right
+    /// answer from a confidently wrong one.
+    lyric_preview: Option<String>,
     /// This is the field to read when a track fails. `raw_title` above has
     /// already been through bridge normalization, so a YouTube miss shows
     /// there as `Freeze` rather than anything a person would recognize from
@@ -1076,7 +1081,7 @@ pub fn export_lyric_report(app: AppHandle) -> Result<String, String> {
 
     let mut csv = String::new();
     csv.push_str(
-        "outcome,video_title,provider,plays,raw_artist,raw_title,cleaned_artist,cleaned_title,duration_ms,line_count,word_timed,source_app_id,bridge_source,errors
+        "outcome,video_title,lyric_preview,provider,plays,raw_artist,raw_title,cleaned_artist,cleaned_title,duration_ms,line_count,word_timed,source_app_id,bridge_source,errors
 ",
     );
 
@@ -1096,9 +1101,10 @@ pub fn export_lyric_report(app: AppHandle) -> Result<String, String> {
     for e in &rows {
         let _ = writeln!(
             csv,
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             esc(&e.outcome),
             esc(e.video_title.as_deref().unwrap_or("")),
+            esc(e.lyric_preview.as_deref().unwrap_or("")),
             esc(&e.provider),
             e.plays,
             esc(&e.raw_artist),
@@ -1136,6 +1142,26 @@ pub fn export_lyric_report(app: AppHandle) -> Result<String, String> {
     Ok(path.display().to_string())
 }
 
+/// First line of resolved lyrics that carries actual words.
+///
+/// Skips blanks and provider credit lines (the "Lyrics by ..." headers some
+/// sources prepend), since those are identical across songs and would defeat
+/// the whole point of having a preview.
+fn first_lyric_line(cached: &CachedLyrics) -> Option<String> {
+    let take = |s: &str| {
+        let t = s.trim();
+        (!t.is_empty()).then(|| t.chars().take(90).collect::<String>())
+    };
+    match cached {
+        CachedLyrics::Synced { lines, .. } => lines
+            .iter()
+            .find(|l| !is_provider_credit_line(l.time_ms, &l.text) && !l.text.trim().is_empty())
+            .and_then(|l| take(&l.text)),
+        CachedLyrics::Plain { text } => text.lines().find_map(take),
+        _ => None,
+    }
+}
+
 /// Record how one resolution turned out. Best-effort: diagnostics must never
 /// disturb playback, so every failure here is swallowed.
 fn log_resolution(app: &AppHandle, track: &TrackEcho, out: &Outcome) {
@@ -1152,6 +1178,16 @@ fn log_resolution(app: &AppHandle, track: &TrackEcho, out: &Outcome) {
             }
         }
     };
+
+    // First real line of whatever we resolved.
+    //
+    // This is the only field that can tell a right answer from a wrong one. A
+    // hit rate counts what was FOUND, not what was CORRECT, and those are not
+    // the same measurement: an MGMT remix once resolved to a Spanish song and
+    // recorded as a clean `synced` success, indistinguishable in every other
+    // column from a genuinely correct result. One line of the actual words
+    // next to the video title makes a wrong match obvious at a glance.
+    let preview = first_lyric_line(&out.cached);
 
     // A blank title means no track is really playing. Logging those would bury
     // the real rows in noise.
@@ -1194,6 +1230,7 @@ fn log_resolution(app: &AppHandle, track: &TrackEcho, out: &Outcome) {
             source_app_id: track.source_app_id.clone(),
             bridge_source: track.bridge_source.clone(),
             video_title: track.video_title.clone(),
+            lyric_preview: preview,
         },
         RESOLUTION_LOG_CAP,
     );
@@ -3126,6 +3163,7 @@ mod tests {
             source_app_id: None,
             bridge_source: None,
             video_title: Some(format!("Artist - {title} (Official Video)")),
+            lyric_preview: None,
         };
 
         // Replaying a track updates in place and bumps the count rather than

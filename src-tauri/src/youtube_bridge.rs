@@ -214,16 +214,27 @@ impl WebPlayerProbe for YouTubeProbe {
 ///    trailing ` - Topic`, YouTube's auto-generated art-track convention
 ///    where the channel IS the real artist) and the cleaned title as-is.
 pub(crate) fn parse_youtube_metadata(smtc_title: &str, smtc_artist: &str) -> (String, String) {
-    let cleaned = strip_trailing_feat(&crate::lyrics::clean_title(smtc_title));
+    let cleaned = crate::lyrics::clean_title(smtc_title);
 
     // Channel fallback artist — drop YouTube's " - Topic" auto-channel
     // suffix so "Fleetwood Mac - Topic" surfaces as "Fleetwood Mac".
     let channel = smtc_artist.trim();
     let channel = channel.strip_suffix(" - Topic").unwrap_or(channel).trim();
 
+    // Split FIRST, strip the feat credit AFTER, and only from the half it
+    // belongs to.
+    //
+    // The credit can sit on either side of the dash, and doing this in the
+    // wrong order destroys the title outright. Real failure: "Lost Frequencies
+    // feat. Janieck Devy - Reality (Official Music Video)". Stripping from
+    // `feat.` to end of string before splitting left just "Lost Frequencies",
+    // which then contains no " - " at all, so the ARTIST name became the song
+    // title and Hum went looking for a song called "Lost Frequencies".
     if let Some((prefix, suffix)) = cleaned.split_once(" - ") {
-        let real_artist = prefix.trim();
-        let real_title = suffix.trim();
+        let real_artist = strip_trailing_feat(prefix.trim());
+        let real_title = strip_trailing_feat(suffix.trim());
+        let real_artist = real_artist.trim();
+        let real_title = real_title.trim();
         // Guard against degenerate splits ("A - B", empty halves) eating a
         // title that merely happens to contain " - ".
         if real_artist.chars().filter(|c| !c.is_whitespace()).count() >= 2 && !real_title.is_empty()
@@ -232,6 +243,9 @@ pub(crate) fn parse_youtube_metadata(smtc_title: &str, smtc_artist: &str) -> (St
         }
     }
 
+    // No usable split. The whole string is the title, so a trailing credit
+    // here really is trailing and is safe to drop.
+    let cleaned = strip_trailing_feat(&cleaned);
     let title = if cleaned.trim().is_empty() {
         smtc_title.trim().to_string()
     } else {
@@ -343,6 +357,56 @@ mod tests {
         let (artist, title) = parse_youtube_metadata("Fleetwood Mac - Dreams (Lyrics)", "7clouds");
         assert_eq!(artist, "Fleetwood Mac");
         assert_eq!(title, "Dreams");
+    }
+
+    // A feat credit on the ARTIST half used to destroy the title. The strip
+    // ran before the split, so "Lost Frequencies feat. Janieck Devy - Reality"
+    // collapsed to "Lost Frequencies", which has no " - " left, and the artist
+    // name became the song title. Hum then searched for a song called "Lost
+    // Frequencies", which is exactly how a lookup finds an unrelated track.
+    #[test]
+    fn parse_feat_credit_on_artist_half_keeps_the_title() {
+        let (artist, title) = parse_youtube_metadata(
+            "Lost Frequencies feat. Janieck Devy - Reality (Official Music Video)",
+            "Armada Music TV",
+        );
+        assert_eq!(artist, "Lost Frequencies");
+        assert_eq!(title, "Reality");
+
+        // ft. spelling, same shape.
+        let (artist, title) = parse_youtube_metadata(
+            "Calvin Harris ft. Rihanna - This Is What You Came For",
+            "CH",
+        );
+        assert_eq!(artist, "Calvin Harris");
+        assert_eq!(title, "This Is What You Came For");
+
+        // Credit on the TITLE half still comes off, which is the common case.
+        let (artist, title) = parse_youtube_metadata(
+            "Russ - ALL TO YOU (Official Audio) ft. Kiana Lede",
+            "RussVEVO",
+        );
+        assert_eq!(artist, "Russ");
+        assert_eq!(title, "ALL TO YOU");
+
+        // Credit on both halves.
+        let (artist, title) = parse_youtube_metadata(
+            "Zedd feat. Foxes - Clarity feat. Someone (Official Video)",
+            "Chan",
+        );
+        assert_eq!(artist, "Zedd");
+        assert_eq!(title, "Clarity");
+
+        // The degenerate-split guard is applied to the artist AFTER the credit
+        // comes off, so a split that leaves nothing substantive still falls
+        // back to the channel rather than inventing a one-letter artist.
+        let (artist, _) = parse_youtube_metadata("A feat. B - Song", "Chan");
+        assert_eq!(artist, "Chan");
+
+        // No split available: the whole string is the title and a trailing
+        // credit there really is trailing.
+        let (_, title) = parse_youtube_metadata("Song Name feat. Somebody", "Chan");
+        assert_eq!(title, "Song Name");
     }
 
     #[test]

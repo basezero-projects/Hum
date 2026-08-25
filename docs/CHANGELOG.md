@@ -6,6 +6,18 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.92] - 2026-08-23
+
+### Fixed
+- **Songs whose artist has a "feat." credit no longer look up the wrong thing entirely.** A video titled "Lost Frequencies feat. Janieck Devy - Reality (Official Music Video)" was being read as a song called "Lost Frequencies", which is the artist's name, not the song. Hum then went hunting for lyrics to a song that does not exist, and any match it found would have been an unrelated track. It now correctly reads artist "Lost Frequencies", song "Reality".
+
+  Cause: the credit was being stripped before the title was split into artist and song. A "feat." credit can sit on either side of the dash, and stripping everything from "feat." to the end of the line first deleted the dash along with the real song name, leaving nothing to split. The split now happens first, and each half has its own credit removed afterwards. Credits on the song half ("Russ - ALL TO YOU (Official Audio) ft. Kiana Ledé") worked before and still do.
+
+### Added
+- **The coverage log now records the first line of the lyrics it found.** Shown in the Dev Console CSV export as `lyric_preview`, right next to the video title.
+
+  This exists because a hit rate cannot tell a right answer from a wrong one. Both look like a success in every other column, which is exactly how an MGMT remix resolving to a Spanish song got recorded as a clean result. Reading one line of the actual words next to the video title makes a bad match obvious at a glance, and makes the whole measurement worth something. Provider credit lines and blanks are skipped so the preview is always real lyric text.
+
 ## [0.13.91] - 2026-08-23
 
 ### Fixed
