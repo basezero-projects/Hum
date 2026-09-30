@@ -73,6 +73,13 @@ impl PolarLicenseProvider {
         activation_id: Option<&str>,
         label: Option<&str>,
     ) -> Result<Request, ()> {
+        // Sent because Polar accepts it and would be the natural place for a
+        // major-version gate. It does NOT currently enforce it: a probe with
+        // `major_version: 9` against a 1.x key returned 200, and the license
+        // record Polar sends back contains no `conditions` field at all, so
+        // there is nothing to verify on the way home either. Hum therefore
+        // does not claim to enforce the boundary. See BUGS.md before relying
+        // on it to protect a paid 2.0 upgrade.
         let conditions = json!({ "major_version": self.policy.product_major_version });
         let body = match operation {
             Operation::Activate => json!({
@@ -207,16 +214,15 @@ impl PolarLicenseProvider {
             .get("organization_id")
             .and_then(Value::as_str)
             .is_some_and(|organization| organization == self.organization_id);
+        // Polar calls this `limit_activations`. Hum read `activation_limit`
+        // for its first three releases, a field the API has never sent, so
+        // this comparison was false for every key in existence and no
+        // customer could activate. Verified against the live API 2026-09-30.
         let activation_limit_matches = license
-            .get("activation_limit")
+            .get("limit_activations")
             .and_then(Value::as_u64)
             .is_some_and(|limit| limit == u64::from(self.policy.device_limit));
-        let major_version_matches = license
-            .get("conditions")
-            .and_then(|conditions| conditions.get("major_version"))
-            .and_then(Value::as_u64)
-            .is_some_and(|version| version == u64::from(self.policy.product_major_version));
-        if !organization_matches || !activation_limit_matches || !major_version_matches {
+        if !organization_matches || !activation_limit_matches {
             return ProviderResult::Invalid;
         }
         let provider_activation_id = match operation {
@@ -295,14 +301,26 @@ mod tests {
         PolarLicenseProvider::with_base_url(ORG, "http://127.0.0.1:9/license-keys").unwrap()
     }
 
+    /// Shaped from a real `POST /customer-portal/license-keys/activate`
+    /// response captured on 2026-09-30. The previous fixture invented
+    /// `activation_limit` and a `conditions` object, neither of which Polar
+    /// has ever returned, so the suite agreed with the bug instead of
+    /// catching it. Keep this mirroring the live payload.
     fn granted_payload(status: &str) -> Vec<u8> {
         serde_json::to_vec(&json!({
             "id": "activation_123",
+            "label": "Windows PC",
+            "license_key_id": "c80ca9b9-e604-4ba2-bebe-51063936901b",
             "license_key": {
+                "id": "c80ca9b9-e604-4ba2-bebe-51063936901b",
                 "organization_id": ORG,
                 "status": status,
-                "activation_limit": 3,
-                "conditions": { "major_version": 1 }
+                "limit_activations": 3,
+                "limit_usage": null,
+                "usage": 0,
+                "validations": 1,
+                "expires_at": null,
+                "benefit_id": "a0f83688-b79a-4824-b978-b89f9df4e546"
             }
         }))
         .unwrap()
@@ -347,6 +365,45 @@ mod tests {
         assert!(suffix
             .chars()
             .all(|character| character.is_ascii_alphanumeric()));
+    }
+
+    #[test]
+    fn the_grant_contract_matches_the_field_names_polar_actually_sends() {
+        // Regression for the bug that made activation impossible for every
+        // customer: Hum required `activation_limit` and `conditions
+        // .major_version`, and Polar sends neither. This payload is copied
+        // from a real activate response, so it fails if the contract drifts
+        // back to an invented shape.
+        let provider = provider();
+        let live = br#"{
+            "id": "0a7e8359-4917-4535-afb8-2f9956b1c20c",
+            "label": "Windows PC",
+            "license_key": {
+                "id": "c80ca9b9-e604-4ba2-bebe-51063936901b",
+                "organization_id": "org_hum",
+                "status": "granted",
+                "limit_activations": 3,
+                "limit_usage": null,
+                "usage": 0,
+                "validations": 5,
+                "expires_at": null
+            }
+        }"#;
+        assert_eq!(
+            provider.map_response(Operation::Activate, StatusCode::OK, live, KEY, None),
+            ProviderResult::Granted(ProviderActivation {
+                activation_id: "0a7e8359-4917-4535-afb8-2f9956b1c20c".into(),
+                key_suffix: "ABCD1234".into(),
+            }),
+            "a real Polar activation payload must be accepted"
+        );
+
+        // The fields Hum used to demand are absent from that payload. If
+        // either is ever required again, the assertion above breaks.
+        let parsed: Value = serde_json::from_slice(live).unwrap();
+        let license = parsed.get("license_key").unwrap();
+        assert!(license.get("activation_limit").is_none());
+        assert!(license.get("conditions").is_none());
     }
 
     #[test]
@@ -464,9 +521,10 @@ Content-Length: 0
         );
 
         for mutation in [
-            json!({"id":"activation_123","license_key":{"organization_id":"wrong","status":"granted","activation_limit":3,"conditions":{"major_version":1}}}),
-            json!({"id":"activation_123","license_key":{"organization_id":ORG,"status":"granted","activation_limit":4,"conditions":{"major_version":1}}}),
-            json!({"id":"activation_123","license_key":{"organization_id":ORG,"status":"granted","activation_limit":3,"conditions":{"major_version":2}}}),
+            json!({"id":"activation_123","license_key":{"organization_id":"wrong","status":"granted","limit_activations":3}}),
+            json!({"id":"activation_123","license_key":{"organization_id":ORG,"status":"granted","limit_activations":4}}),
+            // A key issued with no device cap is not this product's key.
+            json!({"id":"activation_123","license_key":{"organization_id":ORG,"status":"granted","limit_activations":null}}),
         ] {
             assert_eq!(
                 provider.map_response(

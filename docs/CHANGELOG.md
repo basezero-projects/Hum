@@ -6,6 +6,20 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.98] - 2026-09-30
+
+### Fixed
+- **Licence activation now accepts a real Polar key.** v0.13.97 fixed the network layer so activation requests finally reached Polar, which then exposed the deeper fault: Hum was checking the returned licence record for two fields that Polar has never sent.
+
+  Hum required `activation_limit` on the record. Polar calls that field `limit_activations`. Hum also required `conditions.major_version` to equal 1, and Polar's licence record carries no `conditions` field at all. Both comparisons were therefore false for every key ever issued, and the Hum License window answered every attempt with "This license key is not valid for Hum." No customer could have unlocked the app, and nothing about their key or their purchase was wrong.
+
+  The device cap is now read from `limit_activations` and still has to equal the three devices the licence policy promises, so a key issued with a different cap or none at all is still refused. The organisation and granted-status checks are unchanged.
+
+- **The major-version gate is no longer claimed, because it was never enforced.** Hum still sends `conditions: {major_version: 1}` on activate and validate, since Polar accepts it and it is the natural home for that rule. Polar does not act on it: a probe sending `major_version: 9` against a 1.x key returned a normal success, and the record Polar returns contains no conditions to verify on the way back either. Hum no longer treats the absent field as a failed check, and no longer pretends the boundary exists. Anything that depends on separating 1.x keys from a future 2.0 needs a different mechanism, recorded in BUGS.md.
+
+### Changed
+- **Licence tests now use a captured Polar response instead of an invented one.** The previous fixture asserted the same field names the code had guessed at, so the suite agreed with the bug rather than catching it, and stayed green through three releases in which activation could not work. The fixture is now shaped from a real activate response, and a regression test asserts directly that `activation_limit` and `conditions` are absent from it.
+
 ## [0.13.97] - 2026-09-30
 
 ### Fixed
