@@ -49,11 +49,7 @@ const RESOLUTION_LOG_FILE: &str = "lyric-resolutions.json";
 /// 400 tracks in 24 hours, so this holds several days without pruning, and
 /// still cannot grow without bound on a user's machine.
 const RESOLUTION_LOG_CAP: usize = 5_000;
-const USER_AGENT: &str = concat!(
-    "hum/",
-    env!("CARGO_PKG_VERSION"),
-    " (desktop lyrics overlay; https://github.com/basezero-projects/Hum)"
-);
+use crate::USER_AGENT;
 
 /// LRCLib, contacted directly. Always tried first.
 const LRCLIB_DIRECT_BASE: &str = "https://lrclib.net";

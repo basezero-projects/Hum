@@ -246,6 +246,7 @@ impl SyvrRemoteSource {
 
     async fn refresh_once(&self) {
         let client = match reqwest::Client::builder()
+            .user_agent(crate::USER_AGENT)
             .timeout(std::time::Duration::from_secs(FETCH_TIMEOUT_SECS))
             .build()
         {

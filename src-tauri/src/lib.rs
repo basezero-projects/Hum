@@ -8,6 +8,19 @@ use tauri::{Emitter, Manager};
 use tokio::sync::RwLock;
 
 #[cfg(windows)]
+/// Sent on every outbound request Hum makes.
+///
+/// Not cosmetic. Cloudflare fronts several of the services Hum depends on and
+/// its Browser Integrity Check rejects a request that arrives with no
+/// User-Agent, answering 403 with "error code: 1010" before the origin ever
+/// sees it. reqwest sends no User-Agent unless told to, so every client in
+/// this crate has to opt in.
+pub(crate) const USER_AGENT: &str = concat!(
+    "hum/",
+    env!("CARGO_PKG_VERSION"),
+    " (desktop lyrics overlay; https://github.com/basezero-projects/Hum)"
+);
+
 mod itunes;
 
 mod media;

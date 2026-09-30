@@ -6,6 +6,21 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.97] - 2026-09-30
+
+### Fixed
+- **Activating a license now works at all.** Every activation attempt failed with "This license key is not valid for Hum. Check the key against your receipt, then try again." on the Hum License window, including for keys Polar had genuinely issued and showed as Granted. No customer could have unlocked the app.
+
+  The key was never the problem. Hum's Polar client was built without a User-Agent, and reqwest sends none unless it is told to. Cloudflare sits in front of `api.polar.sh` and its Browser Integrity Check rejects a request that arrives with no User-Agent, answering 403 with "error code: 1010" before Polar ever sees it. Confirmed on 2026-09-30 against the live API: the same key and the same request body returned 403 with no User-Agent and 200 with one, and even a bare "Hum/0.13.96" was enough.
+
+  Hum now sends one User-Agent across the whole app, defined once and shared. The lyric and artist clients already set theirs, which is why lyrics kept working while licensing did not. The promo feed client had the same omission and now sends it too.
+
+- **A blocked or unreachable license service no longer accuses the customer of having a bad key.** Any 4xx was previously reported as an invalid key, so an outage in front of Polar produced the one message that could not possibly be true, and sent people to support with their receipt in hand.
+
+  Polar reports its own errors as JSON, so a 4xx carrying anything else was produced in front of the API and never reached it. Those now surface as a service problem the customer can wait out instead of a verdict on their key. A genuine unknown key still returns JSON from Polar and is still reported as invalid, and a device-limit response is still recognised from any body shape, because that is a real answer about the key no matter how it arrives.
+
+  This is the same mistake as the v0.13.88 lyric fix, where an unreachable provider was reported as an authoritative "no lyrics found". A failure to ask is not an answer.
+
 ## [0.13.96] - 2026-08-25
 
 ### Added

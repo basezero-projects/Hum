@@ -49,6 +49,7 @@ impl PolarLicenseProvider {
             return Err("Polar organization ID is not configured");
         }
         let client = Client::builder()
+            .user_agent(crate::USER_AGENT)
             .timeout(Duration::from_secs(10))
             .build()
             .map_err(|_| "Polar client could not be created")?;
@@ -157,9 +158,20 @@ impl PolarLicenseProvider {
             });
         }
         if http_status.is_client_error() {
+            // Checked first and against the raw text, because the device limit
+            // is a real answer about this key whatever shape it arrives in.
             let detail = String::from_utf8_lossy(body).to_ascii_lowercase();
             if detail.contains("activation limit") || detail.contains("activation_limit") {
                 return ProviderResult::DeviceLimit;
+            }
+            // Polar answers its own 4xx with JSON, so a 4xx carrying anything
+            // else was produced in front of the API and never reached it. A
+            // Cloudflare block is the case seen in the wild: 403 with
+            // "error code: 1010" and no JSON at all. Calling that an invalid
+            // key blames the customer for an outage and sends them to support
+            // with the one explanation that cannot be true.
+            if serde_json::from_slice::<Value>(body).is_err() {
+                return ProviderResult::ServiceUnavailable;
             }
             return ProviderResult::Invalid;
         }
@@ -338,6 +350,102 @@ mod tests {
     }
 
     #[test]
+    fn an_edge_block_is_an_outage_and_never_an_invalid_key() {
+        let provider = provider();
+
+        // Cloudflare fronts api.polar.sh. With no User-Agent it answers 403
+        // and "error code: 1010" before Polar sees the request. Seen live on
+        // 2026-09-30: a real Granted key was reported to the customer as
+        // "This license key is not valid for Hum."
+        for (status, body) in [
+            (StatusCode::FORBIDDEN, &b"error code: 1010"[..]),
+            (
+                StatusCode::FORBIDDEN,
+                &b"<!DOCTYPE html><html>Attention Required</html>"[..],
+            ),
+            (StatusCode::BAD_REQUEST, &b""[..]),
+        ] {
+            assert_eq!(
+                provider.map_response(Operation::Activate, status, body, KEY, None),
+                ProviderResult::ServiceUnavailable,
+                "a 4xx with a non-JSON body did not come from Polar"
+            );
+        }
+
+        // Polar's own errors are JSON and must still be believed. This is the
+        // exact body the live API returns for a key that does not exist.
+        assert_eq!(
+            provider.map_response(
+                Operation::Activate,
+                StatusCode::NOT_FOUND,
+                br#"{"error":"ResourceNotFound","detail":"Not found"}"#,
+                KEY,
+                None,
+            ),
+            ProviderResult::Invalid,
+            "a genuine unknown key must still read as invalid"
+        );
+
+        // And the device-limit case keeps its own outcome.
+        assert_eq!(
+            provider.map_response(
+                Operation::Activate,
+                StatusCode::FORBIDDEN,
+                br#"{"detail":"activation limit reached"}"#,
+                KEY,
+                None,
+            ),
+            ProviderResult::DeviceLimit
+        );
+    }
+
+    #[test]
+    fn every_request_carries_a_user_agent() {
+        // reqwest sends no User-Agent unless the client is told to, which is
+        // exactly what got the license service blocked at Cloudflare. This has
+        // to go over a real socket: a client-level default header is applied
+        // when the request is sent, not when it is built, so inspecting the
+        // built Request would pass while the wire stayed empty.
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind probe listener");
+        let port = listener.local_addr().unwrap().port();
+
+        let seen = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("accept");
+            let mut buffer = [0u8; 2048];
+            let read = socket.read(&mut buffer).unwrap_or(0);
+            let _ = socket.write_all(
+                b"HTTP/1.1 503 Service Unavailable
+Content-Length: 0
+
+",
+            );
+            String::from_utf8_lossy(&buffer[..read]).to_string()
+        });
+
+        let provider =
+            PolarLicenseProvider::with_base_url(ORG, format!("http://127.0.0.1:{port}")).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _ = runtime.block_on(provider.activate(KEY.to_string()));
+
+        let request = seen.join().expect("probe thread");
+        let agent = request
+            .lines()
+            .find(|line| line.to_ascii_lowercase().starts_with("user-agent:"))
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            agent.to_ascii_lowercase().contains("hum/"),
+            "the activation request reached the wire without a Hum User-Agent: {request:?}"
+        );
+    }
+
+    #[test]
     fn successful_grants_require_exact_product_contract() {
         let provider = provider();
         let granted = provider.map_response(
@@ -398,11 +506,16 @@ mod tests {
             ),
             ProviderResult::DeviceLimit
         );
+        // Body shape matters now. Polar reports its own errors as JSON, and a
+        // 4xx without JSON is treated as an edge failure rather than a verdict
+        // on the key (see an_edge_block_is_an_outage_and_never_an_invalid_key).
+        // This fixture carries the key inside a realistic Polar error so the
+        // no-leak assertion below still has something to catch.
         assert_eq!(
             provider.map_response(
                 Operation::Activate,
                 StatusCode::BAD_REQUEST,
-                b"invalid HUM-SECRET",
+                br#"{"error":"BadRequest","detail":"invalid HUM-SECRET"}"#,
                 KEY,
                 None,
             ),
