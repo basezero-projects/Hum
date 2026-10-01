@@ -6,6 +6,18 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.100] - 2026-10-01
+
+### Removed
+- **"Upcoming shows" section removed from the artist info panel.** The panel (opened by clicking the album art) no longer lists tour dates, venues, "Tickets" or "Sold Out" buttons, or the "View all on Ticketmaster" link. Removed for now, until there is a real use for it. The panel still shows the artist photo and the "Bio" section with its "Read more on Wikipedia" link. If no bio is found, the panel shows "No artist info found for this track." instead of an empty body.
+- **Ticketmaster dropped from the panel footer.** The attribution row at the bottom now reads "Powered by Wikipedia · TheAudioDB".
+- **Settings hint updated.** The hint under "Show artist info panel" in Settings now says the panel shows the artist bio and photo, with no mention of tour dates or tickets.
+- **No app release.** No release tag was created, so no update is offered to users.
+
+### Changed
+- **Ticketmaster integration removed from the code.** Deleted the Ticketmaster Discovery API call and its hardcoded API key, the Impact affiliate wrapper, the `TourDate` and `TicketStatus` types (Rust and TypeScript), the `tour_dates` field on the artist info payload, the 12-hour tour-date refresh path, and 12 unit tests that only covered the removed parser. Existing per-artist cache files that still contain a `tour_dates` field load normally; the field is ignored.
+- **Link opener renamed and tightened.** The `open_ticket_url` command is now `open_external_url`. Its host whitelist no longer includes Ticketmaster, Impact, SeatGeek, AXS, or Live Nation, only last.fm, TheAudioDB, MusicBrainz, and Wikipedia.
+
 ## [0.13.99] - 2026-10-01
 
 ### Changed

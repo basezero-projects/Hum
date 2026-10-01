@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { ArtistInfo, CurrentTrack, TourDate } from "../types";
+import type { ArtistInfo, CurrentTrack } from "../types";
 
 const GOLD = "#d4af37";
 const DIM = "rgba(234,234,234,0.55)";
@@ -17,7 +17,7 @@ export default function ArtistPanel() {
   const [info, setInfo] = useState<ArtistInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // Brief 2s toast surfaced when `open_ticket_url` rejects a URL (host
+  // Brief 2s toast surfaced when `open_external_url` rejects a URL (host
   // not on the whitelist, or `opener::open` fails). The spec requires a
   // user-visible signal rather than silently dropping the click.
   const [toast, setToast] = useState<string | null>(null);
@@ -89,7 +89,7 @@ export default function ArtistPanel() {
   }
 
   function openUrl(url: string) {
-    invoke("open_ticket_url", { url }).catch(() => {
+    invoke("open_external_url", { url }).catch(() => {
       setToast("Couldn't open browser");
     });
   }
@@ -243,12 +243,11 @@ export default function ArtistPanel() {
                 </div>
               </section>
             )}
-
-            {/* Tour dates */}
-            <section style={{ marginBottom: 16 }}>
-              <SectionLabel>Upcoming shows</SectionLabel>
-              <TourDatesList dates={info.tour_dates} onOpenUrl={openUrl} />
-            </section>
+            {!info.bio && (
+              <p style={{ margin: 0, color: DIM, fontStyle: "italic", fontSize: 12 }}>
+                No artist info found for this track.
+              </p>
+            )}
           </>
         )}
       </div>
@@ -269,14 +268,12 @@ export default function ArtistPanel() {
         }}
       >
         <span>Powered by</span>
-        <FooterLink url="https://www.ticketmaster.com" onOpen={openUrl}>Ticketmaster</FooterLink>
-        <span>·</span>
         <FooterLink url="https://wikipedia.org" onOpen={openUrl}>Wikipedia</FooterLink>
         <span>·</span>
         <FooterLink url="https://www.theaudiodb.com" onOpen={openUrl}>TheAudioDB</FooterLink>
       </div>
 
-      {/* Toast overlay — shown briefly when open_ticket_url fails. */}
+      {/* Toast overlay — shown briefly when open_external_url fails. */}
       {toast ? (
         <div
           style={{
@@ -316,155 +313,6 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
       {children}
     </div>
   );
-}
-
-function TourDatesList({
-  dates,
-  onOpenUrl,
-}: {
-  dates: TourDate[];
-  onOpenUrl: (url: string) => void;
-}) {
-  if (dates.length === 0) {
-    return (
-      <p style={{ margin: 0, color: DIM, fontStyle: "italic", fontSize: 12 }}>
-        No upcoming tour dates.
-      </p>
-    );
-  }
-
-  const visible = dates.slice(0, 10);
-  const hasMore = dates.length > 10;
-
-  return (
-    <div>
-      {visible.map((event, i) => (
-        <TourDateRow key={i} event={event} onOpenUrl={onOpenUrl} />
-      ))}
-      {hasMore && (
-        <div style={{ marginTop: 8 }}>
-          <ExternalLink
-            url={`https://www.ticketmaster.com`}
-            onOpen={onOpenUrl}
-          >
-            View all on Ticketmaster →
-          </ExternalLink>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TourDateRow({
-  event,
-  onOpenUrl,
-}: {
-  event: TourDate;
-  onOpenUrl: (url: string) => void;
-}) {
-  const dateStr = formatTourDate(event.date_unix_ms);
-  const location =
-    event.region
-      ? `${event.city}, ${event.region}`
-      : `${event.city}${event.country ? `, ${event.country}` : ""}`;
-
-  const isSoldOut = event.status === "sold_out";
-
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "flex-start",
-        gap: 10,
-        padding: "6px 0",
-        borderBottom: `1px solid ${BORDER}`,
-      }}
-    >
-      {/* Date */}
-      <div
-        style={{
-          width: 44,
-          flexShrink: 0,
-          fontSize: 11,
-          fontVariantNumeric: "tabular-nums",
-          fontWeight: 600,
-          color: GOLD,
-        }}
-      >
-        {dateStr}
-      </div>
-
-      {/* Location + venue */}
-      <div style={{ flex: 1, overflow: "hidden" }}>
-        <div
-          style={{
-            fontSize: 12.5,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {location}
-        </div>
-        {event.venue && (
-          <div
-            style={{
-              fontSize: 11,
-              color: DIM,
-              fontStyle: "italic",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {event.venue}
-          </div>
-        )}
-      </div>
-
-      {/* Ticket button */}
-      {event.ticket_url && (
-        <button
-          disabled={isSoldOut}
-          onClick={() => !isSoldOut && event.ticket_url && onOpenUrl(event.ticket_url)}
-          style={{
-            flexShrink: 0,
-            fontSize: 11,
-            fontWeight: 600,
-            padding: "3px 8px",
-            borderRadius: 4,
-            border: "none",
-            cursor: isSoldOut ? "not-allowed" : "pointer",
-            background: isSoldOut ? "rgba(255,255,255,0.1)" : GOLD,
-            color: isSoldOut ? DIM : "#111",
-            opacity: isSoldOut ? 0.6 : 1,
-            transition: "background 120ms ease",
-          }}
-          onMouseEnter={(e) => {
-            if (!isSoldOut) (e.currentTarget.style.background = "#b8962d");
-          }}
-          onMouseLeave={(e) => {
-            if (!isSoldOut) (e.currentTarget.style.background = GOLD);
-          }}
-        >
-          {isSoldOut ? "Sold Out" : "Tickets"}
-        </button>
-      )}
-    </div>
-  );
-}
-
-function formatTourDate(unix_ms: number): string {
-  const d = new Date(unix_ms);
-  const now = new Date();
-  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const month = months[d.getUTCMonth()];
-  const day = d.getUTCDate();
-  const year = d.getUTCFullYear();
-  if (year === now.getUTCFullYear()) {
-    return `${month} ${day}`;
-  }
-  return `${month} ${day}, ${year}`;
 }
 
 function ExternalLink({

@@ -197,18 +197,6 @@ export async function loadSettingsWithRetry<T>(
   return null;
 }
 
-export type TicketStatus = "available" | "sold_out";
-
-export type TourDate = {
-  date_unix_ms: number;
-  city: string;
-  region: string;
-  country: string;
-  venue: string;
-  ticket_url: string | null;
-  status: TicketStatus;
-};
-
 export type ArtistBio = {
   text: string;
   wikipedia_url: string;
@@ -219,7 +207,6 @@ export type ArtistInfo = {
   slug: string;
   bio: ArtistBio | null;
   photo_data_url: string | null;
-  tour_dates: TourDate[];
   fetched_at_unix_ms: number;
 };
 

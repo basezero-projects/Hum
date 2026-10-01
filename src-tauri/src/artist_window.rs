@@ -165,29 +165,9 @@ fn compute_panel_position(app: &AppHandle) -> Result<(i32, i32)> {
 
 // ── Tauri commands ─────────────────────────────────────────────────────────
 
-/// Allowed URL hosts for ticket / artist links. Defends against cache-poisoning
-/// with malformed or malicious URLs.
-///
-/// Exact-host entries match literally. The special `.go.impact.com` entry is
-/// matched as a suffix to cover Impact tracking subdomains (e.g.
-/// `abc.go.impact.com`) without opening a broad TLD wildcard.
-const TICKET_URL_WHITELIST: &[&str] = &[
-    "ticketmaster.com",
-    "www.ticketmaster.com",
-    "ticketmaster.ca",
-    "www.ticketmaster.ca",
-    "ticketmaster.co.uk",
-    "www.ticketmaster.co.uk",
-    "ticketmaster.de",
-    "www.ticketmaster.de",
-    // Impact tracking subdomain space, matched via ends_with below.
-    ".go.impact.com",
-    "seatgeek.com",
-    "www.seatgeek.com",
-    "axs.com",
-    "www.axs.com",
-    "livenation.com",
-    "www.livenation.com",
+/// Allowed URL hosts for artist panel links. Defends against cache-poisoning
+/// with malformed or malicious URLs. Hosts match literally.
+const EXTERNAL_URL_WHITELIST: &[&str] = &[
     "last.fm",
     "www.last.fm",
     "theaudiodb.com",
@@ -202,7 +182,7 @@ const TICKET_URL_WHITELIST: &[&str] = &[
 ];
 
 #[tauri::command]
-pub fn open_ticket_url(url: String) -> Result<(), String> {
+pub fn open_external_url(url: String) -> Result<(), String> {
     // Parse and whitelist-check the host. Also enforce https scheme as
     // defense-in-depth against non-browser protocol handler abuse.
     let parsed = reqwest::Url::parse(&url).map_err(|e| format!("invalid URL: {e}"))?;
@@ -210,22 +190,11 @@ pub fn open_ticket_url(url: String) -> Result<(), String> {
         return Err(format!("URL scheme '{}' is not https", parsed.scheme()));
     }
     let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
-    let allowed = TICKET_URL_WHITELIST.iter().any(|entry| {
-        if let Some(suffix) = entry.strip_prefix('.') {
-            // Subdomain wildcard entry: match if host equals the bare domain
-            // (exact) OR has it as a suffix (any subdomain). E.g. `.go.impact.com`
-            // matches `go.impact.com` and `abc.go.impact.com`.
-            host == suffix || host.ends_with(entry)
-        } else {
-            host == *entry
-        }
-    });
+    let allowed = EXTERNAL_URL_WHITELIST.iter().any(|entry| host == *entry);
     if !allowed {
-        return Err(format!(
-            "URL host '{host}' is not on the ticket link whitelist"
-        ));
+        return Err(format!("URL host '{host}' is not on the link whitelist"));
     }
-    opener::open(&url).map_err(|e| format!("open_ticket_url failed: {e}"))
+    opener::open(&url).map_err(|e| format!("open_external_url failed: {e}"))
 }
 
 #[tauri::command]

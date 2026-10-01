@@ -717,7 +717,7 @@ export default function SettingsView() {
         />
         <Hint>
           Click album art (or the dot in the top corner when art is off) to view
-          artist bio, similar artists, and upcoming tour dates with ticket links.
+          the artist bio and photo.
         </Hint>
         <Row label="Cache">
           <button

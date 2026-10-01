@@ -1,5 +1,5 @@
-//! Artist-info fetch chain: Wikipedia bio, Ticketmaster events,
-//! TheAudioDB photo. Disk cache + in-flight dedup.
+//! Artist-info fetch chain: Wikipedia bio and TheAudioDB
+//! photo. Disk cache + in-flight dedup.
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -18,7 +18,6 @@ pub struct ArtistInfo {
     pub slug: String,
     pub bio: Option<ArtistBio>,
     pub photo_data_url: Option<String>,
-    pub tour_dates: Vec<TourDate>,
     pub fetched_at_unix_ms: i64,
 }
 
@@ -26,24 +25,6 @@ pub struct ArtistInfo {
 pub struct ArtistBio {
     pub text: String,
     pub wikipedia_url: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TourDate {
-    pub date_unix_ms: i64,
-    pub city: String,
-    pub region: String,
-    pub country: String,
-    pub venue: String,
-    pub ticket_url: Option<String>,
-    pub status: TicketStatus,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum TicketStatus {
-    Available,
-    SoldOut,
 }
 
 // ── Pure helpers ───────────────────────────────────────────────────────────
@@ -97,21 +78,14 @@ pub(crate) fn slug_for_artist(name: &str) -> String {
     result.trim_end_matches('-').to_string()
 }
 
-/// True if the tour-dates entry is stale (older than 12 hours).
-pub(crate) fn tour_dates_stale(fetched_at_unix_ms: i64, now_unix_ms: i64) -> bool {
-    const TWELVE_HOURS_MS: i64 = 12 * 3600 * 1000;
-    (now_unix_ms - fetched_at_unix_ms) >= TWELVE_HOURS_MS
-}
-
 /// Top-level entry point for callers that don't hold an ArtistInfoCache.
 /// Prefer ArtistInfoCache::fetch which adds caching + dedup.
 #[allow(dead_code)]
 pub async fn fetch_artist_info(artist: &str) -> Result<ArtistInfo> {
     let client = build_artist_info_http_client()?;
     let now = now_unix_ms();
-    let (bio, events, photo) = tokio::join!(
+    let (bio, photo) = tokio::join!(
         fetch_wikipedia_bio(&client, artist),
-        fetch_ticketmaster_events(&client, artist),
         fetch_theaudiodb_photo(&client, artist),
     );
     Ok(ArtistInfo {
@@ -119,7 +93,6 @@ pub async fn fetch_artist_info(artist: &str) -> Result<ArtistInfo> {
         slug: slug_for_artist(artist),
         bio,
         photo_data_url: photo,
-        tour_dates: events,
         fetched_at_unix_ms: now,
     })
 }
@@ -274,214 +247,6 @@ pub(crate) async fn fetch_wikipedia_bio(
     None
 }
 
-// ── Ticketmaster Discovery ─────────────────────────────────────────────────
-
-/// Ticketmaster Discovery API consumer key (SYVR-App, approved 2026-05-22).
-/// Free tier: 5 req/sec, 5K req/day. Rate-limit identifier, not an auth secret —
-/// embedded in the binary per Ticketmaster's documented intended use.
-const TICKETMASTER_API_KEY: &str = "GQbGNt5UBoE0RdMMCDB9IAplTcjEeA6A";
-const TICKETMASTER_DISCOVERY_BASE: &str = "https://app.ticketmaster.com/discovery/v2/events.json";
-
-/// Impact (impact.com) affiliate URL prefix template. The project owner signs up at
-/// https://impact.com, joins the Ticketmaster brand, and gets a tracking
-/// link template. Until set, ticket URLs route through Ticketmaster
-/// directly without affiliate credit. Format expected:
-/// `https://{subdomain}.go.impact.com/c/{publisher-id}/{campaign-id}/`
-/// then append the URL-encoded target.
-const IMPACT_AFFILIATE_PREFIX: Option<&str> = None;
-
-fn wrap_with_impact_affiliate(url: &str) -> String {
-    match IMPACT_AFFILIATE_PREFIX {
-        Some(prefix) => format!("{}{}", prefix, urlencoding::encode(url)),
-        None => url.to_string(),
-    }
-}
-
-/// Fetch upcoming events for an artist from Ticketmaster Discovery API.
-/// Returns events sorted by date ascending, validated against the requested
-/// artist name (case-insensitive primary-attraction match). Empty Vec on
-/// any failure or no-match.
-pub(crate) async fn fetch_ticketmaster_events(
-    client: &reqwest::Client,
-    artist: &str,
-) -> Vec<TourDate> {
-    let url = match reqwest::Url::parse_with_params(
-        TICKETMASTER_DISCOVERY_BASE,
-        &[
-            ("apikey", TICKETMASTER_API_KEY),
-            ("keyword", artist),
-            ("classificationName", "music"),
-            ("size", "50"),
-            ("sort", "date,asc"),
-        ],
-    ) {
-        Ok(u) => u,
-        Err(_) => return vec![],
-    };
-
-    let resp = match client.get(url).send().await {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("[artist_info] ticketmaster fetch failed: {e}");
-            return vec![];
-        }
-    };
-
-    let body: serde_json::Value = match resp.json().await {
-        Ok(b) => b,
-        Err(e) => {
-            eprintln!("[artist_info] ticketmaster JSON parse failed: {e}");
-            return vec![];
-        }
-    };
-
-    let events = match body
-        .get("_embedded")
-        .and_then(|e| e.get("events"))
-        .and_then(|e| e.as_array())
-    {
-        Some(arr) => arr,
-        None => return vec![],
-    };
-
-    let mut dates: Vec<TourDate> = events
-        .iter()
-        .filter_map(|event| parse_ticketmaster_event(event, artist))
-        .collect();
-
-    dates.sort_by_key(|d| d.date_unix_ms);
-    dates
-}
-
-fn parse_ticketmaster_event(event: &serde_json::Value, requested_artist: &str) -> Option<TourDate> {
-    // Validate: primary attraction must match requested artist (case-insensitive).
-    let primary_attraction = event
-        .get("_embedded")
-        .and_then(|e| e.get("attractions"))
-        .and_then(|a| a.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|a| a.get("name"))
-        .and_then(|n| n.as_str())
-        .unwrap_or("");
-
-    if !primary_attraction.eq_ignore_ascii_case(requested_artist) {
-        return None;
-    }
-
-    // Date: combine localDate + localTime, parse via existing helper.
-    let start = event.get("dates")?.get("start")?;
-    let local_date = start.get("localDate")?.as_str()?;
-    let local_time = start
-        .get("localTime")
-        .and_then(|t| t.as_str())
-        .unwrap_or("00:00:00");
-    let combined = format!("{}T{}", local_date, local_time);
-    let date_unix_ms = parse_iso8601_to_unix_ms(&combined)?;
-
-    // Venue + location.
-    let venue = event
-        .get("_embedded")
-        .and_then(|e| e.get("venues"))
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first());
-
-    let city = venue
-        .and_then(|v| v.get("city"))
-        .and_then(|c| c.get("name"))
-        .and_then(|n| n.as_str())
-        .unwrap_or("")
-        .to_string();
-    let region = venue
-        .and_then(|v| v.get("state"))
-        .and_then(|s| s.get("stateCode"))
-        .and_then(|sc| sc.as_str())
-        .unwrap_or("")
-        .to_string();
-    let country = venue
-        .and_then(|v| v.get("country"))
-        .and_then(|c| c.get("countryCode"))
-        .and_then(|cc| cc.as_str())
-        .unwrap_or("")
-        .to_string();
-    let venue_name = venue
-        .and_then(|v| v.get("name"))
-        .and_then(|n| n.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    // Ticket URL: wrap with Impact affiliate prefix (no-op until configured).
-    let raw_url = event.get("url").and_then(|u| u.as_str()).unwrap_or("");
-    let ticket_url = if raw_url.is_empty() {
-        None
-    } else {
-        Some(wrap_with_impact_affiliate(raw_url))
-    };
-
-    // Status mapping. Anything but "onsale" treated as SoldOut for UX simplicity.
-    let status_code = event
-        .get("dates")
-        .and_then(|d| d.get("status"))
-        .and_then(|s| s.get("code"))
-        .and_then(|c| c.as_str())
-        .unwrap_or("onsale");
-    let status = if status_code.eq_ignore_ascii_case("onsale") {
-        TicketStatus::Available
-    } else {
-        TicketStatus::SoldOut
-    };
-
-    Some(TourDate {
-        date_unix_ms,
-        city,
-        region,
-        country,
-        venue: venue_name,
-        ticket_url,
-        status,
-    })
-}
-
-/// Parse ISO8601 datetime string to Unix milliseconds.
-/// Input format: "2026-03-05T20:00:00" (no timezone; treat as UTC for sorting purposes).
-fn parse_iso8601_to_unix_ms(s: &str) -> Option<i64> {
-    // Split at 'T' and parse manually: "2026-03-05" and "20:00:00".
-    let (date_part, time_part) = s.split_once('T')?;
-    let mut date_parts = date_part.split('-');
-    let year: i64 = date_parts.next()?.parse().ok()?;
-    let month: i64 = date_parts.next()?.parse().ok()?;
-    let day: i64 = date_parts.next()?.parse().ok()?;
-    let mut time_parts = time_part.split(':');
-    let hour: i64 = time_parts.next()?.parse().ok()?;
-    let min: i64 = time_parts.next()?.parse().ok()?;
-    let sec_str = time_parts.next().unwrap_or("0");
-    let sec: i64 = sec_str.split('.').next()?.parse().ok()?;
-
-    // Days from epoch (1970-01-01). Use the proleptic Gregorian formula.
-    // This is accurate for dates in the 2020s–2030s range we actually see.
-    let days = days_from_epoch(year, month, day)?;
-    let secs = days * 86400 + hour * 3600 + min * 60 + sec;
-    Some(secs * 1000)
-}
-
-fn days_from_epoch(year: i64, month: i64, day: i64) -> Option<i64> {
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
-        return None;
-    }
-    // Days in each month (non-leap).
-    let days_in_month = [0i64, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let is_leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-    let mut days: i64 =
-        (year - 1970) * 365 + (year - 1969) / 4 - (year - 1901) / 100 + (year - 1601) / 400;
-    for m in 1..month {
-        days += days_in_month[m as usize];
-        if m == 2 && is_leap {
-            days += 1;
-        }
-    }
-    days += day - 1;
-    Some(days)
-}
-
 // ── TheAudioDB ─────────────────────────────────────────────────────────────
 
 /// TheAudioDB free tier uses the public test key "2".
@@ -579,8 +344,8 @@ pub(crate) fn build_artist_info_http_client() -> Result<reqwest::Client> {
 
 // ── Disk cache ─────────────────────────────────────────────────────────────
 
-/// On-disk structure per artist. Fields are individually timestamped so
-/// tour-dates can be refreshed without blowing away the bio/photo.
+/// On-disk structure per artist. Fields are individually timestamped.
+/// Older cache files may carry a `tour_dates` field; serde ignores it.
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 struct CachedArtistData {
     version: u32,
@@ -590,8 +355,6 @@ struct CachedArtistData {
     bio_fetched_at_unix_ms: Option<i64>,
     photo_data_url: Option<String>,
     photo_fetched_at_unix_ms: Option<i64>,
-    tour_dates: Option<Vec<TourDate>>,
-    tour_dates_fetched_at_unix_ms: Option<i64>,
 }
 
 fn now_unix_ms() -> i64 {
@@ -740,41 +503,17 @@ impl ArtistInfoCache {
         // Always read cache after acquiring or waiting.
         let now = now_unix_ms();
         if let Some(cached) = read_cache_file(&self.app, &slug).await {
-            let tour_stale = cached
-                .tour_dates_fetched_at_unix_ms
-                .map(|t| tour_dates_stale(t, now))
-                .unwrap_or(true);
-
-            if notify.is_none() {
+            let notify = match notify {
                 // We waited on another fetch; return the cache result.
-                return build_artist_info_from_cache(&cached, artist, &slug);
-            }
-
-            if !tour_stale {
-                // Fully fresh — release the in-flight slot and return.
-                let notify = notify.unwrap();
-                {
-                    let mut map = self.in_flight.lock().await;
-                    map.remove(&slug);
-                }
-                notify.notify_waiters();
-                return build_artist_info_from_cache(&cached, artist, &slug);
-            }
-
-            // Tour dates stale — refetch only events; keep everything else.
-            let client = build_artist_info_http_client()?;
-            let new_events = fetch_ticketmaster_events(&client, artist).await;
-            let mut updated = cached.clone();
-            updated.tour_dates = Some(new_events);
-            updated.tour_dates_fetched_at_unix_ms = Some(now);
-            let _ = write_cache_file(&self.app, &updated).await;
-            let notify = notify.unwrap();
+                None => return build_artist_info_from_cache(&cached, artist, &slug),
+                Some(n) => n,
+            };
             {
                 let mut map = self.in_flight.lock().await;
                 map.remove(&slug);
             }
             notify.notify_waiters();
-            return build_artist_info_from_cache(&updated, artist, &slug);
+            return build_artist_info_from_cache(&cached, artist, &slug);
         }
 
         // Cache miss — full fetch.
@@ -790,10 +529,9 @@ impl ArtistInfoCache {
         };
         let client = build_artist_info_http_client()?;
 
-        // Parallel fetch: bio, events, photo.
-        let (bio_result, events_result, photo_result) = tokio::join!(
+        // Parallel fetch: bio, photo.
+        let (bio_result, photo_result) = tokio::join!(
             fetch_wikipedia_bio(&client, artist),
-            fetch_ticketmaster_events(&client, artist),
             fetch_theaudiodb_photo(&client, artist),
         );
 
@@ -805,8 +543,6 @@ impl ArtistInfoCache {
             bio_fetched_at_unix_ms: Some(now),
             photo_data_url: photo_result,
             photo_fetched_at_unix_ms: Some(now),
-            tour_dates: Some(events_result),
-            tour_dates_fetched_at_unix_ms: Some(now),
         };
 
         let _ = write_cache_file(&self.app, &data).await;
@@ -841,11 +577,7 @@ fn build_artist_info_from_cache(
         slug: data.slug.clone().unwrap_or_else(|| slug.to_string()),
         bio: data.bio.clone(),
         photo_data_url: data.photo_data_url.clone(),
-        tour_dates: data.tour_dates.clone().unwrap_or_default(),
-        fetched_at_unix_ms: data
-            .bio_fetched_at_unix_ms
-            .or(data.tour_dates_fetched_at_unix_ms)
-            .unwrap_or(0),
+        fetched_at_unix_ms: data.bio_fetched_at_unix_ms.unwrap_or(0),
     })
 }
 
@@ -906,198 +638,6 @@ mod tests {
     fn slug_leading_trailing_dash() {
         // Leading/trailing non-alphanum should not produce leading/trailing dash.
         assert_eq!(slug_for_artist("---test---"), "test");
-    }
-
-    #[test]
-    fn tour_dates_fresh() {
-        // 0 hours ago — not stale.
-        assert!(!tour_dates_stale(1_000_000, 1_000_000));
-    }
-
-    #[test]
-    fn tour_dates_eleven_hours() {
-        let now = 1_000_000_000i64;
-        let fetched = now - (11 * 3600 * 1000);
-        assert!(!tour_dates_stale(fetched, now));
-    }
-
-    #[test]
-    fn tour_dates_thirteen_hours() {
-        let now = 1_000_000_000i64;
-        let fetched = now - (13 * 3600 * 1000);
-        assert!(tour_dates_stale(fetched, now));
-    }
-
-    #[test]
-    fn tour_dates_exactly_twelve_hours() {
-        let now = 1_000_000_000i64;
-        let fetched = now - (12 * 3600 * 1000);
-        // Exactly at the boundary → stale (>=).
-        assert!(tour_dates_stale(fetched, now));
-    }
-
-    // ── Ticketmaster parser tests ──────────────────────────────────────────
-
-    fn make_tm_event(
-        attraction: &str,
-        local_date: &str,
-        local_time: Option<&str>,
-        status: &str,
-        url: &str,
-    ) -> serde_json::Value {
-        serde_json::json!({
-            "name": format!("{} at Venue", attraction),
-            "url": url,
-            "dates": {
-                "start": {
-                    "localDate": local_date,
-                    "localTime": local_time.unwrap_or("20:00:00")
-                },
-                "status": { "code": status }
-            },
-            "_embedded": {
-                "attractions": [{ "name": attraction }],
-                "venues": [{
-                    "name": "Mission Ballroom",
-                    "city": { "name": "Denver" },
-                    "state": { "stateCode": "CO" },
-                    "country": { "countryCode": "US", "name": "United States Of America" }
-                }]
-            }
-        })
-    }
-
-    #[test]
-    fn tm_parse_accepts_case_insensitive_match() {
-        let event = make_tm_event(
-            "Shaggy",
-            "2026-03-05",
-            Some("20:00:00"),
-            "onsale",
-            "https://www.ticketmaster.com/event/abc",
-        );
-        let result = parse_ticketmaster_event(&event, "shaggy");
-        assert!(result.is_some(), "should match case-insensitively");
-    }
-
-    #[test]
-    fn tm_parse_rejects_non_matching_artist() {
-        let event = make_tm_event(
-            "Shaggy",
-            "2026-03-05",
-            Some("20:00:00"),
-            "onsale",
-            "https://www.ticketmaster.com/event/abc",
-        );
-        let result = parse_ticketmaster_event(&event, "Bob Marley");
-        assert!(result.is_none(), "should reject mismatched artist");
-    }
-
-    #[test]
-    fn tm_parse_missing_local_time_defaults_midnight() {
-        // Event without localTime — should default to 00:00:00 and still parse.
-        let event = serde_json::json!({
-            "name": "Shaggy at Venue",
-            "url": "https://www.ticketmaster.com/event/abc",
-            "dates": {
-                "start": { "localDate": "2026-03-05" },
-                "status": { "code": "onsale" }
-            },
-            "_embedded": {
-                "attractions": [{ "name": "Shaggy" }],
-                "venues": [{
-                    "name": "Mission Ballroom",
-                    "city": { "name": "Denver" },
-                    "state": { "stateCode": "CO" },
-                    "country": { "countryCode": "US" }
-                }]
-            }
-        });
-        let result = parse_ticketmaster_event(&event, "Shaggy");
-        assert!(result.is_some());
-        let tour_date = result.unwrap();
-        // 2026-03-05T00:00:00 UTC → verify date is parseable (non-zero ms).
-        assert!(tour_date.date_unix_ms > 0);
-    }
-
-    #[test]
-    fn tm_parse_missing_venue_returns_empty_strings() {
-        // Event with no _embedded.venues — should still return Some with empty location.
-        let event = serde_json::json!({
-            "name": "Shaggy at Venue",
-            "url": "https://www.ticketmaster.com/event/abc",
-            "dates": {
-                "start": { "localDate": "2026-03-05", "localTime": "20:00:00" },
-                "status": { "code": "onsale" }
-            },
-            "_embedded": {
-                "attractions": [{ "name": "Shaggy" }],
-                "venues": []
-            }
-        });
-        let result = parse_ticketmaster_event(&event, "Shaggy");
-        assert!(result.is_some());
-        let tour_date = result.unwrap();
-        assert_eq!(tour_date.city, "");
-        assert_eq!(tour_date.venue, "");
-    }
-
-    #[test]
-    fn tm_wrap_affiliate_noop_when_none() {
-        let url = "https://www.ticketmaster.com/event/abc123";
-        assert_eq!(wrap_with_impact_affiliate(url), url);
-    }
-
-    #[test]
-    fn tm_status_onsale_available() {
-        let event = make_tm_event(
-            "Shaggy",
-            "2026-03-05",
-            Some("20:00:00"),
-            "onsale",
-            "https://www.ticketmaster.com/event/abc",
-        );
-        let result = parse_ticketmaster_event(&event, "Shaggy").unwrap();
-        assert_eq!(result.status, TicketStatus::Available);
-    }
-
-    #[test]
-    fn tm_status_cancelled_soldsout() {
-        let event = make_tm_event(
-            "Shaggy",
-            "2026-03-05",
-            Some("20:00:00"),
-            "cancelled",
-            "https://www.ticketmaster.com/event/abc",
-        );
-        let result = parse_ticketmaster_event(&event, "Shaggy").unwrap();
-        assert_eq!(result.status, TicketStatus::SoldOut);
-    }
-
-    #[test]
-    fn tm_status_offsale_soldsout() {
-        let event = make_tm_event(
-            "Shaggy",
-            "2026-03-05",
-            Some("20:00:00"),
-            "offsale",
-            "https://www.ticketmaster.com/event/abc",
-        );
-        let result = parse_ticketmaster_event(&event, "Shaggy").unwrap();
-        assert_eq!(result.status, TicketStatus::SoldOut);
-    }
-
-    #[test]
-    fn tm_status_postponed_soldsout() {
-        let event = make_tm_event(
-            "Shaggy",
-            "2026-03-05",
-            Some("20:00:00"),
-            "postponed",
-            "https://www.ticketmaster.com/event/abc",
-        );
-        let result = parse_ticketmaster_event(&event, "Shaggy").unwrap();
-        assert_eq!(result.status, TicketStatus::SoldOut);
     }
 
     // ── Wikipedia helpers tests ────────────────────────────────────────────

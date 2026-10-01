@@ -56,7 +56,7 @@ mod update_status;
 pub mod window_effects;
 
 use artist_info::{clear_artist_info_cache, get_artist_info, ArtistInfoCache};
-use artist_window::{close_artist_panel_cmd, open_artist_panel_cmd, open_ticket_url};
+use artist_window::{close_artist_panel_cmd, open_artist_panel_cmd, open_external_url};
 use audio_output::{get_active_audio_output, get_audio_outputs, new_shared_state};
 #[cfg(windows)]
 use audio_output::{
@@ -510,7 +510,7 @@ pub fn run() {
             clear_artist_info_cache,
             open_artist_panel_cmd,
             close_artist_panel_cmd,
-            open_ticket_url,
+            open_external_url,
             license::commands::get_license_state,
             license::commands::activate_license,
             license::commands::refresh_license,

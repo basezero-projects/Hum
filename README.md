@@ -18,7 +18,7 @@ Status: pre-1.0, current development version v0.13.99. A paid 1.0 release is pla
 - Wired, Speakers, and Bluetooth delay profiles, plus a temporary per-track nudge
 - Album artwork, artwork-derived surfaces, Windows backdrops, and automatic text contrast
 - Optional translated lyrics when the provider includes them
-- Artist biography, photo, and upcoming Ticketmaster dates
+- Artist biography and photo
 - A loopback-only OBS browser source that mirrors the overlay
 - Tray controls, global shortcuts, autostart, and signed automatic updates
 
