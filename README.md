@@ -31,14 +31,14 @@ Hum is a Tauri 2 app. The Rust backend reads playback state, resolves lyrics, an
 3. **Lyrics proxy.** Some networks block `lrclib.net` by hostname. Hum tries LRCLib directly first and falls back to a small Cloudflare Worker at `lyrics.syvr.dev` only when the direct connection fails. The Worker source is in [worker/lyrics-proxy](worker/lyrics-proxy). It proxies two read-only LRCLib paths and nothing else.
 4. **Timing.** Saved timing is `saved_offset_ms = anticipate_ms - selected_profile_delay_ms`. Wired defaults to 0 ms, Speakers to 250 ms, Bluetooth to 350 ms. Details are in [Media and timing](docs/systems/media-and-timing.md).
 5. **OBS.** An Axum server bound to `127.0.0.1` serves the same state to an OBS Browser Source. It accepts only loopback Host headers and needs no cloud relay. Enable it in Settings and use the local URL shown there (default port 38247).
-6. **Updates.** Releases are built in GitHub Actions, Authenticode signed, and the installer is signed again with a Tauri updater key. The app checks the GitHub releases feed and verifies the signature before installing.
+6. **Updates.** Releases are built in GitHub Actions, Authenticode signed, and the installer is signed again with a Tauri updater key. Installers and the update feed are hosted on Cloudflare R2 at `downloads.syvr.dev`. The app checks that feed and verifies the signature before installing.
 7. **Licensing.** The paid release uses Polar for checkout and license keys. The client activates and validates keys through Polar's public customer API and keeps protected offline state. The decision is recorded in [ADR-0002](docs/decisions/ADR-0002-use-polar-and-protected-offline-license-state.md).
 
 The architecture decision to stay on Tauri and add platform adapters is in [ADR-0001](docs/decisions/ADR-0001-keep-tauri-and-add-platform-adapters.md). The shared core (media models, timing policy, platform information, native window interfaces) compiles on Windows, macOS, and Linux in CI. Only Windows has a playback backend, so Hum is Windows only today.
 
 ## Install
 
-Hum is not publicly released yet. When it is, installers will be on the [GitHub Releases page](https://github.com/basezero-projects/Hum/releases), and installed copies update themselves from there.
+Hum is not publicly released yet. Official signed builds will be sold through the Hum site, and installed copies update themselves from `https://downloads.syvr.dev/hum/latest.json`.
 
 ## Build from source
 
@@ -73,7 +73,16 @@ CI runs a portable-core workflow on every push. Release builds run only when a `
 
 ## License
 
-No license file has been added yet, so all rights are reserved by default. The project owner has not chosen one.
+Hum is source available under the [Functional Source License, Version 1.1, MIT Future License](LICENSE) (FSL-1.1-MIT).
+
+In plain words:
+
+- You can read the code, run it, modify it, and use it for any non-competing purpose, including personal use, learning, and research.
+- You can't sell it, or offer a product or service that competes with Hum.
+- Each version automatically becomes MIT licensed two years after it is released.
+- Official signed builds and automatic updates are sold through the Hum site. Building from source for yourself is fine.
+
+The LICENSE file is the binding text. This summary is not.
 
 ## Changelog
 

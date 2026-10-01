@@ -169,6 +169,28 @@ jobs:
           path: release-output/*
           if-no-files-found: error
 
+      - name: Publish installer and update feed to Cloudflare R2
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bucket = 'syvr-downloads'
+          $version = (node scripts/prepare-release.mjs check-version --repo-root . --tag "$env:RELEASE_TAG").Trim()
+          $installer = "Hum_${version}_x64-setup.exe"
+          function Publish-Object($file, $key, $type) {
+            npx --yes wrangler@4 r2 object put "$bucket/$key" --file "release-output/$file" --content-type $type --remote
+            if ($LASTEXITCODE -ne 0) { throw "Upload failed for $key" }
+          }
+          # Installer and signature first, so the feed never points at missing files.
+          Publish-Object $installer "hum/$version/$installer" 'application/octet-stream'
+          Publish-Object "$installer.sig" "hum/$version/$installer.sig" 'text/plain'
+          Publish-Object 'release-proof.json' "hum/$version/release-proof.json" 'application/json'
+          # latest.json goes last. Clients read it, so it must only appear once everything it names exists.
+          Publish-Object 'latest.json' 'hum/latest.json' 'application/json'
+
       - name: Publish tagged release
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2

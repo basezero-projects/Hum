@@ -1,7 +1,8 @@
 {
   "name": "hum",
-  "version": "0.13.100",
+  "version": "0.13.101",
   "private": true,
+  "license": "FSL-1.1-MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",

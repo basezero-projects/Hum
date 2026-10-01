@@ -6,6 +6,15 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.101] - 2026-10-01
+
+### Changed
+- **Hum is now source available.** The code stays public on GitHub, but it is no longer "all rights reserved". It is licensed under the Functional Source License 1.1 with an MIT future license (FSL-1.1-MIT). You can read, run, modify, and use it for non-competing purposes. You can't sell it or offer a competing product. Each version turns into plain MIT two years after its release. The full text is in the new `LICENSE` file (copyright 2026 SYVR Studios LLC), and the README has a short License section in plain words. `package.json` and `src-tauri/Cargo.toml` now carry `license = "FSL-1.1-MIT"`.
+- **Updates now download from downloads.syvr.dev. No action needed.** Hum checks `https://downloads.syvr.dev/hum/latest.json` instead of GitHub Releases, and the installer comes from `https://downloads.syvr.dev/hum/<version>/`. Nothing changes in the app's UI. No release has been published, so no installed copy used the old address. The update signature check and public key are unchanged.
+- **Release workflow publishes to Cloudflare R2.** A `v*` tag still builds, Authenticode signs, and Tauri-signs the installer. A new step then uploads the installer, its `.sig`, and `release-proof.json` to the `syvr-downloads` R2 bucket under `hum/<version>/`, and uploads `hum/latest.json` last so clients never see a feed that points at missing files. It uses the repository secrets `CLOUDFLARE_API_TOKEN` (scoped to R2 write) and `CLOUDFLARE_ACCOUNT_ID`. The GitHub Release is still attached as before. Manual runs stay private and upload nothing.
+- **Feed URL is built by `scripts/prepare-release.mjs`.** `latest.json` now points at the R2 installer URL. `--download-base` overrides the default `https://downloads.syvr.dev/hum`. Tests cover the new URL and the upload order.
+- **No UI yet for any of this.** Nothing new appears in the app. No release tag was created.
+
 ## [0.13.100] - 2026-10-01
 
 ### Removed

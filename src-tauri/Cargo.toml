@@ -1,8 +1,9 @@
 [package]
 name = "hum"
-version = "0.13.100"
+version = "0.13.101"
 description = "Real-time synced lyrics overlay for any Windows media source"
 authors = ["SYVR Studios"]
+license = "FSL-1.1-MIT"
 edition = "2021"
 default-run = "hum"
 autobins = false

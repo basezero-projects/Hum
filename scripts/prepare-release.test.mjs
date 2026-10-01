@@ -104,7 +104,7 @@ test("valid release input creates exact Windows metadata and proof", async () =>
     platforms: {
       "windows-x86_64": {
         signature: validSignature(),
-        url: `https://github.com/basezero-projects/Hum/releases/download/v${VERSION}/Hum_${VERSION}_x64-setup.exe`,
+        url: `https://downloads.syvr.dev/hum/${VERSION}/Hum_${VERSION}_x64-setup.exe`,
       },
     },
   });
@@ -236,4 +236,14 @@ test("release metadata ships only Hum and keeps the UI inspector as an example",
   );
   assert.doesNotMatch(inspectorSource, /cargo run --bin dump_uia/);
   assert.match(inspectorSource, /cargo run --example dump_uia/);
+});
+
+test("release workflow uploads to R2 with latest.json last", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+  assert.match(workflow, /CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/);
+  const installer = workflow.indexOf('Publish-Object $installer "hum/$version/$installer"');
+  const signature = workflow.indexOf('Publish-Object "$installer.sig"');
+  const feed = workflow.indexOf("Publish-Object 'latest.json' 'hum/latest.json'");
+  assert.ok(installer >= 0 && signature > installer, "installer must upload before its signature");
+  assert.ok(feed > signature, "latest.json must upload after the installer and signature");
 });

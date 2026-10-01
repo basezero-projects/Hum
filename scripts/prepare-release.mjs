@@ -150,18 +150,25 @@ async function sha256(filePath) {
   return createHash("sha256").update(await readFile(filePath)).digest("hex");
 }
 
+export const DEFAULT_DOWNLOAD_BASE = "https://downloads.syvr.dev/hum";
+
 export async function prepareRelease({
   repoRoot,
   artifactsDir,
   outputDir,
   repository,
   tag,
+  downloadBase = DEFAULT_DOWNLOAD_BASE,
   publishedAt = new Date().toISOString(),
 }) {
   const version = await readVersionContract(repoRoot);
   validateTag(tag, version);
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     fail("Invalid GitHub repository name");
+  }
+
+  if (!/^https:\/\/[A-Za-z0-9.-]+(?:\/[A-Za-z0-9._~-]+)*$/.test(downloadBase)) {
+    fail("Invalid download base URL");
   }
 
   const files = await readdir(artifactsDir);
@@ -192,7 +199,7 @@ export async function prepareRelease({
     platforms: {
       "windows-x86_64": {
         signature: signatureText,
-        url: `https://github.com/${repository}/releases/download/v${version}/${updater}`,
+        url: `${downloadBase}/${version}/${updater}`,
       },
     },
   };
@@ -269,6 +276,7 @@ async function main() {
       outputDir: path.resolve(values.output),
       repository: values.repository,
       tag: values.tag || undefined,
+      downloadBase: values["download-base"] || undefined,
     });
     process.stdout.write(`Prepared Hum v${result.version}\n`);
     return;
