@@ -1117,7 +1117,7 @@ export default function Overlay() {
   // / pale-cream score high (saturation ≈ 0); tan, gold tint, saturated
   // pastels score lower even at high luminance. Dark text only kicks in
   // for the high-score case; otherwise white text wins (more readable
-  // over tinted bright surfaces — Wes called this out on a gold album-
+  // over tinted bright surfaces, which was called out on a gold album-
   // art tint where black-on-tan was hard to read).
   //
   // Hysteresis on the score so dynamic backgrounds don't flicker the

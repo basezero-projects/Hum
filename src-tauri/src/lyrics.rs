@@ -709,7 +709,7 @@ async fn resolve_lyrics(
     // do. Falling through to those sources means we end up matching a
     // single song's lyrics against the mashup audio, producing
     // confidently-wrong out-of-sync output (the "Twista x Wetter (SW
-    // Mashup)" case Wes hit returned Twista's "Wetter" lyrics, which
+    // Mashup)" case that was reported returned Twista's "Wetter" lyrics, which
     // drift several minutes off the actual mashup playback). No lyrics
     // beats wrong lyrics. Detection is intentionally conservative —
     // only the explicit fan-creation keywords, not heuristic " x " /

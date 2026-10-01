@@ -219,7 +219,5 @@ Changing the enabled setting or port goes through `StreamerSupervisor`, which st
 
 ## Verification
 
-- [HUM-00 Windows regression evidence](../verification/hum-00-windows-regression.md)
-- [Hum 1.0 release checklist](../verification/1.0-release-checklist.md)
 - [Portable core workflow](../../.github/workflows/portable-core.yml)
 - `tests::shared_shell_state_smoke_preserves_neutral_defaults`

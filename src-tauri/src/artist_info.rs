@@ -282,7 +282,7 @@ pub(crate) async fn fetch_wikipedia_bio(
 const TICKETMASTER_API_KEY: &str = "GQbGNt5UBoE0RdMMCDB9IAplTcjEeA6A";
 const TICKETMASTER_DISCOVERY_BASE: &str = "https://app.ticketmaster.com/discovery/v2/events.json";
 
-/// Impact (impact.com) affiliate URL prefix template. Wes signs up at
+/// Impact (impact.com) affiliate URL prefix template. The project owner signs up at
 /// https://impact.com, joins the Ticketmaster brand, and gets a tracking
 /// link template. Until set, ticket URLs route through Ticketmaster
 /// directly without affiliate credit. Format expected:

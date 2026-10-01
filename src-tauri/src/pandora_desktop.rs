@@ -206,7 +206,7 @@ impl WebPlayerProbe for PandoraDesktopProbe {
                 // over the ad — position stays 0 (progress bar at 0%).
                 // The AD BREAK badge still fires correctly. Documented in
                 // commit message. Full initial-duration caching deferred to
-                // a future task if Wes wants accurate progress.
+                // a future task if accurate progress is wanted.
                 let dur_ms = state_result
                     .countdown_seconds
                     .map(|s| s * 1_000)

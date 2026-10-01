@@ -29,3 +29,16 @@ pnpm-debug.log*
 
 # Scaffold artifacts
 .scaffold/
+
+# Local agent and planning files (kept on disk, not published)
+CLAUDE.md
+AGENTS.md
+BUGS.md
+.claude/
+.planning/
+docs/superpowers/
+docs/roadmap/
+docs/verification/
+docs/ROADMAP.md
+docs/LAUNCH-CHECKLIST.md
+docs/hum-web-demo-plan.md

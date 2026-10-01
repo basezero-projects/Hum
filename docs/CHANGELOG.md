@@ -6,6 +6,14 @@ All notable changes to this project. Updated on **every commit**, not at the end
 
 Versions follow `X.Y.Z` (bump all of `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` per commit).
 
+## [0.13.99] - 2026-10-01
+
+### Changed
+- **No app changes.** This release is repository cleanup only. Nothing in the installed app behaves differently, and no release tag was created, so no update is offered to users.
+- **README rewritten for people finding the project on GitHub.** It now covers what Hum is, its features, how playback, lyrics, the lyrics proxy, the OBS source, signed updates, and licensing fit together, how to build from source, and the current test counts (294 Rust tests, 68 frontend and release-script tests). It has a placeholder section that says where to add screenshots (`assets/screenshots/`).
+- **Internal planning and agent files are no longer tracked.** `CLAUDE.md`, `AGENTS.md`, `BUGS.md`, `.planning/`, `.claude/`, `docs/superpowers/`, `docs/roadmap/`, `docs/verification/`, `docs/ROADMAP.md`, `docs/LAUNCH-CHECKLIST.md`, and `docs/hum-web-demo-plan.md` stay on disk but are listed in `.gitignore`. Public docs now keep the changelog, release notes, architecture decisions, and system documentation. Dead links to the removed files were cleaned from `docs/systems/media-and-timing.md` and `docs/RELEASE_NOTES.md`.
+- **Code comments no longer name individuals.** Five source comments in `artist_info.rs`, `lyrics.rs`, `pandora_desktop.rs`, `web_bridge.rs`, and `Overlay.tsx` were reworded. No code changed.
+
 ## [0.13.98] - 2026-09-30
 
 ### Fixed

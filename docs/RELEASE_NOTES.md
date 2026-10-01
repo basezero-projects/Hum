@@ -1,6 +1,6 @@
 # Release Notes — Hum
 
-These notes describe the last prepared public release, v0.13.0. Current development is tracked in `docs/CHANGELOG.md`, and the next complete customer release is planned in `docs/ROADMAP.md`.
+These notes describe the last prepared public release, v0.13.0. Current development is tracked in `docs/CHANGELOG.md`.
 
 ## v0.13.0 — 2026-05-22
 

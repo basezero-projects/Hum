@@ -1,152 +1,80 @@
 # Hum
 
-Hum is a Windows lyric overlay for listeners and streamers. It follows the active media session, resolves synchronized lyrics, and keeps the current line above the apps the listener already uses. The desktop overlay has compact ribbon and square presentations. A local server provides the same playback state to an OBS browser source.
+Hum is a Windows lyric overlay that follows whatever you are playing and keeps the current line on screen, above the apps you already use.
 
-Current development version: v0.13.86
+Status: pre-1.0, current development version v0.13.99. A paid 1.0 release is planned.
 
-Hum is still working toward its paid 1.0 release. The phase order and release gates live in the [1.0 roadmap](docs/ROADMAP.md).
+## Screenshots
 
-## Current capabilities
+> Screenshots and a short GIF have not been added yet. To add them, drop the files in `assets/screenshots/` (for example `overlay-ribbon.png`, `overlay-square.png`, `settings.png`, `obs-source.gif`) and link them here with `![Ribbon overlay](assets/screenshots/overlay-ribbon.png)`.
 
-- NetEase YRC word timing when title, artist, and duration match the recording
-- LRCLib and NetEase line-timing fallbacks
-- Plain lyrics and distinct instrumental, unavailable, error, ad, and unsupported states
-- Three-line, single-line, and full-page ribbon layouts
-- A square focused-lyrics layout
-- Edit, Locked, and Ghost interaction modes
-- Wired, Speakers, and Bluetooth delay profiles
-- Temporary per-track timing nudges
-- Album artwork, artwork-derived surfaces, Windows backdrops, and automatic contrast
-- Optional translated lyrics when provider data includes them
-- Artist biographies, photos, and upcoming Ticketmaster dates
-- A loopback-only OBS browser source with saved timing parity
-- Tray controls, global shortcuts, autostart, persistent settings, and Windows updates
+## Features
 
-## Playback flow
+- Word-timed lyrics from NetEase YRC when title, artist, and duration match the recording
+- LRCLib synced and plain lyrics, with NetEase line timing as a later fallback
+- Distinct states for instrumental tracks, missing lyrics, errors, ads, and unsupported sources
+- Ribbon layouts (three-line, single-line, full page) and a square focused-lyrics layout
+- Edit, Locked, and Ghost (click-through) interaction modes
+- Wired, Speakers, and Bluetooth delay profiles, plus a temporary per-track nudge
+- Album artwork, artwork-derived surfaces, Windows backdrops, and automatic text contrast
+- Optional translated lyrics when the provider includes them
+- Artist biography, photo, and upcoming Ticketmaster dates
+- A loopback-only OBS browser source that mirrors the overlay
+- Tray controls, global shortcuts, autostart, and signed automatic updates
 
-Hum uses the active Windows System Media Transport Controls session when a player publishes one. Source-specific adapters fill gaps when Windows metadata or timing is incomplete.
+## How it works
 
-| Source | Current path | Notes |
-|---|---|---|
-| Spotify desktop | Windows SMTC | Native metadata, artwork, playback state, and timeline |
-| Spotify web | Windows SMTC | Uses the browser's media session |
-| YouTube Music and music videos | SMTC plus browser title cleanup | Background tabs can limit bridge enrichment |
-| iTunes desktop | PowerShell and iTunes COM bridge | Publishes only when SMTC is not playing |
-| Pandora web | Chromium UI Automation bridge | Adds track metadata, timing, and ad state |
-| Pandora desktop | UI Automation plus playback estimation | Seeking and joining mid-track are less reliable than SMTC |
-| Other Windows players | Windows SMTC | Quality depends on what the player publishes |
+Hum is a Tauri 2 app. The Rust backend reads playback state, resolves lyrics, and serves the OBS page. A React 19 frontend renders the overlay, settings, and artist panel.
 
-A playing SMTC session with a real title has authority over bridge estimates. When SMTC is inactive or incomplete, a fresh browser or Pandora bridge can provide the effective track. The shared media policy, payloads, and event ordering are covered by Rust tests.
+1. **Playback sources.** Hum reads the Windows System Media Transport Controls (SMTC) session. Adapters fill gaps for iTunes (PowerShell and COM), Pandora web and desktop (UI Automation), and YouTube (browser window title). A playing SMTC session with a real title wins over any bridge estimate.
+2. **Lyrics.** The resolver checks a memory cache and an on-disk cache first. LRCLib and NetEase are then queried together. NetEase YRC word timing is used only after strict metadata and duration checks. LRCLib supplies the normal synced or plain result.
+3. **Lyrics proxy.** Some networks block `lrclib.net` by hostname. Hum tries LRCLib directly first and falls back to a small Cloudflare Worker at `lyrics.syvr.dev` only when the direct connection fails. The Worker source is in [worker/lyrics-proxy](worker/lyrics-proxy). It proxies two read-only LRCLib paths and nothing else.
+4. **Timing.** Saved timing is `saved_offset_ms = anticipate_ms - selected_profile_delay_ms`. Wired defaults to 0 ms, Speakers to 250 ms, Bluetooth to 350 ms. Details are in [Media and timing](docs/systems/media-and-timing.md).
+5. **OBS.** An Axum server bound to `127.0.0.1` serves the same state to an OBS Browser Source. It accepts only loopback Host headers and needs no cloud relay. Enable it in Settings and use the local URL shown there (default port 38247).
+6. **Updates.** Releases are built in GitHub Actions, Authenticode signed, and the installer is signed again with a Tauri updater key. The app checks the GitHub releases feed and verifies the signature before installing.
+7. **Licensing.** The paid release uses Polar for checkout and license keys. The client activates and validates keys through Polar's public customer API and keeps protected offline state. The decision is recorded in [ADR-0002](docs/decisions/ADR-0002-use-polar-and-protected-offline-license-state.md).
 
-## Lyrics and timing
+The architecture decision to stay on Tauri and add platform adapters is in [ADR-0001](docs/decisions/ADR-0001-keep-tauri-and-add-platform-adapters.md). The shared core (media models, timing policy, platform information, native window interfaces) compiles on Windows, macOS, and Linux in CI. Only Windows has a playback backend, so Hum is Windows only today.
 
-The lyric resolver checks a bounded memory cache and `lyrics-cache.json` before it contacts providers. LRCLib and NetEase requests run together. Valid NetEase YRC word timing wins only after strict metadata and duration matching. LRCLib supplies the normal synchronized or plain result, with NetEase line timing as a later fallback.
+## Install
 
-Saved timing uses this equation:
+Hum is not publicly released yet. When it is, installers will be on the [GitHub Releases page](https://github.com/basezero-projects/Hum/releases), and installed copies update themselves from there.
 
-```text
-saved_offset_ms = anticipate_ms - selected_profile_delay_ms
-```
+## Build from source
 
-Wired defaults to 0 ms, Speakers to 250 ms, and Bluetooth to 350 ms. `Ctrl+Alt+Left` and `Ctrl+Alt+Right` apply a session-only 250 ms nudge to the current track. That temporary nudge resets on track change and currently affects only the desktop overlay. Every global shortcut keeps `Ctrl+Alt`, but its final key can be changed in Settings. Windows users can also assign Mouse 4 or Mouse 5.
-
-The full timing and source-authority rules are in [Media and timing](docs/systems/media-and-timing.md).
-
-## Audio-output discovery
-
-Windows discovers active render endpoints and the default multimedia output on a dedicated COM thread. The backend publishes stable endpoint IDs, display names, and Wired, Speakers, Bluetooth, HDMI, or Unknown routes through cached commands and change events.
-
-Discovery is separate from saved listening profiles. Changing the Windows default output does not automatically change `listening_mode` or a profile delay in v0.13.61.
-
-## Overlay controls
-
-- Edit mode allows dragging and resizing.
-- Locked mode keeps the overlay interactive but prevents accidental movement.
-- Ghost mode makes the overlay click-through.
-- `Ctrl+Alt+L` cycles the interaction mode.
-- `Ctrl+Alt+B` toggles the blurred artwork background.
-- `Ctrl+Alt+T` toggles transparent lyrics-only mode.
-- `Ctrl+Alt+H` toggles the media information column.
-
-The tray can show or hide Hum, change the interaction mode, switch the saved listening mode, open Settings, check for updates, and quit.
-
-## OBS browser source
-
-Enable OBS / Streamer in Settings, then copy the local URL into an OBS Browser Source. The default address is `http://localhost:38247/overlay` unless the port has changed.
-
-The server binds to `127.0.0.1` and accepts only loopback Host headers. It serves current track and lyrics state, the saved timing projection, artwork, local assets, server-sent events, and a health endpoint. It does not need Spotify credentials or a cloud relay.
-
-## Portable core status
-
-Hum stays on Tauri for 1.0. The shared Rust shell, media contracts, timing policy, audio-output contracts, platform information, and native window interfaces compile on Windows, macOS, and Linux runners. `SharedShellState::new()` also provides a non-GUI smoke test for the exact neutral state used by production startup.
-
-That boundary does not make Hum a macOS or Linux product yet:
-
-- Windows has the media backend and audio-output discovery.
-- macOS and Linux have no playback adapter.
-- The portable workflow does not launch the GUI.
-- The workflow does not package, sign, upload, or publish an installer.
-
-The architecture decision is recorded in [ADR-0001](docs/decisions/ADR-0001-keep-tauri-and-add-platform-adapters.md). Current capability truth lives in `get_platform_info` and [Media and timing](docs/systems/media-and-timing.md).
-
-## Architecture
-
-| Layer | Current implementation |
-|---|---|
-| Interface | React 19, Vite 7, TypeScript 5.9 |
-| Desktop shell | Tauri 2 |
-| Shared media core | Platform-neutral Rust models, authority policy, publisher, and startup state |
-| Windows playback | `Windows.Media.Control`, iTunes bridge, UI Automation, and WASAPI where needed |
-| Lyrics | LRCLib plus strict NetEase YRC enrichment |
-| Audio outputs | Cached neutral contract with a Windows MMDevice polling backend |
-| Native windows | Platform-neutral backdrop, aspect, pointer, and screen-sampling seams |
-| OBS | Axum on loopback with JSON, artwork, settings projection, and server-sent events |
-| Persistence | Tauri store plus bounded or versioned application caches |
-| Desktop services | Official Tauri plugins for shortcuts, autostart, updates, process control, and window state |
-
-## Development
-
-Install dependencies and run the Windows desktop app:
+Requirements: Windows 10 or 11, Node.js, pnpm, and a Rust toolchain.
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm tauri dev
+pnpm tauri dev      # run the desktop app
+pnpm tauri build    # build the NSIS installer (unsigned unless signing keys are set)
 ```
 
-Run the frontend checks:
+License features need `HUM_POLAR_ORGANIZATION_ID`, `HUM_POLAR_CHECKOUT_URL`, and `HUM_POLAR_CUSTOMER_PORTAL_URL` in the build environment (see `.env.example`). Without them Hum builds with licensing disabled.
 
-```bash
-pnpm typecheck
-pnpm build
-node --test src/platform-info-retry.test.mjs
-```
+## Tests
 
-Run the Rust checks from `src-tauri`:
+| Suite | Command | Count |
+|---|---|---|
+| Rust (from `src-tauri`) | `cargo test --all-targets` | 294 passing, 2 ignored |
+| Frontend and release scripts | `pnpm test` | 68 passing |
+| TypeScript | `pnpm typecheck` | type check only |
+| Rust lint | `cargo clippy --all-targets -- -D warnings` | clean |
+| Worker (from `worker/lyrics-proxy`) | `pnpm typecheck` | type check only, no unit tests |
 
-```bash
-cargo fmt --all --check
-cargo check --all-targets
-cargo clippy --all-targets -- -D warnings
-cargo test --all-targets
-cargo test shared_shell_state_smoke_preserves_neutral_defaults
-```
+CI runs a portable-core workflow on every push. Release builds run only when a `v*` tag is pushed or the workflow is started by hand.
 
-The Windows NSIS installer is built separately with:
+## Tech stack
 
-```bash
-pnpm tauri build
-```
+- Tauri 2, Rust (`windows`, `uiautomation`, `axum`, `tokio`)
+- React 19, Vite 7, TypeScript 5.9, Tailwind 4
+- Cloudflare Workers for the lyrics proxy
+- Polar for licensing, GitHub Actions for builds and signing
 
-The portable-core workflow compiles and tests. It never runs that packaging command.
+## License
 
-Desktop app push policy: push after every commit.
+No license file has been added yet, so all rights are reserved by default. The project owner has not chosen one.
 
-## Planning and project records
+## Changelog
 
-- [1.0 roadmap](docs/ROADMAP.md)
-- [System documentation](docs/systems/INDEX.md)
-- [Architecture decisions](docs/decisions/INDEX.md)
-- [HUM-00 Windows regression evidence](docs/verification/hum-00-windows-regression.md)
-- [1.0 release checklist](docs/verification/1.0-release-checklist.md)
-- [Changelog](docs/CHANGELOG.md)
-- [Known defects](BUGS.md)
+See [docs/CHANGELOG.md](docs/CHANGELOG.md) for every change, newest first.

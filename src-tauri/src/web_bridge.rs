@@ -662,7 +662,7 @@ impl WebPlayerProbe for PandoraProbe {
         // includes the ACTIVE tab's DOM — backgrounded tabs are absent.
         // So this still requires Pandora to be the active tab in some
         // Chromium window. Documented limitation; the only known workaround
-        // is a browser extension, which Wes explicitly ruled out.
+        // is a browser extension, which was ruled out.
         let hwnds = find_chrome_windows(|_| true);
         if hwnds.is_empty() {
             return Ok(None);
